@@ -26,6 +26,7 @@ type Stage struct {
 	FromStage    string
 	Platform     string
 	Instructions []Instruction
+	Metadata     map[string]string
 }
 
 // Instruction represents a single instruction in a Dokifile.
@@ -162,6 +163,7 @@ func (p *DokifileParser) Parse(content []byte) error {
 func (p *DokifileParser) parseFromInstruction(inst *Instruction) *Stage {
 	stage := &Stage{
 		Instructions: make([]Instruction, 0),
+		Metadata:     make(map[string]string),
 	}
 
 	args := inst.Args

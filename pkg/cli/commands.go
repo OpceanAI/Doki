@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -953,8 +954,14 @@ func (c *DokiCLI) Import(source, repo, tag string, changes []string, message str
 }
 
 func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs map[string]string, noCache, pull, quiet, rm bool) error {
+	// Resolve context dir to absolute path.
+	absDir, err := filepath.Abs(contextDir)
+	if err != nil {
+		return fmt.Errorf("resolve context: %w", err)
+	}
+
 	path := "/build"
-	params := []string{}
+	params := []string{"context=" + absDir}
 	for _, tag := range tags {
 		params = append(params, "t="+tag)
 	}
@@ -973,18 +980,9 @@ func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs ma
 	if quiet {
 		params = append(params, "q=true")
 	}
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
+	path += "?" + strings.Join(params, "&")
 
-	body := map[string]interface{}{
-		"context": contextDir,
-	}
-	if len(buildArgs) > 0 {
-		body["buildargs"] = buildArgs
-	}
-
-	resp, err := c.doAPI("POST", path, body)
+	resp, err := c.doAPI("POST", path, nil)
 	if err != nil {
 		return err
 	}
@@ -1583,7 +1581,7 @@ func (c *DokiCLI) waitContainer(containerID string) {
 		var js common.ContainerJSON
 		json.NewDecoder(resp.Body).Decode(&js)
 		resp.Body.Close()
-		if js.State != common.StateRunning {
+		if js.ContainerInfo == nil || js.ContainerInfo.State != common.StateRunning {
 			return
 		}
 	}

@@ -148,18 +148,76 @@ func (b *Builder) executeWorkdir(stage *Stage, inst *Instruction, workDir *strin
 	return nil
 }
 
-func (b *Builder) executeUser(stage *Stage, inst *Instruction) error   { return nil }
-func (b *Builder) executeExpose(stage *Stage, inst *Instruction) error  { return nil }
-func (b *Builder) executeLabel(stage *Stage, inst *Instruction) error   { return nil }
-func (b *Builder) executeCmd(stage *Stage, inst *Instruction) error     { return nil }
-func (b *Builder) executeEntrypoint(stage *Stage, inst *Instruction) error { return nil }
-func (b *Builder) executeVolume(stage *Stage, inst *Instruction) error  { return nil }
-func (b *Builder) executeHealthcheck(stage *Stage, inst *Instruction) error { return nil }
-func (b *Builder) executeStopsignal(stage *Stage, inst *Instruction) error { return nil }
-func (b *Builder) executeShell(stage *Stage, inst *Instruction) error  { return nil }
-func (b *Builder) executeArg(stage *Stage, inst *Instruction) error     { return nil }
-func (b *Builder) executeOnbuild(stage *Stage, inst *Instruction) error { return nil }
-func (b *Builder) executeMaintainer(stage *Stage, inst *Instruction) error { return nil }
+func (b *Builder) executeUser(stage *Stage, inst *Instruction) error {
+	if len(inst.Args) > 0 {
+		stage.Metadata["User"] = inst.Args[0]
+	}
+	return nil
+}
+func (b *Builder) executeExpose(stage *Stage, inst *Instruction) error {
+	for _, arg := range inst.Args {
+		stage.Metadata[arg] = "expose"
+	}
+	return nil
+}
+func (b *Builder) executeLabel(stage *Stage, inst *Instruction) error {
+	for _, arg := range inst.Args {
+		kv := strings.SplitN(arg, "=", 2)
+		if len(kv) == 2 {
+			stage.Metadata["label:"+kv[0]] = kv[1]
+		}
+	}
+	return nil
+}
+func (b *Builder) executeCmd(stage *Stage, inst *Instruction) error {
+	stage.Metadata["Cmd"] = strings.Join(inst.Args, " ")
+	return nil
+}
+func (b *Builder) executeEntrypoint(stage *Stage, inst *Instruction) error {
+	stage.Metadata["Entrypoint"] = strings.Join(inst.Args, " ")
+	return nil
+}
+func (b *Builder) executeVolume(stage *Stage, inst *Instruction) error {
+	for _, arg := range inst.Args {
+		stage.Metadata["volume:"+arg] = "mount"
+	}
+	return nil
+}
+func (b *Builder) executeHealthcheck(stage *Stage, inst *Instruction) error {
+	stage.Metadata["Healthcheck"] = strings.Join(inst.Args, " ")
+	return nil
+}
+func (b *Builder) executeStopsignal(stage *Stage, inst *Instruction) error {
+	if len(inst.Args) > 0 {
+		stage.Metadata["StopSignal"] = inst.Args[0]
+	}
+	return nil
+}
+func (b *Builder) executeShell(stage *Stage, inst *Instruction) error {
+	stage.Metadata["Shell"] = strings.Join(inst.Args, " ")
+	return nil
+}
+func (b *Builder) executeArg(stage *Stage, inst *Instruction) error {
+	for _, arg := range inst.Args {
+		kv := strings.SplitN(arg, "=", 2)
+		if len(kv) == 2 {
+			stage.Metadata["arg:"+kv[0]] = kv[1]
+		} else {
+			stage.Metadata["arg:"+arg] = ""
+		}
+	}
+	return nil
+}
+func (b *Builder) executeOnbuild(stage *Stage, inst *Instruction) error {
+	stage.Metadata["onbuild"] = strings.Join(inst.Args, " ")
+	return nil
+}
+func (b *Builder) executeMaintainer(stage *Stage, inst *Instruction) error {
+	if len(inst.Args) > 0 {
+		stage.Metadata["Maintainer"] = inst.Args[0]
+	}
+	return nil
+}
 
 // ExtractContainer extracts a tar archive (build context).
 func ExtractTar(r io.Reader, dest string) error {

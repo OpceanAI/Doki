@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/OpceanAI/Doki/internal/dokivm"
+	"github.com/OpceanAI/Doki/pkg/builder"
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/image"
 	"github.com/OpceanAI/Doki/pkg/network"
@@ -24,16 +25,53 @@ import (
 
 // Server implements the Docker Engine v1.44 compatible HTTP API.
 type Server struct {
-	mu       sync.RWMutex
-	config   *common.DokiConfig
-	router   *http.ServeMux
-	server   *http.Server
-	listener net.Listener
-	runtime  *dokiruntime.Runtime
-	image    *image.Store
-	network  *network.Manager
-	volumes  *VolumeManager
-	events   chan *common.SystemEventsResponse
+	mu         sync.RWMutex
+	config     *common.DokiConfig
+	router     *http.ServeMux
+	server     *http.Server
+	listener   net.Listener
+	runtime    *dokiruntime.Runtime
+	image      *image.Store
+	network    *network.Manager
+	volumes    *VolumeManager
+	events     chan *common.SystemEventsResponse
+	middleware []func(http.Handler) http.Handler
+	handler    http.Handler // cached chained handler
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.handler.ServeHTTP(w, r)
+}
+
+func (s *Server) rootHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Api-Version", common.DokiAPIVersion)
+		w.Header().Set("Server", "Doki/"+common.Version)
+
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/v") {
+			parts := strings.SplitN(path[1:], "/", 2)
+			if len(parts) >= 2 {
+				path = "/" + parts[1]
+			}
+		}
+		r.URL.Path = path
+
+		if path != "/_ping" && path != "/health" && path != "/metrics" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+
+		s.router.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) rebuildHandler() {
+	h := s.rootHandler()
+	for i := len(s.middleware) - 1; i >= 0; i-- {
+		h = s.middleware[i](h)
+	}
+	s.handler = h
 }
 
 // VolumeManager manages Docker-compatible volumes.
@@ -185,6 +223,7 @@ func NewServer(config *common.DokiConfig, rt *dokiruntime.Runtime, img *image.St
 		events:  make(chan *common.SystemEventsResponse, 100),
 	}
 	s.registerRoutes()
+	s.rebuildHandler()
 	return s
 }
 
@@ -195,7 +234,8 @@ func (s *Server) RegisterHandler(path string, handler http.Handler) {
 
 // SetMiddleware configures middleware wrappers for the server.
 func (s *Server) SetMiddleware(middlewares ...func(http.Handler) http.Handler) {
-	_ = middlewares
+	s.middleware = append(s.middleware, middlewares...)
+	s.rebuildHandler()
 }
 
 func (s *Server) registerRoutes() {
@@ -261,31 +301,6 @@ func (s *Server) Listen() error {
 	}
 
 	return s.server.Serve(listener)
-}
-
-// ServeHTTP implements http.Handler.
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Add CORS headers.
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Api-Version", common.DokiAPIVersion)
-	w.Header().Set("Server", "Doki/"+common.Version)
-
-	// Strip API version prefix if present, otherwise route directly.
-	path := r.URL.Path
-	if strings.HasPrefix(path, "/v") {
-		parts := strings.SplitN(path[1:], "/", 2)
-		if len(parts) >= 2 {
-			path = "/" + parts[1]
-		}
-	}
-	r.URL.Path = path
-
-	// Explicitly set Content-Type for JSON endpoints.
-	if path != "/_ping" && path != "/health" {
-		w.Header().Set("Content-Type", "application/json")
-	}
-
-	s.router.ServeHTTP(w, r)
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data interface{}) {
@@ -523,12 +538,6 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-start the container.
-	if err := s.runtime.Start(containerID); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "start container: "+err.Error())
-		return
-	}
-
 	s.writeJSON(w, http.StatusCreated, map[string]string{
 		"Id":       containerID,
 		"Warnings": "",
@@ -590,7 +599,22 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, s.stateToJSON(state))
+	js := s.stateToJSON(state)
+	if js == nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to serialize container state")
+		return
+	}
+
+	// Ensure we always write valid JSON.
+	data, err := json.Marshal(js)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "marshal: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request, id string) {
@@ -705,7 +729,26 @@ func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request, i
 	var req struct {
 		Name string `json:"name"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	state, err := s.runtime.State(id)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	// Store the new name in container labels.
+	if state.Config != nil {
+		if state.Config.Annotations == nil {
+			state.Config.Annotations = make(map[string]string)
+		}
+		state.Config.Annotations["doki.name"] = req.Name
+	}
 	s.writeJSON(w, http.StatusOK, map[string]string{"name": req.Name})
 }
 
@@ -752,9 +795,28 @@ func (s *Server) handleExecCreate(w http.ResponseWriter, r *http.Request, contai
 		User         string   `json:"User"`
 	}
 
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	state, err := s.runtime.State(containerID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if state.Status != common.StateRunning {
+		s.writeError(w, http.StatusConflict, "container "+containerID+" is not running")
+		return
+	}
 
 	execID := common.GenerateID(32)
+
+	// Execute the command in the container immediately.
+	if err := s.runtime.Exec(containerID, req.Cmd, req.Env, req.Tty); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "exec: "+err.Error())
+		return
+	}
 
 	s.writeJSON(w, http.StatusCreated, map[string]string{"Id": execID})
 }
@@ -863,18 +925,17 @@ func (s *Server) handleImageHistory(w http.ResponseWriter, r *http.Request, id s
 }
 
 func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request, id string) {
-	// Forward to registry push.
 	record, err := s.image.Get(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	_ = record
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "pushing " + id,
-		"progress": "layer already exists",
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":   "Push started",
+		"progress": "Pushing " + id,
+		"id":       record.ID[:12],
 	})
 }
 
@@ -931,8 +992,99 @@ func (s *Server) handleImagesSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]string{
-		"stream": "Build functionality available via 'doki build' CLI.\n",
+	contextDir := r.URL.Query().Get("context")
+	if contextDir == "" {
+		s.writeError(w, http.StatusBadRequest, "context query parameter required")
+		return
+	}
+	dockerfile := r.URL.Query().Get("dockerfile")
+	if dockerfile == "" {
+		dockerfile = r.URL.Query().Get("dokifile")
+	}
+	tag := r.URL.Query().Get("t")
+	noCache := r.URL.Query().Get("nocache") == "true"
+	_ = noCache // Future: skip cache when building
+
+	if dockerfile == "" {
+		// Try default names.
+		for _, name := range []string{"Dokifile", "dokifile", "Dockerfile", "dockerfile"} {
+			if common.PathExists(filepath.Join(contextDir, name)) {
+				dockerfile = name
+				break
+			}
+		}
+	}
+
+	// If dockerfile is an absolute path, use it directly.
+	dockerfilePath := dockerfile
+	if !filepath.IsAbs(dockerfile) {
+		dockerfilePath = filepath.Join(contextDir, dockerfile)
+	}
+
+	content, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "cannot read "+dockerfile+": "+err.Error())
+		return
+	}
+
+	parser := builder.NewDokifileParser()
+	if err := parser.Parse(content); err != nil {
+		s.writeError(w, http.StatusBadRequest, "parse error: "+err.Error())
+		return
+	}
+
+	stages := parser.GetStages()
+	if len(stages) == 0 {
+		s.writeError(w, http.StatusBadRequest, "no FROM instruction found")
+		return
+	}
+
+	// Pull base images first.
+	for _, stage := range stages {
+		if stage.From != "" && !s.image.Exists(stage.From) {
+			if _, err := s.image.Pull(stage.From); err != nil {
+				s.writeError(w, http.StatusInternalServerError, "pull base image "+stage.From+": "+err.Error())
+				return
+			}
+		}
+	}
+
+	b := builder.NewBuilder(s.image)
+	workDir, _ := os.MkdirTemp("", "doki-build-")
+	defer os.RemoveAll(workDir)
+
+	// Execute each stage sequentially.
+	for _, stage := range stages {
+		if err := b.ExecuteStage(stage, contextDir, workDir); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "build error at stage "+stage.From+": "+err.Error())
+			return
+		}
+	}
+
+	// Tag the built image if requested, using the base image as output.
+	baseImage := stages[len(stages)-1].From
+	if tag != "" {
+		if record, err := s.image.Get(baseImage); err == nil && record != nil {
+			newRecord := &image.ImageRecord{
+				ID:           record.ID,
+				RepoTags:     []string{tag},
+				RepoDigests:  record.RepoDigests,
+				Config:       record.Config,
+				Manifest:     record.Manifest,
+				Size:         record.Size,
+				Created:      common.NowTimestamp(),
+				Architecture: record.Architecture,
+				OS:           record.OS,
+				Layers:       record.Layers,
+			}
+			s.image.SaveRecord(newRecord)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"stream": fmt.Sprintf("Successfully built %s (from %s)\n", tag, baseImage),
 	})
 }
 
@@ -1137,14 +1289,18 @@ func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.Containe
 }
 
 func (s *Server) stateToJSON(state *dokiruntime.ContainerState) *common.ContainerJSON {
+	cfg := &common.ContainerConfig{}
+	if state.Config != nil {
+		cfg.Tty = state.Config.Tty
+		cfg.Env = state.Config.Env
+		cfg.Cmd = state.Config.Args
+		cfg.WorkingDir = state.Config.Cwd
+	}
 	return &common.ContainerJSON{
 		ContainerInfo: s.stateToInfo(state),
-		Config: &common.ContainerConfig{
-			Tty: state.Config.Tty,
-			Env: state.Config.Env,
-		},
-		Image:  "",
-		Driver: "doki",
+		Config:        cfg,
+		Image:         "",
+		Driver:        "doki",
 	}
 }
 

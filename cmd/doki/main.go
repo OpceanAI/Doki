@@ -214,19 +214,20 @@ func main() {
 		}
 	case "build":
 		tags := flagStrSlice(args, "-t", "--tag")
-		dokifile := flagStr(args, "-f", "--file")
+		f := flagStr(args, "-f", "--file")
 		noCache := flagBool(args, "--no-cache")
 		pull := flagBool(args, "--pull")
 		quiet := flagBool(args, "-q", "--quiet")
-		rm := !flagBool(args, "--rm=false")
+		rmFlag := !flagBool(args, "--rm=false")
+		// Context dir is the last non-flag argument.
 		contextDir := "."
-		for _, a := range args {
-			if !strings.HasPrefix(a, "-") {
-				contextDir = a
+		for i := len(args) - 1; i >= 0; i-- {
+			if !strings.HasPrefix(args[i], "-") {
+				contextDir = args[i]
 				break
 			}
 		}
-		handleError(c.Build(contextDir, dokifile, tags, nil, noCache, pull, quiet, rm))
+		handleError(c.Build(contextDir, f, tags, nil, noCache, pull, quiet, rmFlag))
 	case "search":
 		limit := flagInt(args, "--limit")
 		if len(args) > 0 {

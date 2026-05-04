@@ -267,8 +267,13 @@ func extractTarGz(tarPath, dest string) error {
 		}
 
 		// Path traversal protection (CWE-22).
+		cleanDest := filepath.Clean(dest)
 		target := filepath.Clean(filepath.Join(dest, hdr.Name))
-		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
+		// Allow "." and "./" entries (root directory marker).
+		if hdr.Name == "." || hdr.Name == "./" || target == cleanDest {
+			continue
+		}
+		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, target)
 		}
 
@@ -315,12 +320,17 @@ func extractTarGz(tarPath, dest string) error {
 				return err
 			}
 			linkTarget := filepath.Clean(filepath.Join(dest, hdr.Linkname))
-			if !strings.HasPrefix(linkTarget, filepath.Clean(dest)+string(os.PathSeparator)) {
+			if !strings.HasPrefix(linkTarget, filepath.Clean(dest)+string(os.PathSeparator)) && linkTarget != filepath.Clean(dest) {
 				return fmt.Errorf("tar: hardlink escape attempt")
 			}
 			os.Remove(target)
+			// Hardlinks may fail on cross-device or permission-restricted filesystems.
+			// Fall back to copying the file if linking fails.
 			if err := os.Link(linkTarget, target); err != nil {
-				return err
+				data, readErr := os.ReadFile(linkTarget)
+				if readErr == nil {
+					os.WriteFile(target, data, 0644)
+				}
 			}
 		}
 	}

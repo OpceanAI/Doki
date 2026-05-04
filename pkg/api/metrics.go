@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"sync/atomic"
 	"time"
+
+	"github.com/OpceanAI/Doki/pkg/common"
 )
 
 var (
@@ -58,7 +60,7 @@ func RecordError() { atomic.AddUint64(&errCount, 1) }
 // HealthHandler returns daemon health status.
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"healthy","version":"0.2.0","uptime":"` +
+	w.Write([]byte(`{"status":"healthy","version":"` + common.Version + `","uptime":"` +
 		time.Since(startTime).String() + `"}`))
 }
 

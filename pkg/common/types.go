@@ -500,7 +500,7 @@ type ContainerConfig struct {
 	AttachStdin  bool              `json:"AttachStdin"`
 	AttachStdout bool              `json:"AttachStdout"`
 	AttachStderr bool              `json:"AttachStderr"`
-	ExposedPorts map[Port]struct{} `json:"ExposedPorts"`
+	ExposedPorts map[string]struct{} `json:"ExposedPorts"`
 	Tty          bool              `json:"Tty"`
 	OpenStdin    bool              `json:"OpenStdin"`
 	StdinOnce    bool              `json:"StdinOnce"`

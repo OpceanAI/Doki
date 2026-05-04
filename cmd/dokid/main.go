@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	r "runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -204,10 +205,16 @@ func countImages(imgStore *image.Store) int {
 }
 
 func init() {
-	if s := os.Getenv("DOKI_SOCKET"); s != "" {
+	if s := os.Getenv("DOKI_SOCKET"); s != "" || os.Getenv("DOCKER_HOST") != "" {
+		if s == "" {
+			s = os.Getenv("DOCKER_HOST")
+			s = strings.TrimPrefix(s, "unix://")
+		}
 		socketPath = s
-	} else {
+	} else if _, err := os.Stat("/data/data/com.termux/files/usr"); err == nil {
 		socketPath = "/data/data/com.termux/files/usr/var/run/doki.sock"
+	} else {
+		socketPath = filepath.Join(os.TempDir(), "doki.sock")
 	}
 	if s := os.Getenv("DOKI_TCP_ADDR"); s != "" {
 		tcpAddr = s

@@ -145,7 +145,7 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 	// Compute actual size from downloaded files.
 	record.Size = realSize(s, record)
 
-	if err := s.saveRecord(record); err != nil {
+	if err := s.SaveRecord(record); err != nil {
 		return nil, err
 	}
 
@@ -196,7 +196,7 @@ func realSize(store *Store, record *ImageRecord) int64 {
 	return size
 }
 
-func (s *Store) saveRecord(record *ImageRecord) error {
+func (s *Store) SaveRecord(record *ImageRecord) error {
 	common.EnsureDir(s.manifestPath(record.ID))
 
 	data, err := json.MarshalIndent(record, "", "  ")
@@ -353,7 +353,7 @@ func (s *Store) Tag(source, target string) error {
 	}
 
 	record.RepoTags = append(record.RepoTags, target)
-	err = s.saveRecord(record)
+	err = s.SaveRecord(record)
 	s.mu.Unlock()
 	return err
 }
@@ -512,7 +512,7 @@ func (s *Store) Import(reader io.Reader) (*ImageRecord, error) {
 		Created:  common.NowTimestamp(),
 	}
 
-	if err := s.saveRecord(record); err != nil {
+	if err := s.SaveRecord(record); err != nil {
 		return nil, err
 	}
 
