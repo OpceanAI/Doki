@@ -291,9 +291,24 @@ func (e *Engine) startService(name string) error {
 	}
 
 	// Build container config.
+	cmd := toStringSlice(svc.Command)
+	if len(cmd) == 0 {
+		// Try to get default command from image config.
+		if record, err := e.image.Get(imageName); err == nil && record.Config != nil {
+			cmd = record.Config.Config.Cmd
+			if len(cmd) == 0 {
+				cmd = record.Config.Config.Entrypoint
+			}
+		}
+	}
+	// Fallback for services without any command.
+	if len(cmd) == 0 {
+		cmd = []string{"/bin/sh"}
+	}
+
 	cfg := &runtime.Config{
-		ID:   e.project + "_" + name + "_1",
-		Args: toStringSlice(svc.Command),
+		ID:   e.project + "_" + name + "_" + common.GenerateID(8),
+		Args: cmd,
 		Env:  toEnvSlice(svc.Environment),
 		Tty:  svc.Tty,
 	}

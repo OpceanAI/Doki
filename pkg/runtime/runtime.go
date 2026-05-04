@@ -203,7 +203,10 @@ func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 	cfg.RootfsReady = rootfsDir
 
 	// Prepare rootfs files.
-	hostname := cfg.ID[:12]
+	hostname := cfg.ID
+	if len(hostname) > 12 {
+		hostname = hostname[:12]
+	}
 	if cfg.Hostname != "" {
 		hostname = cfg.Hostname
 	}

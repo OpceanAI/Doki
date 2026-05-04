@@ -304,8 +304,17 @@ func main() {
 }
 
 func handleNetwork(c *cli.DokiCLI, args []string) {
-	if len(args) == 0 {
-		fmt.Println("Usage: doki network COMMAND")
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Println("Usage: doki network COMMAND [OPTIONS]")
+		fmt.Println()
+		fmt.Println("Commands:")
+		fmt.Println("  ls          List networks")
+		fmt.Println("  create      Create a network")
+		fmt.Println("  rm          Remove a network")
+		fmt.Println("  inspect     Display network details")
+		fmt.Println("  connect     Connect a container to a network")
+		fmt.Println("  disconnect  Disconnect a container from a network")
+		fmt.Println("  prune       Remove unused networks")
 		return
 	}
 	switch args[0] {
@@ -339,12 +348,22 @@ func handleNetwork(c *cli.DokiCLI, args []string) {
 		}
 	case "prune":
 		c.NetworkPrune("")
+	default:
+		fmt.Fprintf(os.Stderr, "doki network: '%s' is not a valid subcommand. See 'doki network --help'.\n", args[0])
+		os.Exit(1)
 	}
 }
 
 func handleVolume(c *cli.DokiCLI, args []string) {
-	if len(args) == 0 {
-		fmt.Println("Usage: doki volume COMMAND")
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Println("Usage: doki volume COMMAND [OPTIONS]")
+		fmt.Println()
+		fmt.Println("Commands:")
+		fmt.Println("  ls          List volumes")
+		fmt.Println("  create      Create a volume")
+		fmt.Println("  rm          Remove a volume")
+		fmt.Println("  inspect     Display volume details")
+		fmt.Println("  prune       Remove unused volumes")
 		return
 	}
 	switch args[0] {
@@ -369,12 +388,22 @@ func handleVolume(c *cli.DokiCLI, args []string) {
 		c.VolumeInspect(args[1:])
 	case "prune":
 		c.VolumePrune("")
+	default:
+		fmt.Fprintf(os.Stderr, "doki volume: '%s' is not a valid subcommand. See 'doki volume --help'.\n", args[0])
+		os.Exit(1)
 	}
 }
 
 func handleSystem(c *cli.DokiCLI, args []string) {
-	if len(args) == 0 {
-		fmt.Println("Usage: doki system COMMAND")
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Println("Usage: doki system COMMAND [OPTIONS]")
+		fmt.Println()
+		fmt.Println("Commands:")
+		fmt.Println("  info        Display system-wide information")
+		fmt.Println("  df          Show disk usage")
+		fmt.Println("  prune       Remove unused data")
+		fmt.Println("  events      Get real-time events")
+		fmt.Println("  dial-stdio  Proxy stdio to daemon")
 		return
 	}
 	switch args[0] {
@@ -405,12 +434,22 @@ func handleSystem(c *cli.DokiCLI, args []string) {
 		c.SystemEvents("", "", "")
 	case "dial-stdio":
 		c.SystemDialStdio()
+	default:
+		fmt.Fprintf(os.Stderr, "doki system: '%s' is not a valid subcommand. See 'doki system --help'.\n", args[0])
+		os.Exit(1)
 	}
 }
 
 func handlePod(c *cli.DokiCLI, args []string) {
-	if len(args) == 0 {
-		fmt.Println("Usage: doki pod COMMAND")
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Println("Usage: doki pod COMMAND [OPTIONS]")
+		fmt.Println()
+		fmt.Println("Commands:")
+		fmt.Println("  create      Create a pod")
+		fmt.Println("  ps          List pods")
+		fmt.Println("  rm          Remove a pod")
+		fmt.Println("  start       Start a pod")
+		fmt.Println("  stop        Stop a pod")
 		return
 	}
 	switch args[0] {

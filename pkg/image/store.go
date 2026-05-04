@@ -226,7 +226,8 @@ func (s *Store) Get(idOrTag string) (*ImageRecord, error) {
 	for _, record := range records {
 		for _, tag := range record.RepoTags {
 			if tag == idOrTag {
-				return &record, nil
+				rec := record // copy the loop variable
+				return &rec, nil
 			}
 		}
 	}
