@@ -453,14 +453,15 @@ func (s *Server) handleContainersList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Image      string              `json:"Image"`
-		Cmd        []string            `json:"Cmd"`
-		Entrypoint []string            `json:"Entrypoint"`
-		Env        []string            `json:"Env"`
-		Tty        bool                `json:"Tty"`
-		OpenStdin  bool                `json:"OpenStdin"`
-		HostConfig *common.HostConfig  `json:"HostConfig"`
-		Labels     map[string]string   `json:"Labels"`
+		Image       string              `json:"Image"`
+		Cmd         []string            `json:"Cmd"`
+		Entrypoint  []string            `json:"Entrypoint"`
+		Env         []string            `json:"Env"`
+		Tty         bool                `json:"Tty"`
+		OpenStdin   bool                `json:"OpenStdin"`
+		HostConfig  *common.HostConfig  `json:"HostConfig"`
+		Labels      map[string]string   `json:"Labels"`
+		ContainerName string            `json:"Name,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -508,6 +509,14 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		ImageRef:    req.Image,
 	}
 
+	// Store container name in annotations.
+	if req.ContainerName != "" {
+		if cfg.Annotations == nil {
+			cfg.Annotations = make(map[string]string)
+		}
+		cfg.Annotations["doki.name"] = req.ContainerName
+	}
+
 	// Pass image layers for rootfs extraction.
 	if layers, err := s.image.GetLayerPaths(req.Image); err == nil {
 		cfg.ImageLayers = layers
@@ -550,9 +559,9 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusCreated, map[string]string{
+	s.writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"Id":       containerID,
-		"Warnings": "",
+		"Warnings": []string{},
 	})
 
 	_ = imgRecord
@@ -785,7 +794,7 @@ func (s *Server) handleContainersPrune(w http.ResponseWriter, r *http.Request) {
 	for _, state := range states {
 		if state.Status != common.StateRunning {
 			s.runtime.Delete(state.ID, true)
-			pruned = append(pruned, state.ID[:12])
+			pruned = append(pruned, safeTruncate(state.ID, 12))
 		}
 	}
 
@@ -886,7 +895,7 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "pulling " + imageName,
-		"id":     record.ID[:12],
+		"id":     safeTruncate(record.ID, 12),
 	})
 }
 
@@ -947,7 +956,7 @@ func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request, id stri
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":   "Push started",
 		"progress": "Pushing " + id,
-		"id":       record.ID[:12],
+		"id": safeTruncate(record.ID, 12),
 	})
 }
 
@@ -1290,7 +1299,7 @@ func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.Containe
 
 	info := &common.ContainerInfo{
 		ID:      state.ID,
-		Names:   []string{"/" + state.ID[:12]},
+		Names:   []string{"/" + safeTruncate(state.ID, 12)},
 		Image:   "",
 		State:   state.Status,
 		Status:  status,
@@ -1299,9 +1308,27 @@ func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.Containe
 		Labels:  nil,
 	}
 
+	// Show container name from annotations.
+	if state.Config != nil && state.Config.Annotations != nil {
+		if name, ok := state.Config.Annotations["doki.name"]; ok {
+			info.Names = []string{"/" + name}
+		}
+	}
+
 	// Populate ports from container config.
 	if state.Config != nil && len(state.Config.Ports) > 0 {
 		info.Ports = state.Config.Ports
+	}
+
+	// Show image reference.
+	if state.Config != nil && state.Config.ImageRef != "" {
+		info.Image = state.Config.ImageRef
+		info.ImageID = state.Config.ImageDigest
+	}
+
+	// Show command.
+	if state.Config != nil && len(state.Config.Args) > 0 {
+		info.Command = strings.Join(state.Config.Args, " ")
 	}
 
 	return info
@@ -1314,12 +1341,30 @@ func (s *Server) stateToJSON(state *dokiruntime.ContainerState) *common.Containe
 		cfg.Env = state.Config.Env
 		cfg.Cmd = state.Config.Args
 		cfg.WorkingDir = state.Config.Cwd
+		cfg.User = state.Config.User
+		cfg.Entrypoint = nil
+		cfg.Volumes = nil
+		cfg.Labels = state.Config.Labels
+		if state.Config.Annotations != nil {
+			if n, ok := state.Config.Annotations["doki.name"]; ok {
+				cfg.Hostname = n
+			}
+		}
 	}
 	return &common.ContainerJSON{
-		ContainerInfo: s.stateToInfo(state),
-		Config:        cfg,
-		Image:         "",
-		Driver:        "doki",
+		ContainerInfo:  s.stateToInfo(state),
+		Config:         cfg,
+		Image:          state.Config.ImageRef,
+		Driver:         "doki",
+		Platform:       "linux",
+		LogPath:        state.LogPath,
+		RestartCount:   0,
+		AppArmorProfile: "",
+		MountLabel:     "",
+		ProcessLabel:   "",
+		ResolvConfPath: "",
+		HostnamePath:   "",
+		HostsPath:      "",
 	}
 }
 
@@ -1341,4 +1386,11 @@ func detectOS() string {
 		return "Android (Termux)"
 	}
 	return goruntime.GOOS
+}
+
+func safeTruncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

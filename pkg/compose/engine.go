@@ -307,7 +307,7 @@ func (e *Engine) startService(name string) error {
 	}
 
 	cfg := &runtime.Config{
-		ID:   e.project + "_" + name + "_" + common.GenerateID(8),
+		ID:   e.project + "_" + name + "_1",
 		Args: cmd,
 		Env:  toEnvSlice(svc.Environment),
 		Tty:  svc.Tty,

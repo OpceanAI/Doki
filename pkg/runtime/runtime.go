@@ -405,9 +405,9 @@ func (rt *Runtime) Start(id string) error {
 }
 
 func (rt *Runtime) monitorProcess(state *ContainerState, logFile *os.File) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-
+	// Wait for process exit WITHOUT holding the runtime mutex.
+	// This is the most critical fix: previously the mutex was held
+	// during Cmd.Wait(), blocking ALL other container operations.
 	if state.Cmd != nil {
 		state.Cmd.Wait()
 	}
@@ -415,6 +415,8 @@ func (rt *Runtime) monitorProcess(state *ContainerState, logFile *os.File) {
 		logFile.Close()
 	}
 
+	// Only lock for state modification and persistence.
+	rt.mu.Lock()
 	state.Status = common.StateExited
 	state.Finished = time.Now()
 	if state.Cmd != nil && state.Cmd.ProcessState != nil {
@@ -423,9 +425,9 @@ func (rt *Runtime) monitorProcess(state *ContainerState, logFile *os.File) {
 		}
 	}
 	if err := rt.saveState(state); err != nil {
-		// Log error but don't crash.
-		_, _ = os.Stderr.Write([]byte(fmt.Sprintf("DOKI: failed to save state for %s: %v\n", state.ID[:12], err)))
+		_, _ = os.Stderr.Write([]byte(fmt.Sprintf("DOKI: failed to save state for %s: %v\n", state.ID, err)))
 	}
+	rt.mu.Unlock()
 
 	if state.ExitChan != nil {
 		close(state.ExitChan)
@@ -605,7 +607,28 @@ func (rt *Runtime) Exec(id string, args []string, env []string, tty bool) error 
 	if state.Status != common.StateRunning {
 		return fmt.Errorf("container %s is not running", id)
 	}
+
+	// Find the container's rootfs.
+	rootfsDir := ""
+	if state.Config != nil {
+		rootfsDir = state.Config.RootfsReady
+	}
+	if rootfsDir == "" && state.Bundle != "" {
+		rootfsDir = filepath.Join(state.Bundle, "rootfs")
+	}
+
 	cmd := exec.Command(args[0], args[1:]...)
+	if rootfsDir != "" && common.PathExists(rootfsDir) {
+		cmd.Dir = rootfsDir
+		// Prepend rootfs bin dirs to PATH so container binaries are found.
+		pathPrefix := rootfsDir + "/usr/local/sbin:" + rootfsDir + "/usr/local/bin:" +
+			rootfsDir + "/usr/sbin:" + rootfsDir + "/usr/bin:" +
+			rootfsDir + "/sbin:" + rootfsDir + "/bin"
+		if currentPath := os.Getenv("PATH"); currentPath != "" {
+			pathPrefix += ":" + currentPath
+		}
+		env = append(env, "PATH="+pathPrefix)
+	}
 	cmd.Env = env
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -806,6 +829,22 @@ func (rt *Runtime) loadState(id string) (*ContainerState, error) {
 					var s ContainerState
 					json.Unmarshal(data, &s)
 					return &s, nil
+				}
+			}
+		}
+		// Name-based search (look for annotation doki.name).
+		for _, e := range entries {
+			if e.IsDir() {
+				sp := filepath.Join(rt.root, "containers", e.Name(), "state.json")
+				if data, err := os.ReadFile(sp); err == nil {
+					var s ContainerState
+					if json.Unmarshal(data, &s) == nil {
+						if s.Config != nil && s.Config.Annotations != nil {
+							if n, ok := s.Config.Annotations["doki.name"]; ok && n == id {
+								return &s, nil
+							}
+						}
+					}
 				}
 			}
 		}

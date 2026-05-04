@@ -88,21 +88,17 @@ func NewStore(root string) (*Store, error) {
 
 // Pull downloads an image from a registry.
 func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ref, err := registry.ParseImageRef(imageRef)
 	if err != nil {
 		return nil, fmt.Errorf("parse image ref: %w", err)
 	}
 
-	// Get manifest (with multi-arch resolution).
+	// Download manifest and config (no lock needed - network I/O).
 	manifest, _, err := s.registry.ResolveManifest(ref.Registry, ref.Name, ref.Tag)
 	if err != nil {
 		return nil, fmt.Errorf("get manifest: %w", err)
 	}
 
-	// Get config.
 	configData, err := s.registry.GetConfig(ref.Registry, ref.Name, manifest)
 	if err != nil {
 		return nil, fmt.Errorf("get config: %w", err)
@@ -113,7 +109,7 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	// Download layers.
+	// Download layers (no lock needed - network I/O).
 	var layers []string
 	for i, layer := range manifest.Layers {
 		layerPath := s.layerPath(layer.Digest)
@@ -125,10 +121,11 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 		layers = append(layers, layer.Digest)
 	}
 
-	// Create image ID from config digest.
-	imageID := manifest.Config.Digest
+	// Create and save record (lock for state modification).
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	// Save image record (initial size = 0, will be fixed below).
+	imageID := manifest.Config.Digest
 	record := &ImageRecord{
 		ID:           imageID,
 		RepoTags:     []string{imageRef},
@@ -141,14 +138,10 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 		OS:           config.OS,
 		Layers:       layers,
 	}
-
-	// Compute actual size from downloaded files.
 	record.Size = realSize(s, record)
-
 	if err := s.SaveRecord(record); err != nil {
 		return nil, err
 	}
-
 	return record, nil
 }
 
