@@ -226,8 +226,8 @@ type Port struct {
 	Type        PortProtocol `json:"Type"`
 }
 
-// PortMap is a collection of port bindings.
-type PortMap map[Port][]PortBinding
+// PortMap is a collection of port bindings keyed by port+proto (e.g. "80/tcp").
+type PortMap map[string][]PortBinding
 
 // PortBinding represents a port binding between host and container.
 type PortBinding struct {

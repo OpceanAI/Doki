@@ -528,6 +528,18 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 
 	if req.HostConfig != nil {
 		cfg.NetworkMode = req.HostConfig.NetworkMode
+		// Extract ports from port bindings.
+		for _, bind := range req.HostConfig.PortBindings {
+			for _, pb := range bind {
+				if port, err := strconv.Atoi(pb.HostPort); err == nil && port > 0 {
+					cfg.Ports = append(cfg.Ports, common.Port{
+						PrivatePort: uint16(port),
+						PublicPort:  uint16(port),
+						Type:        common.ProtocolTCP,
+					})
+				}
+			}
+		}
 	}
 
 	cfg.Labels = req.Labels
@@ -1276,7 +1288,7 @@ func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.Containe
 		status = "Exited (" + strconv.Itoa(state.ExitCode) + ")"
 	}
 
-	return &common.ContainerInfo{
+	info := &common.ContainerInfo{
 		ID:      state.ID,
 		Names:   []string{"/" + state.ID[:12]},
 		Image:   "",
@@ -1286,6 +1298,13 @@ func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.Containe
 		Command: "",
 		Labels:  nil,
 	}
+
+	// Populate ports from container config.
+	if state.Config != nil && len(state.Config.Ports) > 0 {
+		info.Ports = state.Config.Ports
+	}
+
+	return info
 }
 
 func (s *Server) stateToJSON(state *dokiruntime.ContainerState) *common.ContainerJSON {
