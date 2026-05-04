@@ -12,6 +12,11 @@ func (e *ErrNotFound) Error() string {
 	return fmt.Sprintf("%s %s not found", e.Resource, e.ID)
 }
 
+func (e *ErrNotFound) Is(target error) bool {
+	_, ok := target.(*ErrNotFound)
+	return ok
+}
+
 // ErrConflict is returned when a resource already exists.
 type ErrConflict struct {
 	Resource string
@@ -20,6 +25,11 @@ type ErrConflict struct {
 
 func (e *ErrConflict) Error() string {
 	return fmt.Sprintf("%s %s already exists", e.Resource, e.ID)
+}
+
+func (e *ErrConflict) Is(target error) bool {
+	_, ok := target.(*ErrConflict)
+	return ok
 }
 
 // ErrInvalidParam is returned when a parameter is invalid.
@@ -67,7 +77,7 @@ type ErrPermissionDenied struct {
 func (e *ErrPermissionDenied) Error() string {
 	msg := "permission denied"
 	if e.Message != "" {
-		msg = e.Message
+		msg += ": " + e.Message
 	}
 	return msg
 }

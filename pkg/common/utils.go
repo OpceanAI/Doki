@@ -16,7 +16,16 @@ import (
 func GenerateID(length int) string {
 	b := make([]byte, length/2)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		panic(err)
+		// Fallback: use time-based random if crypto/rand fails.
+		return fallbackID(length)
+	}
+	return hex.EncodeToString(b)
+}
+
+func fallbackID(length int) string {
+	b := make([]byte, length/2)
+	for i := range b {
+		b[i] = byte(time.Now().UnixNano()>>(i*4)) ^ byte(i)
 	}
 	return hex.EncodeToString(b)
 }
@@ -35,7 +44,7 @@ func ShortID(id string) string {
 }
 
 // ValidContainerName validates a container name.
-var validContainerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`)
+var validContainerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 func ValidContainerName(name string) bool {
 	return validContainerName.MatchString(name)
@@ -244,7 +253,7 @@ func ArgsEscaped(args []string) bool {
 // SplitStrSlice splits a string by commas and trims whitespace.
 func SplitStrSlice(s string) []string {
 	if s == "" {
-		return nil
+		return []string{}
 	}
 	parts := strings.Split(s, ",")
 	result := make([]string, 0, len(parts))

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"os"
@@ -74,12 +75,11 @@ func (m *Middleware) RequestID(next http.Handler) http.Handler {
 }
 
 func commonGenID(n int) string {
-	const letters = "abcdef0123456789"
-	b := make([]byte, n)
+	b := make([]byte, n/2)
 	for i := range b {
-		b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
+		b[i] = byte(time.Now().UnixNano()>>(i*8)) ^ byte(i*31)
 	}
-	return string(b)
+	return hex.EncodeToString(b)
 }
 
 // RateLimit implements simple token bucket rate limiting.

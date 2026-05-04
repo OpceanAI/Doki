@@ -221,6 +221,7 @@ func (b *Builder) executeMaintainer(stage *Stage, inst *Instruction) error {
 
 // ExtractContainer extracts a tar archive (build context).
 func ExtractTar(r io.Reader, dest string) error {
+	cleanDest := filepath.Clean(dest)
 	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
@@ -230,20 +231,30 @@ func ExtractTar(r io.Reader, dest string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dest, hdr.Name)
+		target := filepath.Clean(filepath.Join(dest, hdr.Name))
+		if hdr.Name == "." || hdr.Name == "./" || target == cleanDest {
+			continue
+		}
+		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
+			return fmt.Errorf("tar: path traversal attempt: %s", hdr.Name)
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			os.MkdirAll(target, 0755)
-		case tar.TypeReg:
+		case tar.TypeReg, tar.TypeRegA:
 			os.MkdirAll(filepath.Dir(target), 0755)
 			f, err := os.Create(target)
 			if err != nil {
 				return err
 			}
-			io.Copy(f, tr)
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return err
+			}
 			f.Close()
 		case tar.TypeSymlink:
 			os.MkdirAll(filepath.Dir(target), 0755)
+			os.Remove(target)
 			os.Symlink(hdr.Linkname, target)
 		}
 	}

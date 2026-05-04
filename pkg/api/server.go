@@ -25,7 +25,6 @@ import (
 
 // Server implements the Docker Engine v1.44 compatible HTTP API.
 type Server struct {
-	mu         sync.RWMutex
 	config     *common.DokiConfig
 	router     *http.ServeMux
 	server     *http.Server
@@ -36,7 +35,7 @@ type Server struct {
 	volumes    *VolumeManager
 	events     chan *common.SystemEventsResponse
 	middleware []func(http.Handler) http.Handler
-	handler    http.Handler // cached chained handler
+	handler    http.Handler
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -794,7 +793,7 @@ func (s *Server) handleContainersPrune(w http.ResponseWriter, r *http.Request) {
 	for _, state := range states {
 		if state.Status != common.StateRunning {
 			s.runtime.Delete(state.ID, true)
-			pruned = append(pruned, safeTruncate(state.ID, 12))
+			pruned = append(pruned, common.ShortID(state.ID))
 		}
 	}
 
@@ -895,7 +894,7 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "pulling " + imageName,
-		"id":     safeTruncate(record.ID, 12),
+		"id":     common.ShortID(record.ID),
 	})
 }
 
@@ -956,7 +955,7 @@ func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request, id stri
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":   "Push started",
 		"progress": "Pushing " + id,
-		"id": safeTruncate(record.ID, 12),
+		"id": common.ShortID(record.ID),
 	})
 }
 
@@ -1299,7 +1298,7 @@ func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.Containe
 
 	info := &common.ContainerInfo{
 		ID:      state.ID,
-		Names:   []string{"/" + safeTruncate(state.ID, 12)},
+		Names:   []string{"/" + common.ShortID(state.ID)},
 		Image:   "",
 		State:   state.Status,
 		Status:  status,
@@ -1386,11 +1385,4 @@ func detectOS() string {
 		return "Android (Termux)"
 	}
 	return goruntime.GOOS
-}
-
-func safeTruncate(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
-	}
-	return s
 }

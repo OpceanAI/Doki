@@ -42,6 +42,9 @@ func New(socket string) *DokiCLI {
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 				},
+				MaxIdleConns:       10,
+				IdleConnTimeout:    90 * time.Second,
+				DisableCompression: true,
 			},
 			Timeout: 300 * time.Second,
 		},
@@ -275,7 +278,7 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 	fmt.Fprintln(w, "CONTAINER ID\tIMAGE\tCOMMAND\tCREATED\tSTATUS\tPORTS\tNAMES")
 
 	for _, c := range containers {
-		id := shortID(c.ID)
+		id := common.ShortID(c.ID)
 		img := firstTag(c.Image)
 		if img == "" {
 			img = "-"
@@ -402,7 +405,7 @@ func (c *DokiCLI) Stats(containerIDs []string, noStream bool) error {
 	for _, id := range containerIDs {
 		resp, err := c.doAPI("GET", "/containers/"+id+"/stats?stream="+strconv.FormatBool(!noStream), nil)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "stats for %s: %v\n", shortID(id), err)
+			fmt.Fprintf(os.Stderr, "stats for %s: %v\n", common.ShortID(id), err)
 			continue
 		}
 		var stats map[string]interface{}
@@ -419,7 +422,7 @@ func (c *DokiCLI) Stats(containerIDs []string, noStream bool) error {
 		if mem, ok := stats["memory_stats"]; ok {
 			memUsage = fmt.Sprintf("%v", mem)
 		}
-		fmt.Printf("%s  CPU: %s  Mem: %s\n", shortID(id), cpuUsage, memUsage)
+		fmt.Printf("%s  CPU: %s  Mem: %s\n", common.ShortID(id), cpuUsage, memUsage)
 	}
 	return nil
 }
@@ -710,7 +713,7 @@ func (c *DokiCLI) Rm(ids []string, force, volumes, link bool) error {
 			continue
 		}
 		resp.Body.Close()
-		fmt.Println(shortID(id))
+		fmt.Println(common.ShortID(id))
 	}
 	return nil
 }
@@ -809,7 +812,7 @@ func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 
 	if quiet {
 		for _, img := range images {
-			fmt.Println(shortID(img.ID))
+			fmt.Println(common.ShortID(img.ID))
 		}
 		return nil
 	}
@@ -829,7 +832,7 @@ func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 		}
 		created := formatDuration(time.Now().Sub(time.Unix(img.Created, 0)))
 		size := formatSize(img.Size)
-		id := shortID(img.ID)
+		id := common.ShortID(img.ID)
 		if noTrunc {
 			id = img.ID
 		}
@@ -1043,7 +1046,7 @@ func (c *DokiCLI) NetworkLs(quiet bool, noTrunc bool, filter, format string) err
 	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
 	fmt.Fprintln(w, "NETWORK ID\tNAME\tDRIVER\tSCOPE")
 	for _, nw := range networks {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", shortID(nw.ID), nw.Name, nw.Driver, nw.Scope)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", common.ShortID(nw.ID), nw.Name, nw.Driver, nw.Scope)
 	}
 	w.Flush()
 	return nil
@@ -1423,14 +1426,14 @@ func (c *DokiCLI) Untag(imageName string) error {
 
 func (c *DokiCLI) Mount(containerIDs []string) error {
 	for _, id := range containerIDs {
-		fmt.Printf("%s /var/lib/doki/containers/%s\n", shortID(id), id)
+		fmt.Printf("%s /var/lib/doki/containers/%s\n", common.ShortID(id), id)
 	}
 	return nil
 }
 
 func (c *DokiCLI) Unmount(containerIDs []string) error {
 	for _, id := range containerIDs {
-		fmt.Printf("Unmounted: %s\n", shortID(id))
+		fmt.Printf("Unmounted: %s\n", common.ShortID(id))
 	}
 	return nil
 }
@@ -1598,13 +1601,6 @@ func (c *DokiCLI) Ping() error {
 	resp.Body.Close()
 	fmt.Println("OK")
 	return nil
-}
-
-func shortID(id string) string {
-	if len(id) > 12 {
-		return id[:12]
-	}
-	return id
 }
 
 func firstTag(imageID string) string {

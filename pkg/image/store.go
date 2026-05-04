@@ -308,11 +308,10 @@ func (s *Store) listRecords() ([]ImageRecord, error) {
 // Tag adds a tag to an existing image.
 func (s *Store) Tag(source, target string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	// Use listRecords directly to avoid nested locking.
 	records, err := s.listRecords()
 	if err != nil {
-		s.mu.Unlock()
 		return err
 	}
 
@@ -330,10 +329,8 @@ func (s *Store) Tag(source, target string) error {
 		}
 	}
 	if record == nil {
-		// Try by ID.
 		r, err := s.loadRecord(source)
 		if err != nil {
-			s.mu.Unlock()
 			return err
 		}
 		record = r
@@ -341,25 +338,21 @@ func (s *Store) Tag(source, target string) error {
 
 	for _, tag := range record.RepoTags {
 		if tag == target {
-			s.mu.Unlock()
 			return nil
 		}
 	}
 
 	record.RepoTags = append(record.RepoTags, target)
-	err = s.SaveRecord(record)
-	s.mu.Unlock()
-	return err
+	return s.SaveRecord(record)
 }
 
 // Remove removes an image.
 func (s *Store) Remove(idOrTag string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	// Use listRecords directly to avoid deadlock with Get.
 	records, err := s.listRecords()
 	if err != nil {
-		s.mu.Unlock()
 		return err
 	}
 
@@ -379,14 +372,12 @@ func (s *Store) Remove(idOrTag string) error {
 	if record == nil {
 		r, err := s.loadRecord(idOrTag)
 		if err != nil {
-			s.mu.Unlock()
 			return err
 		}
 		record = r
 	}
 
 	os.RemoveAll(s.manifestPath(record.ID))
-	s.mu.Unlock()
 	return nil
 }
 

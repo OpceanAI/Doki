@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -128,7 +129,12 @@ func main() {
 		log.Printf("TLS enabled (mutual=%v)", tlsVerify)
 	}
 
-	srv := &http.Server{Handler: server}
+	srv := &http.Server{
+		Handler:      server,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 	for _, ln := range listeners {
 		go func(l net.Listener) {
 			if err := srv.Serve(l); err != nil && err != http.ErrServerClosed {
