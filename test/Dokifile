@@ -1,0 +1,3 @@
+FROM alpine:latest
+RUN echo "Hello from Doki!"
+CMD ["echo", "Hello World from Doki Container Engine"]

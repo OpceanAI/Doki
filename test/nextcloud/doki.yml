@@ -1,0 +1,66 @@
+name: doki-nextcloud
+
+services:
+  db:
+    image: mariadb:latest
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW
+    restart: always
+    volumes:
+      - nextcloud-db:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=doki-secret-root-password
+      - MYSQL_PASSWORD=doki-nextcloud-pass
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+    networks:
+      - doki-net
+
+  redis:
+    image: redis:alpine
+    restart: always
+    command: redis-server --requirepass dokiredis
+    volumes:
+      - nextcloud-redis:/data
+    networks:
+      - doki-net
+
+  app:
+    image: nextcloud:latest
+    restart: always
+    ports:
+      - "8080:80"
+    volumes:
+      - nextcloud-data:/var/www/html
+      - nextcloud-config:/var/www/html/config
+      - nextcloud-apps:/var/www/html/custom_apps
+    environment:
+      - MYSQL_HOST=db
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+      - MYSQL_PASSWORD=doki-nextcloud-pass
+      - REDIS_HOST=redis
+      - REDIS_HOST_PASSWORD=dokiredis
+      - NEXTCLOUD_ADMIN_USER=dokiadmin
+      - NEXTCLOUD_ADMIN_PASSWORD=doki-admin-secret
+      - NEXTCLOUD_TRUSTED_DOMAINS=localhost 127.0.0.1
+    depends_on:
+      - db
+      - redis
+    networks:
+      - doki-net
+
+volumes:
+  nextcloud-db:
+    driver: local
+  nextcloud-redis:
+    driver: local
+  nextcloud-data:
+    driver: local
+  nextcloud-config:
+    driver: local
+  nextcloud-apps:
+    driver: local
+
+networks:
+  doki-net:
+    driver: bridge
