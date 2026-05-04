@@ -523,8 +523,8 @@ func printCommandHelp(cmd string) {
 
 func flagBool(args []string, names ...string) bool {
 	for _, n := range names {
-		for i, a := range args {
-			if i < len(args)-1 && a == n {
+		for _, a := range args {
+			if a == n {
 				return true
 			}
 		}

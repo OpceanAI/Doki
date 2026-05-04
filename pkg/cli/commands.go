@@ -213,7 +213,9 @@ func (c *DokiCLI) Run(args []string) error {
 	}
 
 	if _, err := c.doAPI("POST", "/containers/"+containerID+"/start", nil); err != nil {
-		return fmt.Errorf("start container: %w", err)
+		// Start may fail if container already exited or process error.
+		// Still try to get whatever output exists.
+		fmt.Fprintf(os.Stderr, "start: %v\n", err)
 	}
 
 	if flags.Detach {
@@ -221,12 +223,13 @@ func (c *DokiCLI) Run(args []string) error {
 		return nil
 	}
 
-	if flags.Interactive {
-		c.attach(containerID)
-	} else {
+	sleepDuration := 500 * time.Millisecond
+	_ = sleepDuration
+	if !flags.Interactive {
 		c.waitContainer(containerID)
-		c.logs(containerID, false, 0, false)
 	}
+	// Always try to get logs.
+	c.logs(containerID, false, 0, false)
 
 	if flags.RM {
 		c.doAPI("DELETE", "/containers/"+containerID+"?force=true", nil)
@@ -1756,10 +1759,39 @@ type MountOpt struct {
 
 func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) {
 	flags = &RunFlags{}
+	imageFound := false
+	stopParsing := false
 
 	i := 0
 	for i < len(args) {
 		arg := args[i]
+
+		// -- stops flag parsing, everything after is the command.
+		if arg == "--" {
+			stopParsing = true
+			i++
+			continue
+		}
+
+		// If we found the image or passed --, everything else is the command.
+		if stopParsing {
+			cmd = append(cmd, arg)
+			i++
+			continue
+		}
+
+		// If image is found, treat --flag as part of the command
+		// unless it's a known flag that comes BEFORE the image.
+		if imageFound && strings.HasPrefix(arg, "-") {
+			cmd = append(cmd, arg)
+			for i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				cmd = append(cmd, args[i])
+			}
+			i++
+			continue
+		}
+
 		switch arg {
 		case "-d", "--detach":
 			flags.Detach = true
@@ -2162,9 +2194,10 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 			}
 
 		default:
-			if !strings.HasPrefix(arg, "-") && image == "" {
+			if !strings.HasPrefix(arg, "-") && !imageFound {
 				image = arg
-			} else if !strings.HasPrefix(arg, "-") || image != "" {
+				imageFound = true
+			} else {
 				cmd = append(cmd, arg)
 			}
 		}
