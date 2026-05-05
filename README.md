@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Doki-0.4.0-6366F1?style=for-the-badge&labelColor=0A0A0A" alt="Doki v0.4.0">
+<img src="https://img.shields.io/badge/Doki-0.4.1-6366F1?style=for-the-badge&labelColor=0A0A0A" alt="Doki v0.4.1">
 <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
 <img src="https://img.shields.io/badge/API-Docker_v1.44-6366F1?style=for-the-badge&labelColor=0A0A0A">
 <img src="https://img.shields.io/badge/License-Apache_2.0-6366F1?style=for-the-badge&labelColor=0A0A0A">
