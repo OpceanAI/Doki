@@ -443,13 +443,7 @@ func (rt *Runtime) startProcess(cfg *Config, rootfsDir string, logFile *os.File)
 		return rt.startWithMicroVM(cfg, rootfsDir, logFile)
 	case ModeProot:
 		if proot.IsAvailable() {
-			pid, proc, err := rt.startWithProot(cfg, rootfsDir, logFile)
-			if err != nil {
-				// Fallback to native mode if proot fails (e.g. execve ENOSYS on Android).
-				logFile.Write([]byte(fmt.Sprintf("[doki] proot failed: %v - falling back to native mode\n", err)))
-				return rt.startNative(cfg, rootfsDir, logFile)
-			}
-			return pid, proc, nil
+			return rt.startWithProot(cfg, rootfsDir, logFile)
 		}
 		return rt.startNative(cfg, rootfsDir, logFile)
 	case ModeNamespaces:
@@ -502,26 +496,51 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		return 0, nil, fmt.Errorf("no command specified for container")
 	}
 
+	cleanRootfs := filepath.Clean(rootfsDir)
+
 	prootArgs := []string{
-		"-r", filepath.Clean(rootfsDir),
+		"-r", cleanRootfs,
 		"-b", "/proc",
 		"-b", "/sys",
 		"-b", "/dev",
 		"--kill-on-exit",
+		"--link2symlink",
 	}
+
+	// Android-specific bind mounts (same as proot-distro).
+	if rt.isAndroid() {
+		for _, dir := range []string{
+			"/apex", "/system", "/vendor",
+			"/storage", "/sdcard",
+			"/data/data/com.termux/files",
+		} {
+			if _, err := os.Stat(dir); err == nil {
+				prootArgs = append(prootArgs, "-b", dir)
+			}
+		}
+		// Bind Termux home directory.
+		if home := os.Getenv("HOME"); home != "" {
+			prootArgs = append(prootArgs, "-b", home)
+		}
+	}
+
 	if cfg.Cwd != "" {
 		prootArgs = append(prootArgs, "-w", cfg.Cwd)
 	}
 	prootArgs = append(prootArgs, args...)
 
 	cmd := exec.Command("proot", prootArgs...)
-	cmd.Dir = filepath.Clean(rootfsDir)
+	cmd.Dir = cleanRootfs
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = os.Stdin
 
 	env := os.Environ()
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	// Disable proot's internal seccomp on Android (kernel already blocks ptrace).
+	if rt.isAndroid() {
+		env = append(env, "PROOT_NO_SECCOMP=1")
+	}
 	for _, e := range cfg.Env {
 		env = append(env, e)
 	}
@@ -532,7 +551,8 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		return 0, nil, fmt.Errorf("proot start: %w", err)
 	}
 
-	// Wait briefly to detect immediate proot failures (e.g. execve not implemented).
+	// Wait briefly to detect immediate proot failures (e.g. execve ENOSYS).
+	// Quick exit with code 0 is normal for short commands like echo.
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
@@ -540,13 +560,15 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				code := exitErr.ExitCode()
-				return 0, nil, fmt.Errorf("proot exited with code %d (binary may be incompatible or missing in rootfs)", code)
+				if code != 0 {
+					return 0, nil, fmt.Errorf("proot exited with code %d (binary may be incompatible or missing in rootfs)", code)
+				}
+				return cmd.Process.Pid, cmd, nil
 			}
 			return 0, nil, fmt.Errorf("proot failed: %w", err)
 		}
-		return 0, nil, fmt.Errorf("proot exited immediately")
+		return cmd.Process.Pid, cmd, nil
 	case <-time.After(500 * time.Millisecond):
-		// Process started successfully, monitor asynchronously.
 	}
 
 	return cmd.Process.Pid, cmd, nil
