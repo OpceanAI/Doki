@@ -47,7 +47,7 @@ func main() {
 	switch cmd {
 	// Container commands.
 	case "run":
-		if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 			printRunHelp()
 			return
 		}

@@ -266,16 +266,17 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 	var containers []common.ContainerInfo
 	json.NewDecoder(resp.Body).Decode(&containers)
 
+	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
+	fmt.Fprintln(w, "CONTAINER ID\tIMAGE\tCOMMAND\tCREATED\tSTATUS\tPORTS\tNAMES")
+
 	if len(containers) == 0 {
+		w.Flush()
 		return nil
 	}
 
 	sort.Slice(containers, func(i, j int) bool {
 		return containers[i].Created < containers[j].Created
 	})
-
-	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
-	fmt.Fprintln(w, "CONTAINER ID\tIMAGE\tCOMMAND\tCREATED\tSTATUS\tPORTS\tNAMES")
 
 	for _, c := range containers {
 		id := common.ShortID(c.ID)
