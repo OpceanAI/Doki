@@ -1,9 +1,10 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Doki-0.3.0-6366F1?style=for-the-badge&labelColor=0A0A0A" alt="Doki v0.3.0">
+<img src="https://img.shields.io/badge/Doki-0.4.0-6366F1?style=for-the-badge&labelColor=0A0A0A" alt="Doki v0.4.0">
 <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
 <img src="https://img.shields.io/badge/API-Docker_v1.44-6366F1?style=for-the-badge&labelColor=0A0A0A">
 <img src="https://img.shields.io/badge/License-Apache_2.0-6366F1?style=for-the-badge&labelColor=0A0A0A">
+<img src="https://img.shields.io/badge/Files-46_Go-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
 
 <br><br>
 
@@ -804,7 +805,7 @@ Doki/
 └── LICENSE
 ```
 
-**Statistics:** 42 Go source files. 12,000+ lines of code. 5 compiled binaries. Zero external dependencies beyond the Go standard library and one YAML parsing library.
+**Statistics:** 40 Go source files. 14,500+ lines of code. 5 compiled binaries. Zero external dependencies beyond the Go standard library and one YAML parsing library.
 
 ---
 
