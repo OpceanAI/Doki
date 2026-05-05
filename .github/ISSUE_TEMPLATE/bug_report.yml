@@ -1,0 +1,83 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Doki
+title: "[BUG] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug in Doki. Please fill out the information below.
+
+  - type: input
+    id: version
+    attributes:
+      label: Doki Version
+      description: Run `doki version` and paste the output
+      placeholder: "Client: Doki\n Version:    0.4.0\n API version: 1.44"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Where is Doki running?
+      placeholder: "Android 14 / Termux / ARM64"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen?
+      placeholder: "A clear description of the bug..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Exact commands to reproduce the issue
+      placeholder: |
+        1. dokid &
+        2. doki pull alpine
+        3. doki run alpine ...
+        4. See error
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Output
+      description: What was the actual output or error message?
+      render: text
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Output
+      description: What should have happened instead?
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Daemon Logs
+      description: Run `cat ~/doki/dokid.log` or wherever the daemon log is stored
+      render: text
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Runtime Mode
+      description: How is Doki running containers?
+      options:
+        - proot (Android/Termux)
+        - native (host process)
+        - namespaces (root required)
+        - microVM (crosvm/firecracker)
+        - other
