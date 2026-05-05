@@ -39,30 +39,63 @@ func IsTermuxProot() bool {
 	return strings.Contains(p, "/data/data/com.termux")
 }
 
-// Exec executes a command in a proot-based environment.
-func (m *Manager) Exec(rootfs string, args []string, env []string, workDir string) error {
-	prootArgs := []string{
+// buildProotBaseArgs returns the common proot arguments for all execution methods.
+func buildProotBaseArgs(rootfs string) []string {
+	args := []string{
 		"-r", rootfs,
 		"-b", "/proc",
+		"-b", "/proc/self/fd:/dev/fd",
+		"-b", "/proc/self/fd/0:/dev/stdin",
+		"-b", "/proc/self/fd/1:/dev/stdout",
+		"-b", "/proc/self/fd/2:/dev/stderr",
 		"-b", "/sys",
 		"-b", "/dev",
+		"-b", "/dev/urandom:/dev/random",
 		"--kill-on-exit",
 		"--link2symlink",
+		"--kernel-release=6.17.0-PRoot-Distro",
 	}
 
-	// Android-specific bind mounts (same as proot-distro).
+	selinuxTarget := filepath.Join(rootfs, "sys", "fs", "selinux")
+	os.MkdirAll(selinuxTarget, 0755)
+	args = append(args, "-b", selinuxTarget+":/sys/fs/selinux")
+
+	return args
+}
+
+// appendAndroidBinds appends Android-specific bind mounts to proot args.
+func appendAndroidBinds(args []string) []string {
 	for _, dir := range []string{
 		"/apex", "/system", "/vendor",
 		"/data", "/storage", "/sdcard",
 	} {
 		if _, err := os.Stat(dir); err == nil {
-			prootArgs = append(prootArgs, "-b", dir)
+			args = append(args, "-b", dir)
 		}
 	}
-	// Bind Termux home.
-	if home := os.Getenv("HOME"); home != "" {
-		prootArgs = append(prootArgs, "-b", home)
+	if _, err := os.Stat("/linkerconfig/ld.config.txt"); err == nil {
+		args = append(args, "-b", "/linkerconfig/ld.config.txt")
 	}
+	if home := os.Getenv("HOME"); home != "" {
+		args = append(args, "-b", home)
+	}
+	return args
+}
+
+// buildProotEnv builds the environment slice for proot execution.
+func buildProotEnv(userEnv []string) []string {
+	env := os.Environ()
+	env = append(env, "PROOT_NO_SECCOMP=1")
+	for _, e := range userEnv {
+		env = append(env, e)
+	}
+	return env
+}
+
+// Exec executes a command in a proot-based environment.
+func (m *Manager) Exec(rootfs string, args []string, env []string, workDir string) error {
+	prootArgs := buildProotBaseArgs(rootfs)
+	prootArgs = appendAndroidBinds(prootArgs)
 
 	if workDir != "" {
 		prootArgs = append(prootArgs, "-w", workDir)
@@ -74,14 +107,7 @@ func (m *Manager) Exec(rootfs string, args []string, env []string, workDir strin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	// Disable proot internal seccomp on Android.
-	if IsTermuxProot() {
-		cmd.Env = append(os.Environ(), "PROOT_NO_SECCOMP=1")
-	}
-	for _, e := range env {
-		cmd.Env = append(cmd.Env, e)
-	}
+	cmd.Env = buildProotEnv(env)
 
 	return cmd.Run()
 }
@@ -223,26 +249,12 @@ func ShouldUseProot() bool {
 
 // RunCommand runs a command inside a proot environment and captures output.
 func RunCommand(rootfs string, args []string, env []string) (string, error) {
-	prootArgs := []string{
-		"-r", rootfs,
-		"-b", "/proc",
-		"-b", "/sys",
-		"-b", "/dev",
-		"--kill-on-exit",
-		"--link2symlink",
-	}
-	for _, dir := range []string{"/apex", "/system", "/vendor", "/data", "/storage"} {
-		if _, err := os.Stat(dir); err == nil {
-			prootArgs = append(prootArgs, "-b", dir)
-		}
-	}
+	prootArgs := buildProotBaseArgs(rootfs)
+	prootArgs = appendAndroidBinds(prootArgs)
 	prootArgs = append(prootArgs, args...)
 
 	cmd := exec.Command("proot", prootArgs...)
-	cmd.Env = append(os.Environ(), "PROOT_NO_SECCOMP=1")
-	for _, e := range env {
-		cmd.Env = append(cmd.Env, e)
-	}
+	cmd.Env = buildProotEnv(env)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("proot command failed: %w\n%s", err, string(output))

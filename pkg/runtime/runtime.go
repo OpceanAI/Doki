@@ -516,11 +516,22 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	prootArgs := []string{
 		"-r", cleanRootfs,
 		"-b", "/proc",
+		"-b", "/proc/self/fd:/dev/fd",
+		"-b", "/proc/self/fd/0:/dev/stdin",
+		"-b", "/proc/self/fd/1:/dev/stdout",
+		"-b", "/proc/self/fd/2:/dev/stderr",
 		"-b", "/sys",
 		"-b", "/dev",
+		"-b", "/dev/urandom:/dev/random",
 		"--kill-on-exit",
 		"--link2symlink",
+		"--kernel-release=6.17.0-PRoot-Distro",
 	}
+
+	// Disable SELinux: bind an empty dir over /sys/fs/selinux.
+	selinuxTarget := filepath.Join(cleanRootfs, "sys", "fs", "selinux")
+	os.MkdirAll(selinuxTarget, 0755)
+	prootArgs = append(prootArgs, "-b", selinuxTarget+":/sys/fs/selinux")
 
 	// Android-specific bind mounts (same as proot-distro).
 	if rt.isAndroid() {
@@ -533,7 +544,9 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 				prootArgs = append(prootArgs, "-b", dir)
 			}
 		}
-		// Bind Termux home directory.
+		if _, err := os.Stat("/linkerconfig/ld.config.txt"); err == nil {
+			prootArgs = append(prootArgs, "-b", "/linkerconfig/ld.config.txt")
+		}
 		if home := os.Getenv("HOME"); home != "" {
 			prootArgs = append(prootArgs, "-b", home)
 		}
@@ -549,6 +562,7 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = os.Stdin
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	env := os.Environ()
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
@@ -561,14 +575,11 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		env = append(env, e)
 	}
 	cmd.Env = env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return 0, nil, fmt.Errorf("proot start: %w", err)
 	}
 
-	// Wait briefly to detect immediate proot failures (e.g. execve ENOSYS).
-	// Quick exit with code 0 is normal for short commands like echo.
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
@@ -576,6 +587,11 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				code := exitErr.ExitCode()
+				if code == 126 || code == 127 {
+					if pid, qemuCmd, qemuErr := rt.retryWithQemu(cfg, rootfsDir, logFile); qemuErr == nil {
+						return pid, qemuCmd, nil
+					}
+				}
 				if code != 0 {
 					return 0, nil, fmt.Errorf("proot exited with code %d (binary may be incompatible or missing in rootfs)", code)
 				}
@@ -1160,6 +1176,143 @@ func (rt *Runtime) startWithMicroVM(cfg *Config, rootfsDir string, logFile *os.F
 	logFile.Write([]byte(fmt.Sprintf("[dokivm] VM PID: %d, CID: %d\n", vm.PID, vm.CID)))
 
 	return vm.PID, nil, nil
+}
+
+// qemuBinaryPaths returns candidate paths for QEMU user-mode emulators.
+func qemuBinaryPaths(guestArch string) []string {
+	paths := []string{}
+	qemuBinaries := map[string][]string{
+		"aarch64": {"qemu-aarch64", "/data/data/com.termux/files/usr/bin/qemu-aarch64"},
+		"arm":     {"qemu-arm", "/data/data/com.termux/files/usr/bin/qemu-arm"},
+		"i686":    {"qemu-i386", "/data/data/com.termux/files/usr/bin/qemu-i386"},
+		"x86_64":  {"qemu-x86_64", "/data/data/com.termux/files/usr/bin/qemu-x86_64"},
+	}
+	for _, name := range qemuBinaries[guestArch] {
+		if p, err := exec.LookPath(name); err == nil {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
+// detectGuestArch tries to determine the guest architecture from the rootfs.
+func detectGuestArch(rootfsDir string) string {
+	arches := []string{
+		"/usr/bin/bash", "/usr/bin/sh", "/bin/bash", "/bin/sh",
+		"/usr/local/bin/docker-entrypoint.sh",
+	}
+	for _, candidate := range arches {
+		path := filepath.Join(rootfsDir, candidate)
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) < 20 {
+			continue
+		}
+		if data[0] == '#' && data[1] == '!' {
+			continue
+		}
+		if data[0] == 0x7f && data[1] == 'E' && data[2] == 'L' && data[3] == 'F' {
+			switch {
+			case data[4] == 2 && data[18] == 0xb7:
+				return "aarch64"
+			case data[4] == 1 && data[18] == 0x28:
+				return "arm"
+			case data[4] == 2 && data[18] == 0x3e:
+				return "x86_64"
+			case data[4] == 1 && data[18] == 0x03:
+				return "i686"
+			}
+		}
+	}
+	return "aarch64"
+}
+
+// retryWithQemu attempts to run the container via proot with QEMU user-mode.
+func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File) (int, *exec.Cmd, error) {
+	guestArch := detectGuestArch(rootfsDir)
+	qemuPaths := qemuBinaryPaths(guestArch)
+	if len(qemuPaths) == 0 {
+		return 0, nil, fmt.Errorf("qemu user-mode not available for %s", guestArch)
+	}
+
+	args := cfg.Args
+	cleanRootfs := filepath.Clean(rootfsDir)
+
+	prootArgs := []string{
+		"-q", qemuPaths[0],
+		"-r", cleanRootfs,
+		"-b", "/proc",
+		"-b", "/proc/self/fd:/dev/fd",
+		"-b", "/proc/self/fd/0:/dev/stdin",
+		"-b", "/proc/self/fd/1:/dev/stdout",
+		"-b", "/proc/self/fd/2:/dev/stderr",
+		"-b", "/sys",
+		"-b", "/dev",
+		"-b", "/dev/urandom:/dev/random",
+		"--kill-on-exit",
+		"--link2symlink",
+		"--kernel-release=6.17.0-PRoot-Distro",
+	}
+
+	selinuxTarget := filepath.Join(cleanRootfs, "sys", "fs", "selinux")
+	os.MkdirAll(selinuxTarget, 0755)
+	prootArgs = append(prootArgs, "-b", selinuxTarget+":/sys/fs/selinux")
+
+	if rt.isAndroid() {
+		for _, dir := range []string{
+			"/apex", "/system", "/vendor",
+			"/storage", "/sdcard",
+			"/data/data/com.termux/files",
+		} {
+			if _, err := os.Stat(dir); err == nil {
+				prootArgs = append(prootArgs, "-b", dir)
+			}
+		}
+		if _, err := os.Stat("/linkerconfig/ld.config.txt"); err == nil {
+			prootArgs = append(prootArgs, "-b", "/linkerconfig/ld.config.txt")
+		}
+		prootArgs = append(prootArgs, "-b", "/data/data/com.termux/files/usr")
+		if home := os.Getenv("HOME"); home != "" {
+			prootArgs = append(prootArgs, "-b", home)
+		}
+	}
+
+	if cfg.Cwd != "" {
+		prootArgs = append(prootArgs, "-w", cfg.Cwd)
+	}
+	prootArgs = append(prootArgs, args...)
+
+	cmd := exec.Command("proot", prootArgs...)
+	cmd.Dir = cleanRootfs
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = os.Stdin
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	env := os.Environ()
+	env = append(env, "PROOT_NO_SECCOMP=1")
+	for _, e := range cfg.Env {
+		env = append(env, e)
+	}
+	cmd.Env = env
+
+	fmt.Fprintf(logFile, "DOKI: retrying with QEMU user mode (%s)\n", qemuPaths[0])
+
+	if err := cmd.Start(); err != nil {
+		return 0, nil, fmt.Errorf("proot+qemu start: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return 0, nil, fmt.Errorf("proot+qemu failed: %w", err)
+		}
+		return cmd.Process.Pid, cmd, nil
+	case <-time.After(10000 * time.Millisecond):
+	}
+
+	return cmd.Process.Pid, cmd, nil
 }
 
 // isShell checks if a file is a shell script.
