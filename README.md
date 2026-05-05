@@ -107,6 +107,19 @@ Android is not a second-class platform. It is the largest deployed Linux ecosyst
 
 ### Installation
 
+**Pre-compiled binaries (Android/Termux ARM64):**
+
+```bash
+# Download all 4 binaries
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.0/doki           -o $PREFIX/bin/doki
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.0/dokid          -o $PREFIX/bin/dokid
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.0/doki-compose   -o $PREFIX/bin/doki-compose
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.0/doki-init      -o $PREFIX/bin/doki-init
+chmod +x $PREFIX/bin/doki*
+```
+
+**Build from source:**
+
 ```bash
 git clone https://github.com/OpceanAI/Doki.git
 cd Doki
@@ -122,6 +135,15 @@ make install
 # macOS (ARM64)
 make build-darwin-arm64
 ```
+
+### Binaries
+
+| Binary | Size | Description |
+|--------|------|-------------|
+| **doki** | 6.5 MB | CLI principal. All 108 commands: `run`, `ps`, `images`, `pull`, `exec`, `logs`, `inspect`, `stop`, `rm`, `build`, `network`, `volume`, `compose`, `pod`, `login`. Connects to daemon via Unix socket. |
+| **dokid** | 8.2 MB | Daemon. Runs in background, exposes Docker Engine API v1.44 over Unix socket. Manages containers, images, networks, volumes. Auto-detects proot, Linux namespaces, or microVM isolation. |
+| **doki-compose** | 6.9 MB | Compose engine. Reads `doki.yml` (or `docker-compose.yml`), starts services in dependency order, creates networks. Supports `up`, `down`, `ps`. |
+| **doki-init** | 2.9 MB | PID 1 for microVM guests. Runs inside the VM, mounts filesystems, executes the container command, communicates with host via vsock. Not used directly. |
 
 ### First Run
 
