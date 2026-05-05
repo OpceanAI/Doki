@@ -289,6 +289,10 @@ func extractTarGz(tarPath, dest string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
+			// Remove symlinks before creating regular files.
+			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+				os.Remove(target)
+			}
 			out, err := os.Create(target)
 			if err != nil {
 				return err
@@ -326,14 +330,20 @@ func extractTarGz(tarPath, dest string) error {
 			if !strings.HasPrefix(linkTarget, filepath.Clean(dest)+string(os.PathSeparator)) && linkTarget != filepath.Clean(dest) {
 				return fmt.Errorf("tar: hardlink escape attempt")
 			}
+			// Remove existing file/symlink before creating hardlink.
 			os.Remove(target)
-			// Hardlinks may fail on cross-device or permission-restricted filesystems.
-			// Fall back to copying the file if linking fails.
 			if err := os.Link(linkTarget, target); err != nil {
-				data, readErr := os.ReadFile(linkTarget)
-				if readErr == nil {
-					os.WriteFile(target, data, 0644)
+				// Hardlink failed: source may not exist yet or filesystem restriction.
+				// Try to copy the file as fallback.
+				if data, readErr := os.ReadFile(linkTarget); readErr == nil {
+					os.Remove(target)
+					if writeErr := os.WriteFile(target, data, 0644); writeErr != nil {
+						// Last resort: try to remove any existing entry and retry.
+						os.Remove(target)
+						_ = os.WriteFile(target, data, 0644)
+					}
 				}
+				// If both link and copy fail, skip this entry (non-fatal).
 			}
 		}
 	}
@@ -443,7 +453,14 @@ func (rt *Runtime) startProcess(cfg *Config, rootfsDir string, logFile *os.File)
 		return rt.startWithMicroVM(cfg, rootfsDir, logFile)
 	case ModeProot:
 		if proot.IsAvailable() {
-			return rt.startWithProot(cfg, rootfsDir, logFile)
+			pid, proc, err := rt.startWithProot(cfg, rootfsDir, logFile)
+			if err != nil {
+				// Proot failed. Fall back to native mode.
+				logFile.Write([]byte(fmt.Sprintf("[doki] proot failed: %v — falling back to native mode\n", err)))
+				rt.mode = ModeNative
+				return rt.startNative(cfg, rootfsDir, logFile)
+			}
+			return pid, proc, nil
 		}
 		return rt.startNative(cfg, rootfsDir, logFile)
 	case ModeNamespaces:
@@ -474,8 +491,10 @@ func (rt *Runtime) startNative(cfg *Config, rootfsDir string, logFile *os.File) 
 
 	// Build environment: image env + container env + PATH to rootfs binaries.
 	env := os.Environ()
-	env = append(env, "PATH="+rootfsDir+"/usr/bin:"+rootfsDir+"/usr/sbin:"+
-		rootfsDir+"/bin:"+rootfsDir+"/sbin:"+os.Getenv("PATH"))
+	env = append(env, "PATH="+rootfsDir+"/usr/local/sbin:"+rootfsDir+"/usr/local/bin:"+
+		rootfsDir+"/usr/sbin:"+rootfsDir+"/usr/bin:"+
+		rootfsDir+"/sbin:"+rootfsDir+"/bin:"+rootfsDir+":"+os.Getenv("PATH"))
+	env = append(env, "LD_LIBRARY_PATH="+rootfsDir+"/usr/lib:"+rootfsDir+"/lib:"+rootfsDir+"/usr/local/lib")
 	env = append(env, "HOME=/root")
 	env = append(env, "DOKI_CONTAINER=1")
 	for _, e := range cfg.Env {
@@ -536,7 +555,8 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	cmd.Stdin = os.Stdin
 
 	env := os.Environ()
-	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
+	env = append(env, "LD_LIBRARY_PATH="+cleanRootfs+"/usr/lib:"+cleanRootfs+"/lib:"+cleanRootfs+"/usr/local/lib")
 	// Disable proot's internal seccomp on Android (kernel already blocks ptrace).
 	if rt.isAndroid() {
 		env = append(env, "PROOT_NO_SECCOMP=1")
