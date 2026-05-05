@@ -453,14 +453,7 @@ func (rt *Runtime) startProcess(cfg *Config, rootfsDir string, logFile *os.File)
 		return rt.startWithMicroVM(cfg, rootfsDir, logFile)
 	case ModeProot:
 		if proot.IsAvailable() {
-			pid, proc, err := rt.startWithProot(cfg, rootfsDir, logFile)
-			if err != nil {
-				// Proot failed. Fall back to native mode.
-				logFile.Write([]byte(fmt.Sprintf("[doki] proot failed: %v — falling back to native mode\n", err)))
-				rt.mode = ModeNative
-				return rt.startNative(cfg, rootfsDir, logFile)
-			}
-			return pid, proc, nil
+			return rt.startWithProot(cfg, rootfsDir, logFile)
 		}
 		return rt.startNative(cfg, rootfsDir, logFile)
 	case ModeNamespaces:
@@ -480,6 +473,12 @@ func (rt *Runtime) startNative(cfg *Config, rootfsDir string, logFile *os.File) 
 		return 0, nil, fmt.Errorf("no command specified for container")
 	}
 
+	// Build environment with container PATH and LD_LIBRARY_PATH.
+	containerPath := rootfsDir + "/usr/local/sbin:" + rootfsDir + "/usr/local/bin:" +
+		rootfsDir + "/usr/sbin:" + rootfsDir + "/usr/bin:" +
+		rootfsDir + "/sbin:" + rootfsDir + "/bin:" + rootfsDir
+	containerLibPath := rootfsDir + "/usr/lib:" + rootfsDir + "/lib:" + rootfsDir + "/usr/local/lib"
+
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = rootfsDir
 	if cfg.Cwd != "" {
@@ -489,12 +488,9 @@ func (rt *Runtime) startNative(cfg *Config, rootfsDir string, logFile *os.File) 
 	cmd.Stderr = logFile
 	cmd.Stdin = os.Stdin
 
-	// Build environment: image env + container env + PATH to rootfs binaries.
 	env := os.Environ()
-	env = append(env, "PATH="+rootfsDir+"/usr/local/sbin:"+rootfsDir+"/usr/local/bin:"+
-		rootfsDir+"/usr/sbin:"+rootfsDir+"/usr/bin:"+
-		rootfsDir+"/sbin:"+rootfsDir+"/bin:"+rootfsDir+":"+os.Getenv("PATH"))
-	env = append(env, "LD_LIBRARY_PATH="+rootfsDir+"/usr/lib:"+rootfsDir+"/lib:"+rootfsDir+"/usr/local/lib")
+	env = append(env, "PATH="+containerPath)
+	env = append(env, "LD_LIBRARY_PATH="+containerLibPath)
 	env = append(env, "HOME=/root")
 	env = append(env, "DOKI_CONTAINER=1")
 	for _, e := range cfg.Env {
@@ -1164,4 +1160,24 @@ func (rt *Runtime) startWithMicroVM(cfg *Config, rootfsDir string, logFile *os.F
 	logFile.Write([]byte(fmt.Sprintf("[dokivm] VM PID: %d, CID: %d\n", vm.PID, vm.CID)))
 
 	return vm.PID, nil, nil
+}
+
+// isShell checks if a file is a shell script.
+func isShell(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) < 2 {
+		return false
+	}
+	return data[0] == '#' && data[1] == '!'
+}
+
+// findShell finds a shell binary in the container rootfs.
+func findShell(rootfsDir string) string {
+	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
+		path := filepath.Join(rootfsDir, sh)
+		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() {
+			return path
+		}
+	}
+	return "/bin/sh" // fallback
 }
