@@ -20,6 +20,8 @@ type Manager struct {
 	mu       sync.RWMutex
 	root     string
 	networks map[string]*Network
+	firewall *FirewallManager
+	dns      *DNSServer
 }
 
 // Network represents a container network.
@@ -39,10 +41,11 @@ type Network struct {
 
 // Endpoint represents a container endpoint in a network.
 type Endpoint struct {
-	EndpointID  string `json:"EndpointID"`
-	MacAddress  string `json:"MacAddress"`
-	IPv4Address string `json:"IPv4Address"`
-	IPv6Address string `json:"IPv6Address"`
+	EndpointID  string    `json:"EndpointID"`
+	MacAddress  string    `json:"MacAddress"`
+	IPv4Address string    `json:"IPv4Address"`
+	IPv6Address string    `json:"IPv6Address"`
+	Aliases     []string  `json:"Aliases,omitempty"`
 	PortMapping []PortMap `json:"PortMapping,omitempty"`
 }
 
@@ -67,12 +70,14 @@ type NetworkConfig struct {
 }
 
 // NewManager creates a new network manager.
-func NewManager(root string) (*Manager, error) {
+func NewManager(root string, firewall *FirewallManager, dns *DNSServer) (*Manager, error) {
 	common.EnsureDir(root)
 
 	m := &Manager{
 		root:     root,
 		networks: make(map[string]*Network),
+		firewall: firewall,
+		dns:      dns,
 	}
 
 	// Create default networks.
@@ -212,8 +217,8 @@ func (m *Manager) toNetworkInfo(nw *Network) common.NetworkInfo {
 	}
 }
 
-// Connect connects a container to a network.
-func (m *Manager) Connect(networkID, containerID string, ipAddr string) error {
+// Connect connects a container to a network and configures networking.
+func (m *Manager) Connect(networkID, containerID string, ipAddr string, aliases []string, ports []PortMap, containerPid int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -222,32 +227,76 @@ func (m *Manager) Connect(networkID, containerID string, ipAddr string) error {
 		return err
 	}
 
-	if _, exists := nw.Containers[containerID]; exists {
-		return nil
-	}
+	existing, exists := nw.Containers[containerID]
 
 	ep := &Endpoint{
 		EndpointID:  common.GenerateID(64),
 		MacAddress:  generateMacAddr(),
 		IPv4Address: ipAddr,
+		Aliases:     aliases,
+		PortMapping: ports,
 	}
 
 	if ipAddr == "" && nw.Driver == "bridge" {
 		ep.IPv4Address = m.allocateIP(nw)
 	}
 
+	if exists && existing != nil {
+		ep.EndpointID = existing.EndpointID
+		ep.MacAddress = existing.MacAddress
+		if ep.IPv4Address == "" {
+			ep.IPv4Address = existing.IPv4Address
+		}
+	}
+
 	nw.Containers[containerID] = ep
-	return m.saveNetwork(nw)
+	if err := m.saveNetwork(nw); err != nil {
+		return err
+	}
+
+	// Register in DNS.
+	if m.dns != nil && ep.IPv4Address != "" {
+		m.dns.AddEntry(containerID, ep.IPv4Address)
+		for _, alias := range aliases {
+			m.dns.AddEntry(alias, ep.IPv4Address)
+		}
+	}
+
+	// Configure actual networking if container is running.
+	if containerPid > 0 && nw.Driver == "bridge" {
+		if os.Geteuid() == 0 {
+			setupBridgeNetwork(containerPid, nw, ep, m.firewall)
+		} else {
+			setupRootlessNetworking(containerPid)
+		}
+	}
+
+	return nil
 }
 
-// Disconnect disconnects a container from a network.
-func (m *Manager) Disconnect(networkID, containerID string) error {
+// Disconnect disconnects a container from a network and removes configuration.
+func (m *Manager) Disconnect(networkID, containerID string, containerPid int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	nw, err := m.loadNetwork(networkID)
 	if err != nil {
 		return err
+	}
+
+	ep := nw.Containers[containerID]
+
+	// Remove from DNS.
+	if m.dns != nil && ep != nil && ep.IPv4Address != "" {
+		m.dns.RemoveEntry(containerID)
+		for _, alias := range ep.Aliases {
+			m.dns.RemoveEntry(alias)
+		}
+	}
+
+	// Teardown networking if container is running.
+	if containerPid > 0 && nw.Driver == "bridge" {
+		teardownBridgeNetwork(nw, ep, m.firewall)
 	}
 
 	delete(nw.Containers, containerID)
@@ -421,13 +470,13 @@ func (m *Manager) loadNetwork(idOrName string) (*Network, error) {
 }
 
 // SetupNetwork configures networking for a container.
-func (m *Manager) SetupNetwork(containerID, containerPid int, networkName string) error {
+func (m *Manager) SetupNetwork(containerID string, containerPid int, networkName string) error {
 	if networkName == "none" {
 		return nil
 	}
 
 	if networkName == "host" {
-		return setupHostNetwork(containerPid)
+		return setupHostNetwork()
 	}
 
 	nw, err := m.GetNetwork(networkName)
@@ -436,46 +485,155 @@ func (m *Manager) SetupNetwork(containerID, containerPid int, networkName string
 	}
 
 	if nw.Driver == "bridge" {
-		return setupBridgeNetwork(containerID, containerPid, nw)
+		ep := nw.Containers[containerID]
+		return setupBridgeNetwork(containerPid, nw, ep, m.firewall)
 	}
 
 	return nil
 }
 
-func setupHostNetwork(pid int) error {
-	// Join the host's network namespace.
-	nsPath := fmt.Sprintf("/proc/1/ns/net")
-	targetPath := fmt.Sprintf("/proc/%d/ns/net", pid)
-
-	// Copy the namespace by using nsenter.
-	cmd := exec.Command("nsenter", "--net="+nsPath, "true")
-	_ = targetPath
-	return cmd.Run()
+// AE10: ValidatePortBinding checks if a port binding is allowed.
+func ValidatePortBinding(hostPort uint16, privileged bool) error {
+	if privileged {
+		return nil
+	}
+	if hostPort > 0 && hostPort < 1024 {
+		return fmt.Errorf("cannot bind to privileged port %d without root or Privileged flag", hostPort)
+	}
+	return nil
 }
 
-func setupBridgeNetwork(containerID, pid int, nw *Network) error {
-	// For rootless, use pasta or slirp4netns.
+// TeardownNetwork removes networking for a container.
+func (m *Manager) TeardownNetwork(containerID string, networkName string) error {
+	if networkName == "none" || networkName == "host" {
+		return nil
+	}
+
+	nw, err := m.GetNetwork(networkName)
+	if err != nil {
+		return err
+	}
+
+	if nw.Driver == "bridge" {
+		ep := nw.Containers[containerID]
+		return teardownBridgeNetwork(nw, ep, m.firewall)
+	}
+
+	return nil
+}
+
+func setupHostNetwork() error {
+	// The container already shares the host netns via clone flags (no CLONE_NEWNET).
+	// No additional configuration needed for host networking.
+	return nil
+}
+
+func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallManager) error {
 	if os.Geteuid() != 0 {
 		return setupRootlessNetworking(pid)
 	}
 
-	// Create veth pair.
-	vethName := fmt.Sprintf("doki%d", pid)
+	bridgeName := "doki0"
+	vethHost := fmt.Sprintf("doki%d", pid)
+	vethContainer := "eth0" + fmt.Sprintf("p%d", pid)
 
-	cmd := exec.Command("ip", "link", "add", vethName, "type", "veth",
-		"peer", "name", "eth0")
-	if err := cmd.Run(); err != nil {
-		return err
+	// 1. Ensure bridge exists and is up.
+	if !bridgeExists(bridgeName) {
+		if out, err := exec.Command("ip", "link", "add", bridgeName, "type", "bridge").CombinedOutput(); err != nil {
+			return fmt.Errorf("create bridge %s: %s %w", bridgeName, string(out), err)
+		}
+		if out, err := exec.Command("ip", "link", "set", bridgeName, "up").CombinedOutput(); err != nil {
+			return fmt.Errorf("set bridge %s up: %s %w", bridgeName, string(out), err)
+		}
+		// Assign gateway IP to the bridge.
+		if nw.Gateway != "" && nw.Subnet != "" {
+			_, ipNet, _ := net.ParseCIDR(nw.Subnet)
+			if ipNet != nil {
+				ones, _ := ipNet.Mask.Size()
+				gwAddr := fmt.Sprintf("%s/%d", nw.Gateway, ones)
+				exec.Command("ip", "addr", "add", gwAddr, "dev", bridgeName).Run()
+			}
+		}
 	}
 
-	// Move eth0 into container namespace.
-	cmd = exec.Command("ip", "link", "set", "eth0", "netns",
-		fmt.Sprintf("%d", pid))
-	if err := cmd.Run(); err != nil {
-		return err
+	// 2. Create veth pair.
+	if out, err := exec.Command("ip", "link", "add", vethHost, "type", "veth",
+		"peer", "name", vethContainer).CombinedOutput(); err != nil {
+		return fmt.Errorf("create veth: %s %w", string(out), err)
+	}
+
+	// 3. Move container-side into the container's netns.
+	if out, err := exec.Command("ip", "link", "set", vethContainer, "netns",
+		fmt.Sprintf("%d", pid)).CombinedOutput(); err != nil {
+		return fmt.Errorf("move veth to netns %d: %s %w", pid, string(out), err)
+	}
+
+	// 4. Attach host-side to bridge and bring it up.
+	if out, err := exec.Command("ip", "link", "set", vethHost, "master", bridgeName).CombinedOutput(); err != nil {
+		return fmt.Errorf("attach veth to bridge: %s %w", string(out), err)
+	}
+	if out, err := exec.Command("ip", "link", "set", vethHost, "up").CombinedOutput(); err != nil {
+		return fmt.Errorf("set veth up: %s %w", string(out), err)
+	}
+
+	// 5. Inside container netns: rename to eth0, assign IP, bring up, add route.
+	netnsFlag := fmt.Sprintf("%d", pid)
+	containerIP := ""
+	gateway := nw.Gateway
+	prefixLen := 16
+	if _, ipNet, err := net.ParseCIDR(nw.Subnet); err == nil && ipNet != nil {
+		ones, _ := ipNet.Mask.Size()
+		prefixLen = ones
+	}
+	if ep != nil && ep.IPv4Address != "" {
+		containerIP = ep.IPv4Address
+		ipAddr := fmt.Sprintf("%s/%d", containerIP, prefixLen)
+
+		// Rename interface inside netns.
+		exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+			"ip", "link", "set", vethContainer, "name", "eth0").Run()
+
+		// Assign IP.
+		if out, err := exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+			"ip", "addr", "add", ipAddr, "dev", "eth0").CombinedOutput(); err != nil {
+			return fmt.Errorf("assign ip %s: %s %w", ipAddr, string(out), err)
+		}
+
+		// Bring up eth0 and lo.
+		exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+			"ip", "link", "set", "eth0", "up").Run()
+		exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+			"ip", "link", "set", "lo", "up").Run()
+
+		// Add default route.
+		if gateway != "" {
+			exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+				"ip", "route", "add", "default", "via", gateway).Run()
+		}
+	}
+
+	// 6. Set up port mappings.
+	if firewall != nil && containerIP != "" && ep != nil {
+		for _, pm := range ep.PortMapping {
+			firewall.AddPortMapping(containerIP, int(pm.HostPort), int(pm.ContainerPort), pm.Proto)
+		}
 	}
 
 	return nil
+}
+
+func teardownBridgeNetwork(nw *Network, ep *Endpoint, firewall *FirewallManager) error {
+	if firewall != nil && ep != nil {
+		for _, pm := range ep.PortMapping {
+			firewall.RemovePortMapping(ep.IPv4Address, int(pm.HostPort), int(pm.ContainerPort), pm.Proto)
+		}
+	}
+	return nil
+}
+
+func bridgeExists(name string) bool {
+	_, err := os.Stat("/sys/class/net/" + name)
+	return err == nil
 }
 
 func setupRootlessNetworking(pid int) error {

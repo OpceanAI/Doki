@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/OpceanAI/Doki/pkg/common"
 )
 
 // Middleware provides HTTP middleware for the API server.
@@ -53,7 +55,7 @@ func (m *Middleware) CORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,HEAD,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Registry-Auth")
 		w.Header().Set("Api-Version", "1.44")
-		w.Header().Set("Server", "Doki/0.2.0")
+		w.Header().Set("Server", "Doki/"+common.Version)
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return

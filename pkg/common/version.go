@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	// Version is set at build time.
-	Version = "0.3.0"
+	// Version is set at build time. Defaults to DokiVersion.
+	Version = DokiVersion
 	// GitCommit is set at build time.
 	GitCommit = "unknown"
 	// BuildTime is set at build time.

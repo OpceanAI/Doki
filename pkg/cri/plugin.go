@@ -119,7 +119,7 @@ func (c *CRIPlugin) StopPodSandbox(id string) error {
 
 	sandbox.State = "SANDBOX_NOTREADY"
 	// Cleanup network.
-	c.network.Disconnect("pod-"+id[:12], "")
+	c.network.Disconnect("pod-"+id[:12], "", 0)
 
 	return nil
 }

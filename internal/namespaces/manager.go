@@ -38,12 +38,16 @@ var cloneFlags = map[Type]int{
 
 // Manager manages Linux namespaces for containers.
 type Manager struct {
-	root string
+	root    string
+	nsPids  map[string][]int // containerID -> keeper process pids
 }
 
 // NewManager creates a new namespace manager.
 func NewManager(root string) *Manager {
-	return &Manager{root: root}
+	return &Manager{
+		root:   root,
+		nsPids: make(map[string][]int),
+	}
 }
 
 // Config holds the configuration for creating namespaces.
@@ -94,72 +98,114 @@ func (m *Manager) CreateNamespaces(containerID string, cfg *Config) (*NamespaceP
 	}
 
 	paths := &NamespacePaths{}
+	var pids []int
 
 	if cfg.User {
 		paths.User = filepath.Join(nsDir, "user")
-		if err := createNamespace(paths.User, UserNS); err != nil {
+		pid, err := createNamespaceTracked(paths.User, UserNS)
+		if err != nil {
 			return nil, fmt.Errorf("user namespace: %w", err)
 		}
+		pids = append(pids, pid)
 	}
 
 	if cfg.Mount {
 		paths.Mount = filepath.Join(nsDir, "mount")
-		if err := createNamespace(paths.Mount, MountNS); err != nil {
+		pid, err := createNamespaceTracked(paths.Mount, MountNS)
+		if err != nil {
 			return nil, fmt.Errorf("mount namespace: %w", err)
 		}
+		pids = append(pids, pid)
 	}
 
 	if cfg.PID {
 		paths.PID = filepath.Join(nsDir, "pid")
-		if err := createNamespace(paths.PID, PIDNS); err != nil {
+		pid, err := createNamespaceTracked(paths.PID, PIDNS)
+		if err != nil {
 			return nil, fmt.Errorf("pid namespace: %w", err)
 		}
+		pids = append(pids, pid)
 	}
 
 	if cfg.Net {
 		paths.Net = filepath.Join(nsDir, "net")
-		if err := createNamespace(paths.Net, NetNS); err != nil {
+		pid, err := createNamespaceTracked(paths.Net, NetNS)
+		if err != nil {
 			return nil, fmt.Errorf("net namespace: %w", err)
 		}
+		pids = append(pids, pid)
 	}
 
 	if cfg.UTS {
 		paths.UTS = filepath.Join(nsDir, "uts")
-		if err := createNamespace(paths.UTS, UTSNS); err != nil {
+		pid, err := createNamespaceTracked(paths.UTS, UTSNS)
+		if err != nil {
 			return nil, fmt.Errorf("uts namespace: %w", err)
 		}
+		pids = append(pids, pid)
 	}
 
 	if cfg.IPC {
 		paths.IPC = filepath.Join(nsDir, "ipc")
-		if err := createNamespace(paths.IPC, IPCNS); err != nil {
+		pid, err := createNamespaceTracked(paths.IPC, IPCNS)
+		if err != nil {
 			return nil, fmt.Errorf("ipc namespace: %w", err)
 		}
+		pids = append(pids, pid)
 	}
 
 	if cfg.Cgroup {
 		paths.Cgroup = filepath.Join(nsDir, "cgroup")
-		if err := createNamespace(paths.Cgroup, CgroupNS); err != nil {
+		pid, err := createNamespaceTracked(paths.Cgroup, CgroupNS)
+		if err != nil {
 			return nil, fmt.Errorf("cgroup namespace: %w", err)
 		}
+		pids = append(pids, pid)
 	}
 
+	m.nsPids[containerID] = pids
 	return paths, nil
 }
 
-func createNamespace(path string, nsType Type) error {
+// createNamespaceTracked creates a persistent namespace and returns the keeper PID.
+func createNamespaceTracked(path string, nsType Type) (int, error) {
 	f, err := os.Create(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	f.Close()
 
-	cmd := exec.Command("unshare", fmt.Sprintf("--%s", nsType), "true")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	_ = cmd.Run()
+	var flags uintptr
+	switch nsType {
+	case UserNS:
+		flags = syscall.CLONE_NEWUSER
+	case MountNS:
+		flags = syscall.CLONE_NEWNS
+	case PIDNS:
+		flags = syscall.CLONE_NEWPID
+	case NetNS:
+		flags = syscall.CLONE_NEWNET
+	case UTSNS:
+		flags = syscall.CLONE_NEWUTS
+	case IPCNS:
+		flags = syscall.CLONE_NEWIPC
+	case CgroupNS:
+		flags = syscall.CLONE_NEWCGROUP
+	}
 
-	return nil
+	cmd := exec.Command("sleep", "infinity")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: flags}
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("start namespace keeper: %w", err)
+	}
+
+	nsProcPath := fmt.Sprintf("/proc/%d/ns/%s", cmd.Process.Pid, nsType)
+	if err := exec.Command("mount", "--bind", nsProcPath, path).Run(); err != nil {
+		cmd.Process.Kill()
+		return 0, fmt.Errorf("bind-mount namespace: %w", err)
+	}
+
+	return cmd.Process.Pid, nil
 }
 
 // SetupUserNamespace sets up the user namespace with UID/GID mappings.
@@ -293,6 +339,14 @@ func CreatePersistentNamespace(targetPath string, pid int, nsType Type) error {
 
 // DeletePersistentNamespace removes a persistent namespace.
 func (m *Manager) DeletePersistentNamespace(containerID string) error {
+	// Kill namespace keeper processes.
+	if pids, ok := m.nsPids[containerID]; ok {
+		for _, pid := range pids {
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+		delete(m.nsPids, containerID)
+	}
+
 	nsDir := filepath.Join(m.root, "namespaces", containerID)
 
 	entries, err := os.ReadDir(nsDir)

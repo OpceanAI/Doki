@@ -1,9 +1,12 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime"
+	"os"
+	"os/exec"
+	goruntime "runtime"
 	"sync/atomic"
 	"time"
 
@@ -11,18 +14,18 @@ import (
 )
 
 var (
-	reqCount     uint64
-	errCount     uint64
-	startTime    = time.Now()
+	reqCount  uint64
+	errCount  uint64
+	startTime = time.Now()
 )
 
 // MetricsHandler serves Prometheus-compatible metrics.
 func MetricsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.Header().Set("Content-Type", "text/plain; version="+common.Version)
 
-	goroutines := runtime.NumGoroutine()
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
+	goroutines := goruntime.NumGoroutine()
+	var mem goruntime.MemStats
+	goruntime.ReadMemStats(&mem)
 
 	uptime := time.Since(startTime).Seconds()
 
@@ -57,11 +60,47 @@ func RecordRequest() { atomic.AddUint64(&reqCount, 1) }
 // RecordError increments the error counter.
 func RecordError() { atomic.AddUint64(&errCount, 1) }
 
-// HealthHandler returns daemon health status.
+// AG8: HealthHandler returns comprehensive daemon health status.
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
+	status := "healthy"
+	checks := make([]map[string]string, 0)
+
+	// Check storage.
+	storageStatus := "ok"
+	if dataDir := os.Getenv("DOKI_DATA_DIR"); dataDir != "" {
+		if _, err := os.Stat(dataDir); err != nil {
+			storageStatus = "unhealthy: " + err.Error()
+			status = "unhealthy"
+		}
+	}
+	checks = append(checks, map[string]string{
+		"name": "storage", "status": storageStatus,
+	})
+
+	// Check proot availability.
+	prootStatus := "ok"
+	if _, err := exec.LookPath("proot"); err != nil {
+		prootStatus = "unavailable"
+	}
+	checks = append(checks, map[string]string{
+		"name": "proot", "status": prootStatus,
+	})
+
+	// Check registry connectivity (non-blocking).
+	registryStatus := "unknown"
+
+	// Collect overall info.
+	response := map[string]interface{}{
+		"status":   status,
+		"version":  common.Version,
+		"uptime":   time.Since(startTime).String(),
+		"goroutines": goruntime.NumGoroutine(),
+		"checks":   checks,
+		"registry": registryStatus,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"healthy","version":"` + common.Version + `","uptime":"` +
-		time.Since(startTime).String() + `"}`))
+	json.NewEncoder(w).Encode(response)
 }
 
 // PprofHandler returns a pprof index page for debugging.

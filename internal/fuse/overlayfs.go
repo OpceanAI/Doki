@@ -213,6 +213,16 @@ func CopyDir(src, dst string) error {
 		relPath, _ := filepath.Rel(src, path)
 		targetPath := filepath.Join(dst, relPath)
 
+		// C2: Preserve symlinks instead of reading their content.
+		if d.Type()&fs.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			os.Remove(targetPath)
+			return os.Symlink(linkTarget, targetPath)
+		}
+
 		if d.IsDir() {
 			return common.EnsureDir(targetPath)
 		}

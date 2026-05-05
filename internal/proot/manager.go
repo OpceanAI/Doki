@@ -45,9 +45,6 @@ func buildProotBaseArgs(rootfs string) []string {
 		"-r", rootfs,
 		"-b", "/proc",
 		"-b", "/proc/self/fd:/dev/fd",
-		"-b", "/proc/self/fd/0:/dev/stdin",
-		"-b", "/proc/self/fd/1:/dev/stdout",
-		"-b", "/proc/self/fd/2:/dev/stderr",
 		"-b", "/sys",
 		"-b", "/dev",
 		"-b", "/dev/urandom:/dev/random",
@@ -67,11 +64,15 @@ func buildProotBaseArgs(rootfs string) []string {
 func appendAndroidBinds(args []string) []string {
 	for _, dir := range []string{
 		"/apex", "/system", "/vendor",
-		"/data", "/storage", "/sdcard",
+		"/storage", "/sdcard",
+		"/data/data/com.termux/files",
 	} {
 		if _, err := os.Stat(dir); err == nil {
 			args = append(args, "-b", dir)
 		}
+	}
+	if _, err := os.Stat("/data/data/com.termux/files/usr"); err == nil {
+		args = append(args, "-b", "/data/data/com.termux/files/usr")
 	}
 	if _, err := os.Stat("/linkerconfig/ld.config.txt"); err == nil {
 		args = append(args, "-b", "/linkerconfig/ld.config.txt")
@@ -85,6 +86,8 @@ func appendAndroidBinds(args []string) []string {
 // buildProotEnv builds the environment slice for proot execution.
 func buildProotEnv(userEnv []string) []string {
 	env := os.Environ()
+	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
+	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
 	for _, e := range userEnv {
 		env = append(env, e)
 	}

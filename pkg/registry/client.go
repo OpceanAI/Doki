@@ -2,7 +2,9 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +28,8 @@ const (
 type Client struct {
 	httpClient  *http.Client
 	userAgent   string
+	basicUser   string
+	basicPass   string
 	tokens      map[string]*tokenCache
 	mu          sync.RWMutex
 }
@@ -42,11 +46,22 @@ type AuthConfig struct {
 	IdentityToken string `json:"identitytoken,omitempty"`
 }
 
+func (c *Client) SetAuth(username, password string) {
+	c.basicUser = username
+	c.basicPass = password
+}
+
 func NewClient(insecure bool) *Client {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: insecure,
 		},
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		MaxConnsPerHost:     50,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		DisableCompression:  false,
 	}
 
 	return &Client{
@@ -153,8 +168,8 @@ type TagList struct {
 }
 
 // getToken gets or fetches an auth token for a registry+scope.
-func (c *Client) getToken(registry, service, scope string) (string, error) {
-	key := registry + "|" + scope
+func (c *Client) getToken(realm, service, scope string) (string, error) {
+	key := realm + "|" + scope
 	c.mu.RLock()
 	if tc, ok := c.tokens[key]; ok && time.Now().Before(tc.expiresAt) {
 		c.mu.RUnlock()
@@ -162,7 +177,9 @@ func (c *Client) getToken(registry, service, scope string) (string, error) {
 	}
 	c.mu.RUnlock()
 
-	realm := AuthRealm
+	if realm == "" {
+		realm = AuthRealm
+	}
 	if service == "" {
 		service = AuthService
 	}
@@ -230,6 +247,11 @@ func (c *Client) doAuthRequest(method, urlStr string, headers map[string]string,
 	req.Header.Set("User-Agent", c.userAgent)
 	for k, v := range headers {
 		req.Header.Set(k, v)
+	}
+
+	if c.basicUser != "" && c.basicPass != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte(c.basicUser + ":" + c.basicPass))
+		req.Header.Set("Authorization", "Basic "+auth)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -359,8 +381,25 @@ func (c *Client) DownloadBlob(registry, name, digest string, writer io.Writer) e
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("download blob %s: status %d: %s", digest, resp.StatusCode, string(body))
 	}
-	_, err = io.Copy(writer, resp.Body)
-	return err
+
+	hash := sha256.New()
+	tee := io.TeeReader(resp.Body, hash)
+	_, err = io.Copy(writer, tee)
+	if err != nil {
+		return err
+	}
+
+	computedDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
+
+	if respDigest := resp.Header.Get("Docker-Content-Digest"); respDigest != "" && respDigest != digest {
+		return fmt.Errorf("blob digest header mismatch: expected %s, got %s", digest, respDigest)
+	}
+
+	if computedDigest != digest {
+		return fmt.Errorf("blob digest mismatch: expected %s, got %s", digest, computedDigest)
+	}
+
+	return nil
 }
 
 func (c *Client) HeadBlob(registry, name, digest string) (int64, error) {
@@ -396,6 +435,10 @@ func (c *Client) DoRequest(ctx context.Context, method, urlStr string, headers m
 
 func (c *Client) GetConfig(registry, name string, manifest *ManifestV2) ([]byte, error) {
 	return c.GetBlob(registry, name, manifest.Config.Digest)
+}
+
+func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config []byte, layers map[string]io.Reader) error {
+	return fmt.Errorf("push not yet implemented in Doki")
 }
 
 func (c *Client) Close() {

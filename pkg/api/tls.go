@@ -1,11 +1,17 @@
 package api
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
+	"time"
 )
 
 type TLSConfig struct {
@@ -71,8 +77,45 @@ func TLSListener(l net.Listener, tlsCfg *tls.Config) net.Listener {
 }
 
 // GenerateSelfSignedCert generates a self-signed certificate for testing.
+// AE10: Generates self-signed certs when no cert is provided.
 func GenerateSelfSignedCert(certFile, keyFile string) error {
-	// Use openssl if available, otherwise generate with crypto/tls.
-	// For production, use proper certificates.
-	return fmt.Errorf("self-signed cert generation not implemented - use openssl: openssl req -x509 -newkey rsa:4096 -keyout %s -out %s -days 365 -nodes -subj '/CN=doki'", keyFile, certFile)
+	key, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return fmt.Errorf("generate key: %w", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName:   "doki",
+			Organization: []string{"Doki Container Engine"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		DNSNames:              []string{"localhost", "doki"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return fmt.Errorf("create cert: %w", err)
+	}
+
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}), 0600); err != nil {
+		return fmt.Errorf("write key: %w", err)
+	}
+
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: certDER,
+	}), 0644); err != nil {
+		return fmt.Errorf("write cert: %w", err)
+	}
+
+	return nil
 }

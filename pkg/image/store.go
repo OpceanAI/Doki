@@ -1,12 +1,15 @@
 package image
 
 import (
+	"archive/tar"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/registry"
@@ -14,9 +17,17 @@ import (
 
 // Store manages OCI images on disk.
 type Store struct {
-	mu       sync.RWMutex
-	root     string
-	registry *registry.Client
+	mu             sync.RWMutex
+	root           string
+	registry       *registry.Client
+	manifestCache  map[string]*manifestCacheEntry
+	cacheMu        sync.RWMutex
+}
+
+type manifestCacheEntry struct {
+	manifest  *registry.ManifestV2
+	mediaType string
+	expiresAt time.Time
 }
 
 // Config represents an OCI image configuration.
@@ -42,6 +53,16 @@ type ImageConfig struct {
 	Labels       map[string]string   `json:"Labels,omitempty"`
 	StopSignal   string              `json:"StopSignal,omitempty"`
 	Shell        []string            `json:"Shell,omitempty"`
+	HealthCheck  *HealthCheckConfig  `json:"Healthcheck,omitempty"`
+}
+
+// HealthCheckConfig describes a container's health check.
+type HealthCheckConfig struct {
+	Test        []string `json:"Test,omitempty"`
+	Interval    int64    `json:"Interval,omitempty"`
+	Timeout     int64    `json:"Timeout,omitempty"`
+	Retries     int      `json:"Retries,omitempty"`
+	StartPeriod int64    `json:"StartPeriod,omitempty"`
 }
 
 // RootFS describes the image's root filesystem.
@@ -81,8 +102,9 @@ func NewStore(root string) (*Store, error) {
 	common.EnsureDir(filepath.Join(root, "layers"))
 
 	return &Store{
-		root:     root,
-		registry: registry.NewClient(false),
+		root:          root,
+		registry:      registry.NewClient(false),
+		manifestCache: make(map[string]*manifestCacheEntry),
 	}, nil
 }
 
@@ -93,11 +115,43 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 		return nil, fmt.Errorf("parse image ref: %w", err)
 	}
 
+	// AG4: Check manifest cache (5-minute TTL).
+	cacheKey := ref.Registry + "/" + ref.Name + ":" + ref.Tag
+	s.cacheMu.RLock()
+	if entry, ok := s.manifestCache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
+		manifest, mediaType := entry.manifest, entry.mediaType
+		s.cacheMu.RUnlock()
+		configData, err := s.registry.GetConfig(ref.Registry, ref.Name, manifest)
+		if err != nil {
+			return nil, fmt.Errorf("get config: %w", err)
+		}
+		var config Config
+		if err := json.Unmarshal(configData, &config); err != nil {
+			return nil, fmt.Errorf("unmarshal config: %w", err)
+		}
+		// AG2: Parallel layer downloads.
+		layers, err := s.downloadLayersParallel(ref.Registry, ref.Name, manifest.Layers)
+		if err != nil {
+			return nil, err
+		}
+		return s.saveImageRecord(imageRef, ref, manifest, mediaType, &config, layers)
+	}
+	s.cacheMu.RUnlock()
+
 	// Download manifest and config (no lock needed - network I/O).
-	manifest, _, err := s.registry.ResolveManifest(ref.Registry, ref.Name, ref.Tag)
+	manifest, mediaType, err := s.registry.ResolveManifest(ref.Registry, ref.Name, ref.Tag)
 	if err != nil {
 		return nil, fmt.Errorf("get manifest: %w", err)
 	}
+
+	// AG4: Cache the manifest for 5 minutes.
+	s.cacheMu.Lock()
+	s.manifestCache[cacheKey] = &manifestCacheEntry{
+		manifest:  manifest,
+		mediaType: mediaType,
+		expiresAt: time.Now().Add(5 * time.Minute),
+	}
+	s.cacheMu.Unlock()
 
 	configData, err := s.registry.GetConfig(ref.Registry, ref.Name, manifest)
 	if err != nil {
@@ -109,28 +163,79 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	// Download layers (no lock needed - network I/O).
-	var layers []string
-	for i, layer := range manifest.Layers {
-		layerPath := s.layerPath(layer.Digest)
-		if !common.PathExists(layerPath) {
-			if err := s.downloadLayer(ref.Registry, ref.Name, layer, layerPath); err != nil {
-				return nil, fmt.Errorf("download layer %d: %w", i, err)
-			}
-		}
-		layers = append(layers, layer.Digest)
+	// AG2: Download layers concurrently with 3 goroutines limit.
+	layers, err := s.downloadLayersParallel(ref.Registry, ref.Name, manifest.Layers)
+	if err != nil {
+		return nil, err
 	}
 
+	return s.saveImageRecord(imageRef, ref, manifest, mediaType, &config, layers)
+}
+
+// downloadLayersParallel downloads layers concurrently with a limit of 3 concurrent downloads.
+func (s *Store) downloadLayersParallel(registryHost, name string, layers []registry.ManifestBlob) ([]string, error) {
+	if len(layers) == 0 {
+		return nil, nil
+	}
+
+	type result struct {
+		index  int
+		digest string
+		err    error
+	}
+
+	maxConcurrent := 3
+	if len(layers) < maxConcurrent {
+		maxConcurrent = len(layers)
+	}
+
+	sem := make(chan struct{}, maxConcurrent)
+	results := make(chan result, len(layers))
+	var wg sync.WaitGroup
+
+	for i, layer := range layers {
+		layerPath := s.layerPath(layer.Digest)
+		if common.PathExists(layerPath) {
+			results <- result{index: i, digest: layer.Digest, err: nil}
+			continue
+		}
+		wg.Add(1)
+		go func(idx int, l registry.ManifestBlob, lp string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			err := s.downloadLayer(registryHost, name, l, lp)
+			results <- result{index: idx, digest: l.Digest, err: err}
+		}(i, layer, layerPath)
+	}
+
+	wg.Wait()
+	close(results)
+
+	digests := make([]string, len(layers))
+	for r := range results {
+		if r.err != nil {
+			return nil, fmt.Errorf("download layer %d: %w", r.index, r.err)
+		}
+		digests[r.index] = r.digest
+	}
+
+	return digests, nil
+}
+
+func (s *Store) saveImageRecord(imageRef string, ref *registry.ImageRef, manifest *registry.ManifestV2, mediaType string, config *Config, layers []string) (*ImageRecord, error) {
 	// Create and save record (lock for state modification).
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	_ = mediaType
 
 	imageID := manifest.Config.Digest
 	record := &ImageRecord{
 		ID:           imageID,
 		RepoTags:     []string{imageRef},
 		RepoDigests:  []string{},
-		Config:       &config,
+		Config:       config,
 		Manifest:     manifest,
 		Size:         0,
 		Created:      common.NowTimestamp(),
@@ -446,55 +551,227 @@ type SearchResult struct {
 	IsAutomated bool   `json:"is_automated"`
 }
 
-// Export exports an image to a tarball.
+// Export exports an image to a Docker-format save tar.
 func (s *Store) Export(idOrTag string, writer io.Writer) error {
 	record, err := s.Get(idOrTag)
 	if err != nil {
 		return err
 	}
 
-	// Write manifest.
-	manifestData, _ := json.Marshal(record.Manifest)
-	writer.Write(manifestData)
+	tw := tar.NewWriter(writer)
+	defer tw.Close()
 
-	// Write config.
-	configData, _ := json.Marshal(record.Config)
-	writer.Write(configData)
+	digestToHex := func(d string) string {
+		return strings.TrimPrefix(d, "sha256:")
+	}
 
-	// Write layers.
-	for _, digest := range record.Layers {
-		layerPath := s.layerPath(digest)
+	// Build and write manifest.json entry.
+	type mfEntry struct {
+		Config   string   `json:"Config"`
+		RepoTags []string `json:"RepoTags"`
+		Layers   []string `json:"Layers"`
+	}
+	entry := mfEntry{
+		Config:   digestToHex(record.Manifest.Config.Digest) + ".json",
+		RepoTags: record.RepoTags,
+	}
+	for _, d := range record.Layers {
+		entry.Layers = append(entry.Layers, digestToHex(d)+"/layer.tar")
+	}
+
+	mfData, _ := json.Marshal([]mfEntry{entry})
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "manifest.json",
+		Size: int64(len(mfData)),
+		Mode: 0644,
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(mfData); err != nil {
+		return err
+	}
+
+	// Write config blob.
+	configPath := s.manifestPath(record.ID)
+	configData, err := os.ReadFile(filepath.Join(configPath, record.ID+".json"))
+	if err != nil {
+		configData, _ = json.Marshal(record.Config)
+	}
+	if err := tw.WriteHeader(&tar.Header{
+		Name: digestToHex(record.Manifest.Config.Digest) + ".json",
+		Size: int64(len(configData)),
+		Mode: 0644,
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(configData); err != nil {
+		return err
+	}
+
+	// Write each layer.
+	for _, d := range record.Layers {
+		hex := digestToHex(d)
+		layerPath := s.layerPath(d)
+		fi, err := os.Stat(layerPath)
+		if err != nil {
+			return fmt.Errorf("layer %s: %w", d, err)
+		}
 		f, err := os.Open(layerPath)
 		if err != nil {
 			return err
 		}
-		io.Copy(writer, f)
+		if err := tw.WriteHeader(&tar.Header{
+			Name: hex + "/layer.tar",
+			Size: fi.Size(),
+			Mode: 0644,
+		}); err != nil {
+			f.Close()
+			return err
+		}
+		if _, err := io.Copy(tw, f); err != nil {
+			f.Close()
+			return err
+		}
 		f.Close()
 	}
 
 	return nil
 }
 
-// Import imports an image from a tarball.
+// Import imports an image from a Docker-format save tar.
 func (s *Store) Import(reader io.Reader) (*ImageRecord, error) {
-	// Stream layout: manifest JSON + config JSON + layer blobs.
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
+	tr := tar.NewReader(reader)
+
+	var mfData []byte
+	var configData []byte
+	layers := make(map[string][]byte) // hex -> blob data
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read tar: %w", err)
+		}
+
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, fmt.Errorf("read tar entry %s: %w", hdr.Name, err)
+		}
+
+		switch {
+		case hdr.Name == "manifest.json":
+			mfData = data
+		case strings.HasSuffix(hdr.Name, ".json") && !strings.Contains(hdr.Name[0:len(hdr.Name)-5], "/"):
+			if configData == nil {
+				configData = data
+			}
+		case strings.HasSuffix(hdr.Name, "/layer.tar"):
+			hex := strings.TrimSuffix(hdr.Name, "/layer.tar")
+			layers[hex] = data
+		}
 	}
+
+	if mfData == nil {
+		return nil, fmt.Errorf("no manifest.json in tar")
+	}
+
+	var mfEntries []struct {
+		Config   string   `json:"Config"`
+		RepoTags []string `json:"RepoTags"`
+		Layers   []string `json:"Layers"`
+	}
+	if err := json.Unmarshal(mfData, &mfEntries); err != nil {
+		return nil, fmt.Errorf("unmarshal manifest.json: %w", err)
+	}
+	if len(mfEntries) == 0 {
+		return nil, fmt.Errorf("empty manifest.json")
+	}
+
+	mf := mfEntries[0]
+	cfgHex := strings.TrimSuffix(mf.Config, ".json")
+	configDigest := "sha256:" + cfgHex
+
+	var layerDigests []string
+	for _, l := range mf.Layers {
+		hex := strings.TrimSuffix(l, "/layer.tar")
+		layerDigests = append(layerDigests, "sha256:"+hex)
+	}
+
+	// Write config blob.
+	configPath := filepath.Join(s.root, "blobs", configDigest)
+	common.EnsureDir(filepath.Dir(configPath))
+	if configData == nil {
+		configData = []byte("{}")
+	}
+	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+		return nil, fmt.Errorf("write config: %w", err)
+	}
+
+	var cfg Config
+	json.Unmarshal(configData, &cfg)
 
 	var manifest registry.ManifestV2
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("unmarshal manifest: %w", err)
+	manifest.SchemaVersion = 2
+	manifest.Config = registry.ManifestBlob{
+		MediaType: "application/vnd.oci.image.config.v1+json",
+		Digest:    configDigest,
+		Size:      int64(len(configData)),
 	}
 
-	imageID := manifest.Config.Digest
+	// Write layer blobs and build manifest layers.
+	for _, hex := range mfEntries[0].Layers {
+		hexNoSuffix := strings.TrimSuffix(hex, "/layer.tar")
+		digest := "sha256:" + hexNoSuffix
+		blobData, ok := layers[hexNoSuffix]
+		if !ok {
+			return nil, fmt.Errorf("layer %s not found in tar", hex)
+		}
 
+		blobPath := filepath.Join(s.root, "blobs", digest)
+		common.EnsureDir(filepath.Dir(blobPath))
+		if err := os.WriteFile(blobPath, blobData, 0644); err != nil {
+			return nil, fmt.Errorf("write blob %s: %w", digest, err)
+		}
+
+		// Also save as layer.
+		layerPath := s.layerPath(digest)
+		common.EnsureDir(filepath.Dir(layerPath))
+		if err := os.WriteFile(layerPath, blobData, 0644); err != nil {
+			return nil, fmt.Errorf("write layer %s: %w", digest, err)
+		}
+
+		manifest.Layers = append(manifest.Layers, registry.ManifestBlob{
+			MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+			Digest:    digest,
+			Size:      int64(len(blobData)),
+		})
+	}
+
+	tags := mf.RepoTags
+	if len(tags) == 0 {
+		tags = []string{"imported:latest"}
+	}
+
+	imageID := configDigest
 	record := &ImageRecord{
-		ID:       imageID,
-		RepoTags: []string{"imported:latest"},
-		Manifest: &manifest,
-		Created:  common.NowTimestamp(),
+		ID:           imageID,
+		RepoTags:     tags,
+		RepoDigests:  []string{},
+		Config:       &cfg,
+		Manifest:     &manifest,
+		Size:         int64(len(configData)),
+		Created:      common.NowTimestamp(),
+		Architecture: cfg.Architecture,
+		OS:           cfg.OS,
+		Layers:       layerDigests,
+	}
+
+	for _, l := range record.Layers {
+		if fi, err := os.Stat(s.layerPath(l)); err == nil {
+			record.Size += fi.Size()
+		}
 	}
 
 	if err := s.SaveRecord(record); err != nil {

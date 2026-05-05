@@ -28,6 +28,8 @@ type Config struct {
 	MemorySwappiness *uint64
 	PidsLimit    int64
 	BlkioWeight  uint16
+	NanoCpus     int64
+	OomKillDisable bool
 }
 
 // NewManager creates a new cgroup manager.
@@ -94,6 +96,21 @@ func (m *Manager) applyLimits(cgroupPath string, cfg *Config) error {
 		}
 	}
 
+	if cfg.NanoCpus > 0 {
+		period := int64(cfg.CPUPeriod)
+		if period == 0 {
+			period = 100000
+		}
+		quota := cfg.NanoCpus * period / 1000000000
+		if quota < 1000 {
+			quota = 1000
+		}
+		maxCPU := fmt.Sprintf("%d %d", quota, period)
+		if err := writeFile(cgroupPath, "cpu.max", maxCPU); err != nil {
+			return err
+		}
+	}
+
 	if cfg.CpusetCpus != "" {
 		if err := writeFile(cgroupPath, "cpuset.cpus", cfg.CpusetCpus); err != nil {
 			return err
@@ -117,7 +134,6 @@ func (m *Manager) applyLimits(cgroupPath string, cfg *Config) error {
 			return err
 		}
 	} else if cfg.Memory > 0 {
-		// Default: swap == memory.
 		if err := writeFile(cgroupPath, "memory.swap.max", strconv.FormatInt(cfg.Memory, 10)); err != nil {
 			return err
 		}
@@ -125,6 +141,18 @@ func (m *Manager) applyLimits(cgroupPath string, cfg *Config) error {
 
 	if cfg.PidsLimit > 0 {
 		if err := writeFile(cgroupPath, "pids.max", strconv.FormatInt(cfg.PidsLimit, 10)); err != nil {
+			return err
+		}
+	}
+
+	if cfg.BlkioWeight > 0 {
+		if err := writeFile(cgroupPath, "io.weight", strconv.FormatUint(uint64(cfg.BlkioWeight), 10)); err != nil {
+			return err
+		}
+	}
+
+	if cfg.OomKillDisable {
+		if err := writeFile(cgroupPath, "memory.oom.group", "1"); err != nil {
 			return err
 		}
 	}

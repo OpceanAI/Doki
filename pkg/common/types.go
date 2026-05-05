@@ -8,7 +8,7 @@ import (
 )
 
 // DokiVersion is the current version of the Doki engine.
-const DokiVersion = "0.3.0"
+const DokiVersion = "0.8.0"
 
 // DokiAPIVersion is the compatible Docker Engine API version.
 const DokiAPIVersion = "1.44"
@@ -355,7 +355,8 @@ type VolumeInfo struct {
 
 // ExecConfig holds configuration for an exec instance.
 type ExecConfig struct {
-	ID          string   `json:"Id"`
+	ID           string   `json:"Id"`
+	ContainerID  string   `json:"ContainerID,omitempty"`
 	AttachStdin  bool     `json:"AttachStdin"`
 	AttachStdout bool     `json:"AttachStdout"`
 	AttachStderr bool     `json:"AttachStderr"`

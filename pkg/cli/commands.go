@@ -80,10 +80,42 @@ func (c *DokiCLI) Run(args []string) error {
 	if flags.Entrypoint != "" {
 		body["Entrypoint"] = []string{flags.Entrypoint}
 	}
+	if flags.Hostname != "" {
+		body["Hostname"] = flags.Hostname
+	}
+	if flags.Domainname != "" {
+		body["Domainname"] = flags.Domainname
+	}
+	if len(flags.Labels) > 0 {
+		body["Labels"] = flags.Labels
+	}
+	if len(flags.Expose) > 0 {
+		exposed := make(map[string]interface{})
+		for _, e := range flags.Expose {
+			exposed[e] = struct{}{}
+		}
+		body["ExposedPorts"] = exposed
+	}
+	if flags.HealthCmd != "" {
+		hc := map[string]interface{}{"Test": []string{"CMD-SHELL", flags.HealthCmd}}
+		if flags.HealthInterval != "" {
+			hc["Interval"] = flags.HealthInterval
+		}
+		if flags.HealthTimeout != "" {
+			hc["Timeout"] = flags.HealthTimeout
+		}
+		if flags.HealthRetries > 0 {
+			hc["Retries"] = flags.HealthRetries
+		}
+		if flags.HealthStartPeriod != "" {
+			hc["StartPeriod"] = flags.HealthStartPeriod
+		}
+		body["Healthcheck"] = hc
+	}
 
 	hostConfig := map[string]interface{}{}
-	if flags.Detach {
-		hostConfig["AutoRemove"] = flags.RM
+	if flags.RM {
+		hostConfig["AutoRemove"] = true
 	}
 	if flags.Privileged {
 		hostConfig["Privileged"] = true
@@ -102,11 +134,29 @@ func (c *DokiCLI) Run(args []string) error {
 	if flags.CPUShares > 0 {
 		hostConfig["CpuShares"] = flags.CPUShares
 	}
+	if flags.NanoCPUs > 0 {
+		hostConfig["NanoCpus"] = flags.NanoCPUs
+	}
 	if flags.Memory > 0 {
 		hostConfig["Memory"] = flags.Memory
 	}
+	if flags.MemorySwap > 0 {
+		hostConfig["MemorySwap"] = flags.MemorySwap
+	}
+	if flags.CPUPeriod > 0 {
+		hostConfig["CpuPeriod"] = flags.CPUPeriod
+	}
+	if flags.CPUQuota > 0 {
+		hostConfig["CpuQuota"] = flags.CPUQuota
+	}
+	if flags.BlkioWeight > 0 {
+		hostConfig["BlkioWeight"] = flags.BlkioWeight
+	}
 	if flags.CPUSetCPUs != "" {
 		hostConfig["CpusetCpus"] = flags.CPUSetCPUs
+	}
+	if flags.CPUSetMems != "" {
+		hostConfig["CpusetMems"] = flags.CPUSetMems
 	}
 	if len(flags.DNS) > 0 {
 		hostConfig["Dns"] = flags.DNS
@@ -188,6 +238,66 @@ func (c *DokiCLI) Run(args []string) error {
 		}
 		hostConfig["Devices"] = devices
 	}
+	if len(flags.DeviceCgroupRules) > 0 {
+		hostConfig["DeviceCgroupRules"] = flags.DeviceCgroupRules
+	}
+	if len(flags.GroupAdd) > 0 {
+		hostConfig["GroupAdd"] = flags.GroupAdd
+	}
+	if len(flags.SecurityOpt) > 0 {
+		hostConfig["SecurityOpt"] = flags.SecurityOpt
+	}
+	if len(flags.Sysctls) > 0 {
+		hostConfig["Sysctls"] = flags.Sysctls
+	}
+	if len(flags.Ulimits) > 0 {
+		hostConfig["Ulimits"] = flags.Ulimits
+	}
+	if flags.LogDriver != "" || len(flags.LogOpts) > 0 {
+		lc := map[string]interface{}{}
+		if flags.LogDriver != "" {
+			lc["Type"] = flags.LogDriver
+		}
+		if len(flags.LogOpts) > 0 {
+			lc["Config"] = flags.LogOpts
+		}
+		hostConfig["LogConfig"] = lc
+	}
+	if flags.CgroupParent != "" {
+		hostConfig["CgroupParent"] = flags.CgroupParent
+	}
+	if flags.CgroupNS != "" {
+		hostConfig["CgroupnsMode"] = flags.CgroupNS
+	}
+	if flags.PIDMode != "" {
+		hostConfig["PidMode"] = flags.PIDMode
+	}
+	if flags.IPCMode != "" {
+		hostConfig["IpcMode"] = flags.IPCMode
+	}
+	if flags.UTSMode != "" {
+		hostConfig["UTSMode"] = flags.UTSMode
+	}
+	if flags.UsernsMode != "" {
+		hostConfig["UsernsMode"] = flags.UsernsMode
+	}
+	if flags.Isolation != "" {
+		hostConfig["Isolation"] = flags.Isolation
+	}
+	if flags.Runtime_RT != "" {
+		hostConfig["Runtime"] = flags.Runtime_RT
+	}
+	if len(flags.VolumesFrom) > 0 {
+		hostConfig["VolumesFrom"] = flags.VolumesFrom
+	}
+	if flags.VolumeDriver != "" {
+		hostConfig["VolumeDriver"] = flags.VolumeDriver
+	}
+	if flags.GPUs != "" {
+		hostConfig["DeviceRequests"] = []map[string]interface{}{
+			{"Driver": "", "Count": -1, "Capabilities": [][]string{{flags.GPUs}}},
+		}
+	}
 
 	if len(hostConfig) > 0 {
 		body["HostConfig"] = hostConfig
@@ -231,13 +341,15 @@ func (c *DokiCLI) Run(args []string) error {
 	if !flags.Interactive {
 		c.waitContainer(containerID)
 	}
-	// Always try to get logs.
 	c.logs(containerID, false, 0, false)
+
+	exitCode, _ := c.Wait(containerID)
 
 	if flags.RM {
 		c.doAPI("DELETE", "/containers/"+containerID+"?force=true", nil)
 	}
 
+	os.Exit(exitCode)
 	return nil
 }
 
@@ -315,19 +427,244 @@ func (c *DokiCLI) Create(image string, cmd []string, opts *RunFlags) (string, er
 		if len(opts.Env) > 0 {
 			body["Env"] = opts.Env
 		}
+		if opts.Workdir != "" {
+			body["WorkingDir"] = opts.Workdir
+		}
+		if opts.User != "" {
+			body["User"] = opts.User
+		}
 		if opts.Entrypoint != "" {
 			body["Entrypoint"] = []string{opts.Entrypoint}
 		}
+		if opts.Hostname != "" {
+			body["Hostname"] = opts.Hostname
+		}
+		if opts.Domainname != "" {
+			body["Domainname"] = opts.Domainname
+		}
+		if len(opts.Labels) > 0 {
+			body["Labels"] = opts.Labels
+		}
+		if len(opts.Expose) > 0 {
+			exposed := make(map[string]interface{})
+			for _, e := range opts.Expose {
+				exposed[e] = struct{}{}
+			}
+			body["ExposedPorts"] = exposed
+		}
+		if opts.HealthCmd != "" {
+			hc := map[string]interface{}{"Test": []string{"CMD-SHELL", opts.HealthCmd}}
+			if opts.HealthInterval != "" {
+				hc["Interval"] = opts.HealthInterval
+			}
+			if opts.HealthTimeout != "" {
+				hc["Timeout"] = opts.HealthTimeout
+			}
+			if opts.HealthRetries > 0 {
+				hc["Retries"] = opts.HealthRetries
+			}
+			if opts.HealthStartPeriod != "" {
+				hc["StartPeriod"] = opts.HealthStartPeriod
+			}
+			body["Healthcheck"] = hc
+		}
+
+		hostConfig := map[string]interface{}{}
+		if opts.RM {
+			hostConfig["AutoRemove"] = true
+		}
+		if opts.Privileged {
+			hostConfig["Privileged"] = true
+		}
+		if opts.ReadOnly {
+			hostConfig["ReadonlyRootfs"] = true
+		}
+		if opts.RestartPolicy != "" {
+			hostConfig["RestartPolicy"] = map[string]interface{}{"Name": opts.RestartPolicy}
+		}
+		if opts.Network != "" {
+			hostConfig["NetworkMode"] = opts.Network
+		}
+		if opts.CPUShares > 0 {
+			hostConfig["CpuShares"] = opts.CPUShares
+		}
+		if opts.NanoCPUs > 0 {
+			hostConfig["NanoCpus"] = opts.NanoCPUs
+		}
+		if opts.Memory > 0 {
+			hostConfig["Memory"] = opts.Memory
+		}
+		if opts.MemorySwap > 0 {
+			hostConfig["MemorySwap"] = opts.MemorySwap
+		}
+		if opts.CPUPeriod > 0 {
+			hostConfig["CpuPeriod"] = opts.CPUPeriod
+		}
+		if opts.CPUQuota > 0 {
+			hostConfig["CpuQuota"] = opts.CPUQuota
+		}
+		if opts.BlkioWeight > 0 {
+			hostConfig["BlkioWeight"] = opts.BlkioWeight
+		}
+		if opts.CPUSetCPUs != "" {
+			hostConfig["CpusetCpus"] = opts.CPUSetCPUs
+		}
+		if opts.CPUSetMems != "" {
+			hostConfig["CpusetMems"] = opts.CPUSetMems
+		}
+		if len(opts.DNS) > 0 {
+			hostConfig["Dns"] = opts.DNS
+		}
+		if len(opts.DNSSearch) > 0 {
+			hostConfig["DnsSearch"] = opts.DNSSearch
+		}
+		if len(opts.DNSOptions) > 0 {
+			hostConfig["DnsOptions"] = opts.DNSOptions
+		}
+		if len(opts.ExtraHosts) > 0 {
+			hostConfig["ExtraHosts"] = opts.ExtraHosts
+		}
+		if opts.ShmSize > 0 {
+			hostConfig["ShmSize"] = opts.ShmSize
+		}
+		if len(opts.CapAdd) > 0 {
+			hostConfig["CapAdd"] = opts.CapAdd
+		}
+		if len(opts.CapDrop) > 0 {
+			hostConfig["CapDrop"] = opts.CapDrop
+		}
+		if opts.Init {
+			hostConfig["Init"] = true
+		}
+		if opts.PidsLimit > 0 {
+			hostConfig["PidsLimit"] = opts.PidsLimit
+		}
+		if opts.OOMKillDisable {
+			hostConfig["OomKillDisable"] = true
+		}
+		if len(opts.Devices) > 0 {
+			devices := make([]map[string]string, 0)
+			for _, d := range opts.Devices {
+				parts := strings.SplitN(d, ":", 3)
+				dev := map[string]string{"PathOnHost": parts[0]}
+				if len(parts) > 1 {
+					dev["PathInContainer"] = parts[1]
+				}
+				if len(parts) > 2 {
+					dev["CgroupPermissions"] = parts[2]
+				}
+				devices = append(devices, dev)
+			}
+			hostConfig["Devices"] = devices
+		}
+		if len(opts.DeviceCgroupRules) > 0 {
+			hostConfig["DeviceCgroupRules"] = opts.DeviceCgroupRules
+		}
+		if len(opts.GroupAdd) > 0 {
+			hostConfig["GroupAdd"] = opts.GroupAdd
+		}
+		if len(opts.SecurityOpt) > 0 {
+			hostConfig["SecurityOpt"] = opts.SecurityOpt
+		}
+		if len(opts.Sysctls) > 0 {
+			hostConfig["Sysctls"] = opts.Sysctls
+		}
+		if len(opts.Ulimits) > 0 {
+			hostConfig["Ulimits"] = opts.Ulimits
+		}
+		if opts.LogDriver != "" || len(opts.LogOpts) > 0 {
+			lc := map[string]interface{}{}
+			if opts.LogDriver != "" {
+				lc["Type"] = opts.LogDriver
+			}
+			if len(opts.LogOpts) > 0 {
+				lc["Config"] = opts.LogOpts
+			}
+			hostConfig["LogConfig"] = lc
+		}
+		if opts.CgroupParent != "" {
+			hostConfig["CgroupParent"] = opts.CgroupParent
+		}
+		if opts.CgroupNS != "" {
+			hostConfig["CgroupnsMode"] = opts.CgroupNS
+		}
+		if opts.PIDMode != "" {
+			hostConfig["PidMode"] = opts.PIDMode
+		}
+		if opts.IPCMode != "" {
+			hostConfig["IpcMode"] = opts.IPCMode
+		}
+		if opts.UTSMode != "" {
+			hostConfig["UTSMode"] = opts.UTSMode
+		}
+		if opts.UsernsMode != "" {
+			hostConfig["UsernsMode"] = opts.UsernsMode
+		}
+		if opts.Isolation != "" {
+			hostConfig["Isolation"] = opts.Isolation
+		}
+		if opts.Runtime_RT != "" {
+			hostConfig["Runtime"] = opts.Runtime_RT
+		}
+		if len(opts.VolumesFrom) > 0 {
+			hostConfig["VolumesFrom"] = opts.VolumesFrom
+		}
+		if opts.VolumeDriver != "" {
+			hostConfig["VolumeDriver"] = opts.VolumeDriver
+		}
+		if len(opts.Ports) > 0 {
+			pb := make(map[string]interface{})
+			for _, p := range opts.Ports {
+				port, bind := common.ParsePortBinding(p)
+				key := fmt.Sprintf("%d/%s", port.PrivatePort, port.Type)
+				pb[key] = []map[string]string{{"HostPort": bind.HostPort, "HostIp": bind.HostIP}}
+			}
+			hostConfig["PortBindings"] = pb
+		}
+		if opts.PublishAll {
+			hostConfig["PublishAllPorts"] = true
+		}
+		if len(opts.Volumes) > 0 {
+			hostConfig["Binds"] = opts.Volumes
+		}
+		if len(opts.Mounts) > 0 {
+			mounts := make([]map[string]interface{}, 0)
+			for _, m := range opts.Mounts {
+				mounts = append(mounts, map[string]interface{}{
+					"Type": m.Type, "Source": m.Source, "Target": m.Target,
+				})
+			}
+			hostConfig["Mounts"] = mounts
+		}
+		if opts.GPUs != "" {
+			hostConfig["DeviceRequests"] = []map[string]interface{}{
+				{"Driver": "", "Count": -1, "Capabilities": [][]string{{opts.GPUs}}},
+			}
+		}
+		if len(hostConfig) > 0 {
+			body["HostConfig"] = hostConfig
+		}
 	}
 
-	resp, err := c.doAPI("POST", "/containers/create", body)
+	pullPolicy := opts.Pull
+	if pullPolicy == "" {
+		pullPolicy = "missing"
+	}
+
+	resp, err := c.doAPI("POST", "/containers/create?pull="+pullPolicy, body)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	var result struct{ Id string }
+	var result struct {
+		Id       string   `json:"Id"`
+		Warnings []string `json:"Warnings"`
+	}
 	json.NewDecoder(resp.Body).Decode(&result)
+	for _, w := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
 	return result.Id, nil
 }
 
@@ -591,11 +928,6 @@ func (c *DokiCLI) Export(containerID string, output string) error {
 }
 
 func (c *DokiCLI) Cp(containerID, srcPath, destPath string, followLink, copyUIDGID bool) error {
-	params := map[string]string{}
-	if followLink {
-		params["followLink"] = "true"
-	}
-
 	path := "/containers/" + containerID + "/archive?path=" + srcPath
 	resp, err := c.doAPI("GET", path, nil)
 	if err != nil {
@@ -603,7 +935,31 @@ func (c *DokiCLI) Cp(containerID, srcPath, destPath string, followLink, copyUIDG
 	}
 	defer resp.Body.Close()
 
-	io.Copy(os.Stdout, resp.Body)
+	var out io.Writer = os.Stdout
+	if destPath != "" && destPath != "/" {
+		f, err := os.Create(destPath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		out = f
+	}
+	io.Copy(out, resp.Body)
+	return nil
+}
+
+func (c *DokiCLI) CpToContainer(containerID, srcPath, destPath string, followLink, copyUIDGID bool) error {
+	path := "/containers/" + containerID + "/archive?path=" + destPath
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer f.Close()
+	resp, err := c.doAPI("PUT", path, f)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
 	return nil
 }
 
@@ -1095,8 +1451,7 @@ func (c *DokiCLI) NetworkInspect(ids []string) error {
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
-		io.Copy(os.Stdout, resp.Body)
+		c.streamResponse(resp.Body)
 		fmt.Println()
 	}
 	return nil
@@ -1196,8 +1551,7 @@ func (c *DokiCLI) VolumeInspect(ids []string) error {
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
-		io.Copy(os.Stdout, resp.Body)
+		c.streamResponse(resp.Body)
 		fmt.Println()
 	}
 	return nil
@@ -1366,21 +1720,33 @@ func (c *DokiCLI) PodRm(ids []string, force bool) error {
 		if force {
 			path += "?force=true"
 		}
-		c.doAPI("DELETE", path, nil)
+		resp, err := c.doAPI("DELETE", path, nil)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
 	}
 	return nil
 }
 
 func (c *DokiCLI) PodStart(ids []string) error {
 	for _, id := range ids {
-		c.doAPI("POST", "/pods/"+id+"/start", nil)
+		resp, err := c.doAPI("POST", "/pods/"+id+"/start", nil)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
 	}
 	return nil
 }
 
 func (c *DokiCLI) PodStop(ids []string) error {
 	for _, id := range ids {
-		c.doAPI("POST", "/pods/"+id+"/stop", nil)
+		resp, err := c.doAPI("POST", "/pods/"+id+"/stop", nil)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
 	}
 	return nil
 }
@@ -1422,6 +1788,46 @@ func (c *DokiCLI) Untag(imageName string) error {
 		tag = parts[1]
 	}
 	fmt.Printf("Untagged: %s:%s\n", repo, tag)
+	return nil
+}
+
+func (c *DokiCLI) Scout(target string) error {
+	if target == "" {
+		fmt.Println("Usage: doki scout IMAGE")
+		fmt.Println()
+		fmt.Println("Scan an image for known vulnerabilities.")
+		fmt.Println("Currently a placeholder - checks image metadata for common vulnerable packages.")
+		return nil
+	}
+	path := "/scout?image=" + target
+	resp, err := c.doAPI("GET", path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(os.Stdout, resp.Body)
+	return nil
+}
+
+func (c *DokiCLI) VerifyImageSignature(imageName string) error {
+	ref, err := common.ParseImageRef(imageName)
+	if err != nil {
+		return err
+	}
+	path := "/images/" + imageName + "/verify"
+	resp, err := c.doAPI("GET", path, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: Could not verify signature for %s: %v\n", ref.Name+":"+ref.Tag, err)
+		return nil
+	}
+	defer resp.Body.Close()
+	var result struct{ Signed bool `json:"signed"` }
+	json.NewDecoder(resp.Body).Decode(&result)
+	if !result.Signed {
+		fmt.Fprintf(os.Stderr, "WARNING: No image signature found for %s. The image is not signed.\n", ref.Name+":"+ref.Tag)
+	} else {
+		fmt.Printf("Image %s has a valid signature.\n", ref.Name+":"+ref.Tag)
+	}
 	return nil
 }
 
@@ -1482,7 +1888,11 @@ func (c *DokiCLI) KubeDown(file string) error {
 	if err != nil {
 		return err
 	}
-	c.doAPI("DELETE", "/kube/play", bytes.NewReader(data))
+	resp, err := c.doAPI("DELETE", "/kube/play", bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
 	return nil
 }
 
@@ -1602,6 +2012,20 @@ func (c *DokiCLI) Ping() error {
 	resp.Body.Close()
 	fmt.Println("OK")
 	return nil
+}
+
+func (c *DokiCLI) streamResponse(body io.ReadCloser) {
+	defer body.Close()
+	io.Copy(os.Stdout, body)
+}
+
+func (c *DokiCLI) printTable(headers []string, rows [][]string) {
+	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
+	fmt.Fprintln(w, strings.Join(headers, "\t"))
+	for _, row := range rows {
+		fmt.Fprintln(w, strings.Join(row, "\t"))
+	}
+	w.Flush()
 }
 
 func firstTag(imageID string) string {
