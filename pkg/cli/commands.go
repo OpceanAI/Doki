@@ -890,7 +890,7 @@ func (c *DokiCLI) History(imageName string, noTrunc, quiet bool) error {
 	json.NewDecoder(resp.Body).Decode(&history)
 
 	for _, h := range history {
-		id := h.Id[:12]
+		id := common.ShortID(h.Id)
 		if noTrunc {
 			id = h.Id
 		}
