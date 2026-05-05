@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -557,20 +558,20 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	}
 	prootArgs = append(prootArgs, args...)
 
-	cmd := exec.Command("proot", prootArgs...)
+	var cmd *exec.Cmd
+	cmd = exec.Command("proot", prootArgs...)
 	cmd.Dir = cleanRootfs
 	cmd.Stdout = logFile
-	cmd.Stderr = logFile
 	cmd.Stdin = os.Stdin
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Capture stderr in a buffer to detect ENOSYS for QEMU retry.
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 
 	env := os.Environ()
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
 	env = append(env, "LD_LIBRARY_PATH="+cleanRootfs+"/usr/lib:"+cleanRootfs+"/lib:"+cleanRootfs+"/usr/local/lib")
-	// Disable proot's internal seccomp on Android (kernel already blocks ptrace).
-	if rt.isAndroid() {
-		env = append(env, "PROOT_NO_SECCOMP=1")
-	}
 	for _, e := range cfg.Env {
 		env = append(env, e)
 	}
@@ -584,10 +585,21 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
+		stderrStr := stderrBuf.String()
+		// Write captured stderr to logFile for later retrieval.
+		if stderrStr != "" {
+			logFile.Write([]byte(stderrStr))
+		}
+
+		hasENOSYS := strings.Contains(stderrStr, "Function not implemented") ||
+			strings.Contains(stderrStr, "ENOSYS")
+
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				code := exitErr.ExitCode()
-				if code == 126 || code == 127 {
+				// Retry with QEMU if linker/command not found or ENOSYS detected.
+				if code == 126 || code == 127 || (code != 0 && hasENOSYS) {
+					logFile.Write([]byte("DOKI: proot failed, retrying with QEMU...\n"))
 					if pid, qemuCmd, qemuErr := rt.retryWithQemu(cfg, rootfsDir, logFile); qemuErr == nil {
 						return pid, qemuCmd, nil
 					}
@@ -596,6 +608,12 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 					return 0, nil, fmt.Errorf("proot exited with code %d (binary may be incompatible or missing in rootfs)", code)
 				}
 				return cmd.Process.Pid, cmd, nil
+			}
+			if hasENOSYS {
+				logFile.Write([]byte("DOKI: proot failed with ENOSYS, retrying with QEMU...\n"))
+				if pid, qemuCmd, qemuErr := rt.retryWithQemu(cfg, rootfsDir, logFile); qemuErr == nil {
+					return pid, qemuCmd, nil
+				}
 			}
 			return 0, nil, fmt.Errorf("proot failed: %w", err)
 		}
@@ -1289,7 +1307,6 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	env := os.Environ()
-	env = append(env, "PROOT_NO_SECCOMP=1")
 	for _, e := range cfg.Env {
 		env = append(env, e)
 	}

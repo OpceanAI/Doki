@@ -85,7 +85,6 @@ func appendAndroidBinds(args []string) []string {
 // buildProotEnv builds the environment slice for proot execution.
 func buildProotEnv(userEnv []string) []string {
 	env := os.Environ()
-	env = append(env, "PROOT_NO_SECCOMP=1")
 	for _, e := range userEnv {
 		env = append(env, e)
 	}
