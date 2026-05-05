@@ -47,6 +47,10 @@ func main() {
 	switch cmd {
 	// Container commands.
 	case "run":
+		if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+			printRunHelp()
+			return
+		}
 		handleError(c.Run(args))
 	case "ps":
 		all := flagBool(args, "-a", "--all")
@@ -84,6 +88,12 @@ func main() {
 	case "unpause":
 		handleError(c.Unpause(cleanIDs(args)))
 	case "exec":
+		if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+			fmt.Println("Usage: doki exec [OPTIONS] CONTAINER COMMAND [ARG...]")
+			fmt.Println("  -i, --interactive  Keep STDIN open")
+			fmt.Println("  -t, --tty          Allocate pseudo-TTY")
+			return
+		}
 		tty := flagBool(args, "-t", "--tty")
 		detach := flagBool(args, "-d", "--detach")
 		interactive := flagBool(args, "-i", "--interactive")
@@ -100,6 +110,13 @@ func main() {
 			c.Exec(containerID, execArgs, tty, detach, interactive, env, workdir, user)
 		}
 	case "logs":
+		if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+			fmt.Println("Usage: doki logs [OPTIONS] CONTAINER")
+			fmt.Println("  -f, --follow    Follow log output")
+			fmt.Println("  -n, --tail N    Number of lines to show")
+			fmt.Println("  -t, --timestamps  Show timestamps")
+			return
+		}
 		follow := flagBool(args, "-f", "--follow")
 		tail := flagInt(args, "-n", "--tail")
 		timestamps := flagBool(args, "-t", "--timestamps")
@@ -213,6 +230,10 @@ func main() {
 			c.Import(args[0], "", "", nil, "")
 		}
 	case "build":
+		if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+			printBuildHelp()
+			return
+		}
 		tags := flagStrSlice(args, "-t", "--tag")
 		f := flagStr(args, "-f", "--file")
 		noCache := flagBool(args, "--no-cache")
@@ -611,4 +632,49 @@ func cleanIDs(args []string) []string {
 		}
 	}
 	return ids
+}
+
+func printRunHelp() {
+	fmt.Println("Usage: doki run [OPTIONS] IMAGE [COMMAND] [ARG...]")
+	fmt.Println()
+	fmt.Println("Create and run a new container from an image.")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  -d, --detach       Run container in background")
+	fmt.Println("  -i, --interactive  Keep STDIN open")
+	fmt.Println("  -t, --tty          Allocate pseudo-TTY")
+	fmt.Println("  --rm               Remove container on exit")
+	fmt.Println("  --name NAME        Container name")
+	fmt.Println("  -p, --publish      Publish port (host:container)")
+	fmt.Println("  -v, --volume       Bind mount a volume")
+	fmt.Println("  -e, --env          Set environment variable")
+	fmt.Println("  -w, --workdir      Working directory")
+	fmt.Println("  -u, --user         Username or UID")
+	fmt.Println("  --network          Network mode (bridge/host/none)")
+	fmt.Println("  --restart          Restart policy")
+	fmt.Println("  --pull             Pull policy (always/missing/never)")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  doki run alpine echo hello")
+	fmt.Println("  doki run -d --name web -p 8080:80 nginx:alpine")
+	fmt.Println("  doki run --rm alpine /bin/sh -c \"echo test\"")
+	fmt.Println("  doki run python:3-alpine python3 -c \"print('hello')\"")
+}
+
+func printBuildHelp() {
+	fmt.Println("Usage: doki build [OPTIONS] PATH")
+	fmt.Println()
+	fmt.Println("Build an image from a Dokifile or Dockerfile.")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  -f, --file FILE    Path to Dokifile (default: Dokifile)")
+	fmt.Println("  -t, --tag TAG      Name and optionally a tag (name:tag)")
+	fmt.Println("  --no-cache         Do not use cache when building")
+	fmt.Println("  --pull             Always pull base images")
+	fmt.Println("  -q, --quiet        Suppress build output")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  doki build -t myapp .")
+	fmt.Println("  doki build -f Dockerfile -t myapp:v1 .")
+	fmt.Println("  doki build --no-cache -t myapp .")
 }

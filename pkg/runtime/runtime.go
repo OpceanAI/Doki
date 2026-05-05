@@ -443,7 +443,13 @@ func (rt *Runtime) startProcess(cfg *Config, rootfsDir string, logFile *os.File)
 		return rt.startWithMicroVM(cfg, rootfsDir, logFile)
 	case ModeProot:
 		if proot.IsAvailable() {
-			return rt.startWithProot(cfg, rootfsDir, logFile)
+			pid, proc, err := rt.startWithProot(cfg, rootfsDir, logFile)
+			if err != nil {
+				// Fallback to native mode if proot fails (e.g. execve ENOSYS on Android).
+				logFile.Write([]byte(fmt.Sprintf("[doki] proot failed: %v - falling back to native mode\n", err)))
+				return rt.startNative(cfg, rootfsDir, logFile)
+			}
+			return pid, proc, nil
 		}
 		return rt.startNative(cfg, rootfsDir, logFile)
 	case ModeNamespaces:
@@ -497,7 +503,7 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	}
 
 	prootArgs := []string{
-		"-r", rootfsDir,
+		"-r", filepath.Clean(rootfsDir),
 		"-b", "/proc",
 		"-b", "/sys",
 		"-b", "/dev",
@@ -509,12 +515,11 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	prootArgs = append(prootArgs, args...)
 
 	cmd := exec.Command("proot", prootArgs...)
-	cmd.Dir = rootfsDir
+	cmd.Dir = filepath.Clean(rootfsDir)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = os.Stdin
 
-	// Set PATH to include rootfs binaries.
 	env := os.Environ()
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	for _, e := range cfg.Env {
@@ -524,8 +529,26 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("proot start: %w", err)
 	}
+
+	// Wait briefly to detect immediate proot failures (e.g. execve not implemented).
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				code := exitErr.ExitCode()
+				return 0, nil, fmt.Errorf("proot exited with code %d (binary may be incompatible or missing in rootfs)", code)
+			}
+			return 0, nil, fmt.Errorf("proot failed: %w", err)
+		}
+		return 0, nil, fmt.Errorf("proot exited immediately")
+	case <-time.After(500 * time.Millisecond):
+		// Process started successfully, monitor asynchronously.
+	}
+
 	return cmd.Process.Pid, cmd, nil
 }
 

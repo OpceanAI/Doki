@@ -248,6 +248,56 @@ The container runs as a regular process on the host, with the container's rootfs
 
 ---
 
+## Known Limitations
+
+Doki is under active development. Features marked below reflect their current tested status.
+
+### What Works (proot mode, Android/Termux)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `doki run` (basic commands) | Tested | `echo`, `cat`, `ls`, shell scripts |
+| `doki pull` (Docker Hub) | Tested | ARM64 multi-arch auto-resolve |
+| `doki images` | Tested | Correct sizes |
+| `doki ps` / `doki ps -a` | Tested | Names, ports, image shown |
+| `doki inspect` | Tested | Full JSON output |
+| `doki stop` / `doki rm` | Tested | By name or ID |
+| `doki build` | Tested | Dokifile/Dockerfile parsing |
+| `doki network ls` | Tested | Bridge/host/none |
+| `doki volume create/ls/rm` | Tested | Local driver |
+| `doki-compose up/down` | Tested | Multi-service orchestration |
+| `doki --help` / `doki CMD --help` | Tested | All subcommands |
+
+### What Works Partially
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `doki logs` | Works | Output available after container exits |
+| `doki exec` | Limited | Runs on host, not inside container namespace |
+| Port forwarding (`-p`) | Recorded only | Port bindings stored but not forwarded by iptables/proxy |
+| `doki-compose` | Works | `down` depends on deterministic IDs |
+
+### What Does NOT Work Yet
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `doki push` | Stub | Returns fake success, no registry push |
+| `doki login` | Stub | Returns fake success, no credential storage |
+| MicroVM isolation | Untested | Code exists, not tested on compatible hardware |
+| Kubernetes CRI | Stub | gRPC server not implemented |
+| CNI networking | Untested | Plugin manager exists, not wired |
+| Network bridge isolation | No | Containers share host network in proot/native mode |
+| `--follow` on logs | No | Always returns all logs at once |
+
+### Proot-Specific Notes
+
+- **Port forwarding does not work with proot.** The `-p` flag records port bindings but iptables/nftables rules are not created. Containers share the host network stack.
+- **Container networking is host-mode only.** Bridge network isolation requires Linux namespaces (root) or microVM mode. In proot and native modes, all containers share the host network.
+- **`execve()` errors may occur.** On some Android kernels, proot's `execve` interception is blocked. Doki automatically falls back to native mode when this happens.
+- **MicroVM mode requires compatible hardware.** crosvm/Firecracker need KVM, Gunyah, GenieZone, or Halla hypervisors. These are available on Android 13+ with supported chipsets.
+
+---
+
 ## MicroVM Support
 
 DokiVM is Doki's microVM subsystem. It provides hardware-level isolation by running containers inside lightweight virtual machines. When available, it is selected automatically over all other isolation modes.
