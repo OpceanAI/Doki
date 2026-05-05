@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/OpceanAI/Doki/internal/dokivm"
@@ -282,6 +283,16 @@ func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/secrets", s.handleSwarmNoop)
 	s.router.HandleFunc("/configs", s.handleSwarmNoop)
 	s.router.HandleFunc("/plugins", s.handleSwarmNoop)
+
+	// Commit, pod, kube, generate, auto-update, apply.
+	s.router.HandleFunc("/commit", handleNotImplemented("commit"))
+	s.router.HandleFunc("/pods/create", handleNotImplemented("pod"))
+	s.router.HandleFunc("/pods/json", func(w http.ResponseWriter, r *http.Request) { s.writeJSON(w, 200, []interface{}{}) })
+	s.router.HandleFunc("/pods/", handleNotImplemented("pod"))
+	s.router.HandleFunc("/kube/play", handleNotImplemented("kube"))
+	s.router.HandleFunc("/generate/", handleNotImplemented("generate"))
+	s.router.HandleFunc("/auto-update", handleNotImplemented("auto-update"))
+	s.router.HandleFunc("/apply", handleNotImplemented("apply"))
 }
 
 // Listen starts the API server.
@@ -399,19 +410,24 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSystemDf(w http.ResponseWriter, r *http.Request) {
-	type dfResponse struct {
-		LayersSize  int64 `json:"LayersSize"`
-		Images      []interface{} `json:"Images"`
-		Containers  []interface{} `json:"Containers"`
-		Volumes     []interface{} `json:"Volumes"`
-		BuildCache  []interface{} `json:"BuildCache"`
+	containers, _ := s.runtime.List()
+	images, _ := s.image.List()
+	var totalSize int64
+	for _, img := range images {
+		totalSize += img.Size
 	}
-
+	type dfResponse struct {
+		LayersSize  int64         `json:"LayersSize"`
+		Images      interface{}   `json:"Images"`
+		Containers  interface{}   `json:"Containers"`
+		Volumes     interface{}   `json:"Volumes"`
+		BuildCache  interface{}   `json:"BuildCache"`
+	}
 	s.writeJSON(w, http.StatusOK, dfResponse{
-		LayersSize: 0,
-		Images:     nil,
-		Containers: nil,
-		Volumes:    nil,
+		LayersSize: totalSize,
+		Images:     images,
+		Containers: containers,
+		Volumes:    s.volumes.List(),
 		BuildCache: nil,
 	})
 }
@@ -605,6 +621,14 @@ func (s *Server) handleContainerDispatch(w http.ResponseWriter, r *http.Request)
 		s.handleContainerRename(w, r, containerID)
 	case action == "attach" && r.Method == "POST":
 		s.handleContainerAttach(w, r, containerID)
+	case action == "changes" && r.Method == "GET":
+		s.writeError(w, http.StatusNotImplemented, "container diff not yet implemented")
+	case action == "export" && r.Method == "GET":
+		s.writeError(w, http.StatusNotImplemented, "container export not yet implemented")
+	case action == "archive" && (r.Method == "GET" || r.Method == "PUT"):
+		s.writeError(w, http.StatusNotImplemented, "container cp not yet implemented")
+	case action == "update" && r.Method == "POST":
+		s.writeError(w, http.StatusNotImplemented, "container update not yet implemented")
 	case r.Method == "DELETE":
 		s.handleContainerDelete(w, r, containerID)
 	default:
@@ -661,14 +685,23 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request, id string) {
-	s.runtime.Stop(id, 10)
+	timeout := 10
+	if t := r.URL.Query().Get("t"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil {
+			timeout = v
+		}
+	}
+	s.runtime.Stop(id, timeout)
 	s.runtime.Start(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleContainerKill(w http.ResponseWriter, r *http.Request, id string) {
-	// SIGKILL by default.
-	if err := s.runtime.Kill(id, 9); err != nil {
+	sig := syscall.SIGKILL
+	if s := r.URL.Query().Get("signal"); s != "" {
+		sig = parseSignal(s)
+	}
+	if err := s.runtime.Kill(id, sig); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -713,7 +746,13 @@ func (s *Server) handleContainerWait(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id string) {
-	logs, err := s.runtime.GetLogs(id, 0)
+	tail := 0
+	if t := r.URL.Query().Get("tail"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil {
+			tail = v
+		}
+	}
+	logs, err := s.runtime.GetLogs(id, tail)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -723,16 +762,32 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handleContainerTop(w http.ResponseWriter, r *http.Request, id string) {
-	procs, err := s.runtime.Processes(id)
+	state, err := s.runtime.State(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-
+	cmdline := ""
+	if data, e := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", state.Pid)); e == nil {
+		cmdline = strings.ReplaceAll(string(data), "\x00", " ")
+	}
+	if cmdline == "" {
+		cmdline = "-"
+	}
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"Titles":    []string{"PID", "USER", "COMMAND"},
-		"Processes": procs,
+		"Processes": [][]string{{fmt.Sprintf("%d", state.Pid), "root", cmdline}},
 	})
+}
+
+func (s *Server) handleContainerDelete(w http.ResponseWriter, r *http.Request, id string) {
+	force := r.URL.Query().Get("force") == "true"
+
+	if err := s.runtime.Delete(id, force); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request, id string) {
@@ -775,16 +830,6 @@ func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request, i
 func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, id string) {
 	// Streaming attach - stub.
 	s.writeJSON(w, http.StatusOK, map[string]string{"message": "attach stub"})
-}
-
-func (s *Server) handleContainerDelete(w http.ResponseWriter, r *http.Request, id string) {
-	force := r.URL.Query().Get("force") == "true"
-
-	if err := s.runtime.Delete(id, force); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleContainersPrune(w http.ResponseWriter, r *http.Request) {
@@ -1109,11 +1154,26 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleImageLoad(w http.ResponseWriter, r *http.Request) {
-	s.writeError(w, http.StatusNotImplemented, "image load via API not yet implemented - use 'doki load' CLI")
+	_, err := s.image.Import(r.Body)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "import: "+err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"stream": "Image loaded\n"})
 }
 
 func (s *Server) handleImageGet(w http.ResponseWriter, r *http.Request) {
-	s.writeError(w, http.StatusNotImplemented, "image export via API not yet implemented - use 'doki save' CLI")
+	names := r.URL.Query().Get("names")
+	if names == "" {
+		s.writeError(w, http.StatusBadRequest, "names parameter required")
+		return
+	}
+	imageName := strings.Split(names, ",")[0]
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.WriteHeader(http.StatusOK)
+	if err := s.image.Export(imageName, w); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "export: "+err.Error())
+	}
 }
 
 func (s *Server) handleNetworksList(w http.ResponseWriter, r *http.Request) {
@@ -1385,4 +1445,31 @@ func detectOS() string {
 		return "Android (Termux)"
 	}
 	return goruntime.GOOS
+}
+
+func handleNotImplemented(msg string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotImplemented)
+		fmt.Fprintf(w, `{"message":"%s not yet implemented"}`, msg)
+	}
+}
+
+func parseSignal(s string) syscall.Signal {
+	switch strings.ToUpper(s) {
+	case "SIGTERM", "TERM":
+		return syscall.SIGTERM
+	case "SIGINT", "INT":
+		return syscall.SIGINT
+	case "SIGHUP", "HUP":
+		return syscall.SIGHUP
+	case "SIGQUIT", "QUIT":
+		return syscall.SIGQUIT
+	case "SIGUSR1":
+		return syscall.SIGUSR1
+	case "SIGUSR2":
+		return syscall.SIGUSR2
+	default:
+		return syscall.SIGKILL
+	}
 }
