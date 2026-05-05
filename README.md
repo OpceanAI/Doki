@@ -111,10 +111,10 @@ Android is not a second-class platform. It is the largest deployed Linux ecosyst
 
 ```bash
 # Download all 4 binaries
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.0/doki           -o $PREFIX/bin/doki
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.0/dokid          -o $PREFIX/bin/dokid
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.0/doki-compose   -o $PREFIX/bin/doki-compose
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.0/doki-init      -o $PREFIX/bin/doki-init
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.1/doki           -o $PREFIX/bin/doki
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.1/dokid          -o $PREFIX/bin/dokid
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.1/doki-compose   -o $PREFIX/bin/doki-compose
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.1/doki-init      -o $PREFIX/bin/doki-init
 chmod +x $PREFIX/bin/doki*
 ```
 
@@ -289,12 +289,13 @@ Doki is under active development. Features marked below reflect their current te
 | Network bridge isolation | No | Containers share host network in proot/native mode |
 | `--follow` on logs | No | Always returns all logs at once |
 
-### Proot-Specific Notes
+### Proot-Specific Notes (v0.4.1)
 
-- **Port forwarding does not work with proot.** The `-p` flag records port bindings but iptables/nftables rules are not created. Containers share the host network stack.
+- **Proot now works natively on Android/Termux.** Doki uses the same bind mounts and seccomp configuration as proot-distro: `/apex`, `/system`, `/vendor`, `/storage`, `PROOT_NO_SECCOMP=1`, `--link2symlink`.
+- **Port forwarding does not work with proot.** The `-p` flag records port bindings but iptables/nftables rules require root. Containers share the host network stack.
 - **Container networking is host-mode only.** Bridge network isolation requires Linux namespaces (root) or microVM mode. In proot and native modes, all containers share the host network.
-- **`execve()` errors may occur.** On some Android kernels, proot's `execve` interception is blocked. Doki automatically falls back to native mode when this happens.
-- **MicroVM mode requires compatible hardware.** crosvm/Firecracker need KVM, Gunyah, GenieZone, or Halla hypervisors. These are available on Android 13+ with supported chipsets.
+- **MicroVM mode requires compatible hardware.** crosvm/Firecracker need KVM, Gunyah, GenieZone, or Halla hypervisors. Available on Android 13+ with supported chipsets.
+- **The proot binary must be the Termux build.** Install via `pkg install proot`. The Termux package includes Android-specific kernel workarounds not present in upstream proot.
 
 ---
 
