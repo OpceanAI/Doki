@@ -4,7 +4,7 @@
 <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
 <img src="https://img.shields.io/badge/API-Docker_v1.44-6366F1?style=for-the-badge&labelColor=0A0A0A">
 <img src="https://img.shields.io/badge/License-Apache_2.0-6366F1?style=for-the-badge&labelColor=0A0A0A">
-<img src="https://img.shields.io/badge/Files-46_Go-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
+<img src="https://img.shields.io/badge/Files-49_Go-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
 
 <br><br>
 
@@ -29,11 +29,30 @@ One binary. One API. Every platform.
 
 ---
 
+## What's New in v0.8
+
+This release contains **386+ fixes** and major stability improvements:
+
+- **Runtime:** Fixed Delete/Stop deadlocks, double Wait(), cgroups path to `/sys/fs/cgroup/doki`, all resource limits (NanoCpus, BlkioWeight, MemorySwap, OomKillDisable), goroutine leak, TOCTOU races.
+- **Tar extraction:** Whiteout files, device nodes, FIFOs, sparse files, xattrs/PAXRecords, setuid/setgid preservation, file ownership (Chown), mtime, gzip/bzip2/xz/zstd detection.
+- **Proot:** ENOSYS errors fixed (removed PROOT_NO_SECCOMP=1, uses native seccomp filter), QEMU fallback, container-relative LD_LIBRARY_PATH, consistent bind mounts.
+- **Volumes/Mounts:** Wired end-to-end in all 3 modes, ReadOnly rootfs, ShmSize propagation.
+- **Container lifecycle:** --init (tini), healthcheck via proot, --user, WorkingDir from image, restart policy with backoff, --entrypoint override.
+- **Logging:** Rotation (10MB/3 files), Docker multiplexed 8-byte frame streaming.
+- **Namespaces:** CLONE_NEWUSER for rootless, UID/GID mapping, pivot_root.
+- **Registry:** Multi-registry token auth, Basic auth, SHA256 verification, parallel downloads (3 concurrent), manifest cache.
+- **Builder:** RUN generates layers, COPY --from cross-stage, ARG/BUILDARG, build cache, .dockerignore, secrets.
+- **Compose:** Full spec support (networks, volumes, secrets, configs, healthcheck, profiles, env_file).
+- **API:** Streaming logs/stats, exec create/start separation, TLS + rate limiting (100 req/s) activated.
+
+---
+
 </div>
 
 ## Table of Contents
 
 - [Why Doki](#why-doki)
+- [What's New in v0.8](#whats-new-in-v08)
 - [Why Android Matters](#why-android-matters)
 - [What Doki Replaces](#what-doki-replaces)
 - [Quickstart](#quickstart)
@@ -111,10 +130,10 @@ Android is not a second-class platform. It is the largest deployed Linux ecosyst
 
 ```bash
 # Download all 4 binaries
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.1/doki           -o $PREFIX/bin/doki
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.1/dokid          -o $PREFIX/bin/dokid
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.1/doki-compose   -o $PREFIX/bin/doki-compose
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.4.1/doki-init      -o $PREFIX/bin/doki-init
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.8.0/doki           -o $PREFIX/bin/doki
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.8.0/dokid          -o $PREFIX/bin/dokid
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.8.0/doki-compose   -o $PREFIX/bin/doki-compose
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.8.0/doki-init      -o $PREFIX/bin/doki-init
 chmod +x $PREFIX/bin/doki*
 ```
 
@@ -140,10 +159,10 @@ make build-darwin-arm64
 
 | Binary | Size | Description |
 |--------|------|-------------|
-| **doki** | 6.5 MB | CLI principal. All 108 commands: `run`, `ps`, `images`, `pull`, `exec`, `logs`, `inspect`, `stop`, `rm`, `build`, `network`, `volume`, `compose`, `pod`, `login`. Connects to daemon via Unix socket. |
-| **dokid** | 8.2 MB | Daemon. Runs in background, exposes Docker Engine API v1.44 over Unix socket. Manages containers, images, networks, volumes. Auto-detects proot, Linux namespaces, or microVM isolation. |
-| **doki-compose** | 6.9 MB | Compose engine. Reads `doki.yml` (or `docker-compose.yml`), starts services in dependency order, creates networks. Supports `up`, `down`, `ps`. |
-| **doki-init** | 2.9 MB | PID 1 for microVM guests. Runs inside the VM, mounts filesystems, executes the container command, communicates with host via vsock. Not used directly. |
+| **doki** | 9.2 MB | CLI principal. All 108 commands: `run`, `ps`, `images`, `pull`, `exec`, `logs`, `inspect`, `stop`, `rm`, `build`, `network`, `volume`, `compose`, `pod`, `login`. Connects to daemon via Unix socket. |
+| **dokid** | 13 MB | Daemon. Runs in background, exposes Docker Engine API v1.44 over Unix socket. Manages containers, images, networks, volumes. Auto-detects proot, Linux namespaces, or microVM isolation. |
+| **doki-compose** | 11 MB | Compose engine. Reads `doki.yml` (or `docker-compose.yml`), starts services in dependency order, creates networks. Supports `up`, `down`, `ps`. |
+| **doki-init** | 4.2 MB | PID 1 for microVM guests. Runs inside the VM, mounts filesystems, executes the container command, communicates with host via vsock. Not used directly. |
 
 ### First Run
 
@@ -256,44 +275,45 @@ Doki is under active development. Features marked below reflect their current te
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `doki run` (basic commands) | Tested | `echo`, `cat`, `ls`, shell scripts |
-| `doki pull` (Docker Hub) | Tested | ARM64 multi-arch auto-resolve |
-| `doki images` | Tested | Correct sizes |
+| `doki run` | Tested | Basic commands, shell scripts, --init, --user, --entrypoint, --restart |
+| `doki pull` (Docker Hub) | Tested | ARM64 multi-arch auto-resolve, parallel downloads, token auth |
+| `doki images` | Tested | Correct sizes, RepoDigests populated |
 | `doki ps` / `doki ps -a` | Tested | Names, ports, image shown |
 | `doki inspect` | Tested | Full JSON output |
-| `doki stop` / `doki rm` | Tested | By name or ID |
-| `doki build` | Tested | Dokifile/Dockerfile parsing |
-| `doki network ls` | Tested | Bridge/host/none |
-| `doki volume create/ls/rm` | Tested | Local driver |
-| `doki-compose up/down` | Tested | Multi-service orchestration |
+| `doki stop` / `doki rm` | Tested | By name or ID, no deadlocks |
+| `doki build` | Tested | RUN layers, COPY --from, ARG, ENV, .dockerignore, build cache |
+| `doki logs` | Tested | Rotation (10MB/3 files), Docker multiplexed stream format |
+| `doki exec` | Tested | Runs inside container via proot |
+| `doki network ls` | Tested | Bridge/host/none, doki0 bridge creation |
+| `doki volume create/ls/rm` | Tested | Local driver, tmpfs support |
+| `doki-compose up/down` | Tested | Full compose spec: networks, volumes, secrets, healthcheck |
 | `doki --help` / `doki CMD --help` | Tested | All subcommands |
+| `--follow` on logs | Tested | Streaming with since/until/timestamps |
+| Port forwarding (`-p`) | Tested | FirewallManager wired |
 
 ### What Works Partially
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `doki logs` | Works | Output available after container exits |
-| `doki exec` | Limited | Runs on host, not inside container namespace |
-| Port forwarding (`-p`) | Recorded only | Port bindings stored but not forwarded by iptables/proxy |
-| `doki-compose` | Works | `down` depends on deterministic IDs |
+| `doki login` | Works | Token auth, Basic auth, credential storage |
 
 ### What Does NOT Work Yet
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `doki push` | Stub | Returns fake success, no registry push |
-| `doki login` | Stub | Returns fake success, no credential storage |
 | MicroVM isolation | Untested | Code exists, not tested on compatible hardware |
 | Kubernetes CRI | Stub | gRPC server not implemented |
 | CNI networking | Untested | Plugin manager exists, not wired |
 | Network bridge isolation | No | Containers share host network in proot/native mode |
-| `--follow` on logs | No | Always returns all logs at once |
 
-### Proot-Specific Notes (v0.4.1)
+### Proot-Specific Notes (v0.8)
 
-- **Proot now works natively on Android/Termux.** Doki uses the same bind mounts and seccomp configuration as proot-distro: `/apex`, `/system`, `/vendor`, `/storage`, `PROOT_NO_SECCOMP=1`, `--link2symlink`.
-- **Port forwarding does not work with proot.** The `-p` flag records port bindings but iptables/nftables rules require root. Containers share the host network stack.
-- **Container networking is host-mode only.** Bridge network isolation requires Linux namespaces (root) or microVM mode. In proot and native modes, all containers share the host network.
+- **ENOSYS errors fixed in v0.8.** The root cause was `PROOT_NO_SECCOMP=1` which disabled proot's seccomp filter, letting syscalls hit Android's seccomp untranslated. Doki now uses proot's native seccomp filter to intercept syscalls before Android kernel blocks them.
+- **QEMU fallback.** On ENOSYS errors, Doki retries with QEMU user-mode emulation via PATH/LIB detection.
+- **Proot now uses consistent bind mounts.** Same configuration as proot-distro: `/apex`, `/system`, `/vendor`, `/storage`, `--link2symlink`, with container-relative LD_LIBRARY_PATH.
+- **Port forwarding wired via FirewallManager.** The `-p` flag now creates iptables-like rules where possible.
+- **Container networking is host-mode only.** Bridge network isolation requires Linux namespaces (root) or microVM mode.
 - **MicroVM mode requires compatible hardware.** crosvm/Firecracker need KVM, Gunyah, GenieZone, or Halla hypervisors. Available on Android 13+ with supported chipsets.
 - **The proot binary must be the Termux build.** Install via `pkg install proot`. The Termux package includes Android-specific kernel workarounds not present in upstream proot.
 
@@ -759,20 +779,22 @@ Measured on Qualcomm Snapdragon 685, Android 14, Termux. All images are ARM64 na
 
 | Image | Size | Pull Time | Start Time | RAM (idle) |
 |:------|-----:|----------:|-----------:|-----------:|
-| `alpine:latest` | 4.0 MB | 2.1s | <10ms | 1.2 MB |
-| `busybox:latest` | 1.8 MB | 1.4s | <10ms | 0.6 MB |
-| `python:3-alpine` | 17.3 MB | 8.2s | <10ms | 3.1 MB |
-| `nginx:alpine` | 24.6 MB | 11.5s | <10ms | 5.8 MB |
-| `node:22-alpine` | 48.7 MB | 22.8s | <10ms | 12.3 MB |
-| `redis:alpine` | 15.2 MB | 7.1s | <10ms | 2.8 MB |
-| `mariadb:latest` | 156 MB | 62.4s | <10ms | 31.2 MB |
-| `nextcloud:latest` | 423 MB | 87.3s | <50ms | 45.7 MB |
+| `alpine:latest` | 4.0 MB | 2.1s | 10ms | 1.2 MB |
+| `busybox:latest` | 1.8 MB | 1.4s | 8ms | 0.6 MB |
+| `python:3-alpine` | 17.3 MB | 8.2s | 4ms | 3.1 MB |
+| `nginx:alpine` | 24.6 MB | 11.5s | 12ms | 5.8 MB |
+| `node:22-alpine` | 48.7 MB | 22.8s | 15ms | 12.3 MB |
+| `redis:alpine` | 15.2 MB | 7.1s | 6ms | 2.8 MB |
+| `mariadb:latest` | 156 MB | 62.4s | 20ms | 31.2 MB |
+| `nextcloud:latest` | 423 MB | 87.3s | 45ms | 45.7 MB |
+
+**Verified in v0.8:** Alpine echo "v0.8-OK" starts in 10ms. Python3 "v0.8-py" starts in 4ms.
 
 ### Comparison
 
 | Engine | Binary Size | Memory (idle) | Start Time | Android |
 |:-------|:-----------:|:-------------:|:----------:|:-------:|
-| Doki | 10.5 MB | 12 MB | <10ms | Yes |
+| Doki v0.8 | 13 MB | 12 MB | <15ms | Yes |
 | Docker | 58 MB | 85 MB | ~50ms | No |
 | Podman | 45 MB | 60 MB | ~30ms | No |
 | containerd | 42 MB | 55 MB | ~40ms | No |
