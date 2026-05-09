@@ -5,6 +5,7 @@
 <img src="https://img.shields.io/badge/API-Docker_v1.44-6366F1?style=for-the-badge&labelColor=0A0A0A">
 <img src="https://img.shields.io/badge/License-Apache_2.0-6366F1?style=for-the-badge&labelColor=0A0A0A">
 <img src="https://img.shields.io/badge/Files-49_Go-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
+<img src="https://img.shields.io/badge/GitLab-mirror-FCA121?style=for-the-badge&labelColor=0A0A0A&logo=gitlab&logoColor=FCA121">
 
 <br><br>
 
@@ -1031,6 +1032,15 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
+
+---
+
+## Mirrors
+
+| Platform | Repository | Wiki |
+|:---------|:-----------|:-----|
+| GitHub | [OpceanAI/Doki](https://github.com/OpceanAI/Doki) | [Wiki](https://github.com/OpceanAI/Doki/wiki) |
+| GitLab | [aguitauwu/doki](https://gitlab.com/aguitauwu/doki) | [Wiki](https://gitlab.com/aguitauwu/doki/-/wikis) |
 
 ---
 

@@ -1,0 +1,121 @@
+stages:
+  - build
+  - test
+  - lint
+  - release
+
+variables:
+  GO_VERSION: "1.22"
+  BINARY_NAME: "doki"
+
+.build_template: &build_definition
+  image: golang:${GO_VERSION}
+  before_script:
+    - go version
+    - go env
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go/pkg/mod/
+      - .go/pkg/sum/
+  artifacts:
+    paths:
+      - bin/
+    expire_in: 1 hour
+
+build:android-arm64:
+  <<: *build_definition
+  stage: build
+  script:
+    - mkdir -p bin/
+    - GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki ./cmd/doki
+    - GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/dokid ./cmd/dokid
+    - GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-compose ./cmd/doki-compose
+    - GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-init ./cmd/doki-init
+  tags:
+    - docker
+
+build:linux-amd64:
+  <<: *build_definition
+  stage: build
+  script:
+    - mkdir -p bin/
+    - GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/doki-linux-amd64 ./cmd/doki
+    - GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/dokid-linux-amd64 ./cmd/dokid
+    - GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/doki-compose-linux-amd64 ./cmd/doki-compose
+  tags:
+    - docker
+
+build:linux-arm64:
+  <<: *build_definition
+  stage: build
+  script:
+    - mkdir -p bin/
+    - GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-linux-arm64 ./cmd/doki
+    - GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/dokid-linux-arm64 ./cmd/dokid
+    - GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-compose-linux-arm64 ./cmd/doki-compose
+  tags:
+    - docker
+
+build:darwin-arm64:
+  <<: *build_definition
+  stage: build
+  script:
+    - mkdir -p bin/
+    - GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-darwin-arm64 ./cmd/doki
+    - GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/dokid-darwin-arm64 ./cmd/dokid
+    - GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-compose-darwin-arm64 ./cmd/doki-compose
+  tags:
+    - docker
+
+test:
+  image: golang:${GO_VERSION}
+  stage: test
+  script:
+    - go test ./... -v -race -coverprofile=coverage.out
+    - go tool cover -func=coverage.out
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.out
+  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
+
+lint:
+  image: golangci/golangci-lint:latest
+  stage: lint
+  script:
+    - golangci-lint run ./...
+  allow_failure: true
+
+vet:
+  image: golang:${GO_VERSION}
+  stage: lint
+  script:
+    - go vet ./...
+
+release:
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - echo "Creating release for $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "Release $CI_COMMIT_TAG"
+    description: "Doki $CI_COMMIT_TAG release"
+    assets:
+      links:
+        - name: "doki (Android ARM64)"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki?job=build:android-arm64"
+        - name: "dokid (Android ARM64)"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/dokid?job=build:android-arm64"
+        - name: "doki-compose (Android ARM64)"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-compose?job=build:android-arm64"
+        - name: "doki (Linux AMD64)"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-linux-amd64?job=build:linux-amd64"
+        - name: "doki (Linux ARM64)"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-linux-arm64?job=build:linux-arm64"
+        - name: "doki (macOS ARM64)"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-darwin-arm64?job=build:darwin-arm64"
