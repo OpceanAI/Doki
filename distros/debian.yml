@@ -1,0 +1,13 @@
+name: debian
+description: "Debian - stable, universal"
+default_version: "12"
+source:
+  type: docker
+  image: debian
+  tag: stable-slim
+  registry: docker.io
+packages:
+  manager: apt
+  update: "apt update"
+  install: "apt install -y"
+aliases: [debian, debian:latest, debian:12, debian:bookworm]

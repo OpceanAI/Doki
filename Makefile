@@ -1,13 +1,15 @@
-.PHONY: all build build-android build-linux build-darwin test lint clean install
+.PHONY: all build build-android build-linux build-darwin test lint clean install \
+        build-init-rust build-init-rust-armv7
 
 BINARIES = doki dokid doki-compose doki-init
 GO = go
 GOFLAGS = -trimpath -ldflags="-s -w"
 PREFIX ?= /data/data/com.termux/files/usr
+CARGO = cargo
 
 all: build
 
-build: build-android
+build: build-android build-init-rust
 
 build-android:
 	GOOS=android GOARCH=arm64 $(GO) build $(GOFLAGS) -o bin/doki ./cmd/doki
@@ -64,3 +66,13 @@ install: build-android
 	install bin/doki $(PREFIX)/bin/doki
 	install bin/dokid $(PREFIX)/bin/dokid
 	install bin/doki-compose $(PREFIX)/bin/doki-compose
+
+# ─── doki-init-rust (Rust) ──────────────────────────────────
+
+build-init-rust:
+	cd cmd/doki-init-rust && $(CARGO) build --release --target aarch64-linux-android
+	cp cmd/doki-init-rust/target/aarch64-linux-android/release/doki-init-rust releases/doki-init-rust-android-arm64
+
+build-init-rust-armv7:
+	cd cmd/doki-init-rust && $(CARGO) build --release --target armv7-linux-androideabi
+	cp cmd/doki-init-rust/target/armv7-linux-androideabi/release/doki-init-rust releases/doki-init-rust-android-armv7

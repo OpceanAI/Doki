@@ -1,0 +1,13 @@
+name: alpine
+description: "Alpine Linux - minimal, security-oriented"
+default_version: "3.19"
+source:
+  type: docker
+  image: alpine
+  tag: latest
+  registry: docker.io
+packages:
+  manager: apk
+  update: "apk update"
+  install: "apk add --no-cache"
+aliases: [alpine, alpine:latest, alpine:3.19]

@@ -1,11 +1,11 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Doki-0.8.0-6366F1?style=for-the-badge&labelColor=0A0A0A" alt="Doki v0.8.0">
+<img src="https://img.shields.io/badge/Doki-0.9.0-6366F1?style=for-the-badge&labelColor=0A0A0A" alt="Doki v0.9.0">
 <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
+<img src="https://img.shields.io/badge/Rust-doki--init-purple?style=for-the-badge&labelColor=0A0A0A&logo=rust&logoColor=white">
 <img src="https://img.shields.io/badge/API-Docker_v1.44-6366F1?style=for-the-badge&labelColor=0A0A0A">
 <img src="https://img.shields.io/badge/License-Apache_2.0-6366F1?style=for-the-badge&labelColor=0A0A0A">
-<img src="https://img.shields.io/badge/Files-49_Go-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
-<img src="https://img.shields.io/badge/GitLab-mirror-FCA121?style=for-the-badge&labelColor=0A0A0A&logo=gitlab&logoColor=FCA121">
+<img src="https://img.shields.io/badge/Mirrors-GitHub_|_GitLab_|_Codeberg-FCA121?style=for-the-badge&labelColor=0A0A0A">
 
 <br><br>
 
@@ -30,6 +30,15 @@ One binary. One API. Every platform.
 
 ---
 
+## What's New in v0.9
+
+- **doki-init-rust:** PID 1 rewritten in Rust (412K vs 2.9MB Go, -86%). Runs inside microVMs via vsock JSON IPC.
+- **doki-proot:** Forked proot with daemon mode + JSON IPC protocol. 14K binary wrapper, falls back to system proot.
+- **Distro system:** `doki run --distro alpine/ubuntu/debian/arch` downloads distros from Docker Hub automatically.
+- **ARMv7 beta:** Full feature parity (run, pull, build, ps, compose, --distro) for older ARM devices.
+- **Runtime fixes:** Proot dispatch now wired, `ImageConfig.Env` inheritance, compose `ImageLayers` extraction, HTTP `WriteTimeout 30s→300s`.
+- **Immich:** Full stack running (PostgreSQL 18 + pgvector + cube + earthdistance, Redis 7, Immich Server v2.7.5).
+
 ## What's New in v0.8
 
 This release contains **386+ fixes** and major stability improvements:
@@ -53,6 +62,7 @@ This release contains **386+ fixes** and major stability improvements:
 ## Table of Contents
 
 - [Why Doki](#why-doki)
+- [What's New in v0.9](#whats-new-in-v09)
 - [What's New in v0.8](#whats-new-in-v08)
 - [Why Android Matters](#why-android-matters)
 - [What Doki Replaces](#what-doki-replaces)
@@ -1041,6 +1051,35 @@ limitations under the License.
 |:---------|:-----------|:-----|
 | GitHub | [OpceanAI/Doki](https://github.com/OpceanAI/Doki) | [Wiki](https://github.com/OpceanAI/Doki/wiki) |
 | GitLab | [aguitauwu/doki](https://gitlab.com/aguitauwu/doki) | [Wiki](https://gitlab.com/aguitauwu/doki/-/wikis) |
+| Codeberg | [aguitauwu/Doki](https://codeberg.org/aguitauwu/Doki) | [Wiki](https://codeberg.org/aguitauwu/Doki/wiki) |
+
+---
+
+## Related Repos
+
+| Repo | Description |
+|:-----|:------------|
+| [Doki-proot](https://github.com/OpceanAI/Doki-proot) | Forked proot with JSON IPC daemon mode for Doki |
+
+---
+
+## Distros
+
+Run with a predefined distro from Docker Hub:
+
+```bash
+doki run --distro alpine echo hello
+doki run --distro ubuntu bash
+doki run --distro debian --install curl,vim bash
+doki run --distro arch
+```
+
+| Distro | Image | Size |
+|:-------|:------|:-----|
+| Alpine | `alpine:latest` | ~3MB |
+| Ubuntu | `ubuntu:latest` | ~29MB |
+| Debian | `debian:stable-slim` | ~27MB |
+| Arch | `archlinux:latest` | ~150MB |
 
 ---
 

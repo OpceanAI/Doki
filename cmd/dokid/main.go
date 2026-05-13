@@ -166,7 +166,7 @@ func main() {
 	srv := &http.Server{
 		Handler:      server,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 300 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 	for _, ln := range listeners {

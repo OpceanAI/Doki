@@ -22,14 +22,31 @@ func NewManager(rootfsDir string) *Manager {
 	return &Manager{rootfsDir: rootfsDir}
 }
 
-// IsAvailable checks if proot is available on the system.
+// findProotBinary locates the best available proot binary.
+// Searches for doki-proot first, falls back to system proot.
+func findProotBinary() string {
+	exe, _ := os.Executable()
+	candidates := []string{
+		filepath.Join(filepath.Dir(exe), "doki-proot"),
+		"doki-proot",
+	}
+	for _, c := range candidates {
+		if common.PathExists(c) {
+			return c
+		}
+	}
+	return "proot"
+}
+
+// IsAvailable checks if proot (or doki-proot) is available on the system.
 func IsAvailable() bool {
+	if common.PathExists("doki-proot") {
+		return true
+	}
 	p, err := exec.LookPath("proot")
 	if err != nil {
 		return false
 	}
-	// On Android/Termux, prefer the Termux-packaged proot which has
-	// Android-specific kernel workarounds not present in upstream proot.
 	return p != ""
 }
 
@@ -104,7 +121,8 @@ func (m *Manager) Exec(rootfs string, args []string, env []string, workDir strin
 	}
 	prootArgs = append(prootArgs, args...)
 
-	cmd := exec.Command("proot", prootArgs...)
+	prootBin := findProotBinary()
+	cmd := exec.Command(prootBin, prootArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -255,7 +273,8 @@ func RunCommand(rootfs string, args []string, env []string) (string, error) {
 	prootArgs = appendAndroidBinds(prootArgs)
 	prootArgs = append(prootArgs, args...)
 
-	cmd := exec.Command("proot", prootArgs...)
+	prootBin := findProotBinary()
+	cmd := exec.Command(prootBin, prootArgs...)
 	cmd.Env = buildProotEnv(env)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

@@ -940,11 +940,18 @@ func (e *Engine) startService(name string) error {
 
 	containerID := e.containerName(name)
 
+	// Resolve image layers so rootfs gets populated.
+	var imageLayers []string
+	if _, err := e.image.Get(imageName); err == nil {
+		imageLayers, _ = e.image.GetLayerPaths(imageName)
+	}
+
 	cfg := &runtime.Config{
-		ID:   containerID,
-		Args: cmd,
-		Env:  e.buildEnv(svc),
-		Tty:  svc.Tty,
+		ID:          containerID,
+		Args:        cmd,
+		Env:         e.buildEnv(svc, imageName),
+		Tty:         svc.Tty,
+		ImageLayers: imageLayers,
 	}
 
 	if svc.WorkingDir != "" {
@@ -1109,9 +1116,18 @@ func (e *Engine) startService(name string) error {
 	return nil
 }
 
-// Y12: buildEnv builds the environment slice including env_file.
-func (e *Engine) buildEnv(svc *Service) []string {
+// Y12: buildEnv builds the environment slice including env_file and image defaults.
+func (e *Engine) buildEnv(svc *Service, imageName string) []string {
 	env := toEnvSlice(svc.Environment)
+
+	// Include image default environment variables
+	if record, err := e.image.Get(imageName); err == nil && record.Config != nil {
+		for _, imgEnv := range record.Config.Config.Env {
+			if !containsKey(env, imgEnv) {
+				env = append(env, imgEnv)
+			}
+		}
+	}
 
 	// Y12: env_file support.
 	envFile := svc.EnvFile
@@ -1139,6 +1155,19 @@ func (e *Engine) buildEnv(svc *Service) []string {
 	}
 
 	return env
+}
+
+// containsKey checks if env slice already has a key defined.
+func containsKey(env []string, entry string) bool {
+	if idx := strings.Index(entry, "="); idx > 0 {
+		key := entry[:idx+1]
+		for _, e := range env {
+			if strings.HasPrefix(e, key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Y1: serviceNetworks returns the list of networks for a service.
