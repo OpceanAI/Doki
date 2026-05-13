@@ -1,0 +1,13 @@
+name: arch
+description: "Arch Linux - rolling release"
+default_version: "latest"
+source:
+  type: docker
+  image: archlinux
+  tag: latest
+  registry: docker.io
+packages:
+  manager: pacman
+  update: "pacman -Sy"
+  install: "pacman -S --noconfirm"
+aliases: [arch, archlinux, arch:latest]

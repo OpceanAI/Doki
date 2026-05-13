@@ -683,6 +683,10 @@ func (rt *Runtime) startProcess(cfg *Config, rootfsDir string, logFile *os.File)
 	switch rt.mode {
 	case ModeMicroVM:
 		return rt.startWithMicroVM(cfg, rootfsDir, logFile)
+	case ModeProot:
+		return rt.startWithProot(cfg, rootfsDir, logFile)
+	case ModeNamespaces:
+		return rt.startWithNamespaces(cfg, rootfsDir, logFile)
 	default:
 		return rt.startNative(cfg, rootfsDir, logFile)
 	}
@@ -765,7 +769,12 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	}
 	prootArgs = append(prootArgs, args...)
 
-	cmd := exec.Command("proot", prootArgs...)
+	prootBin := "proot"
+	if _, err := os.Stat("doki-proot"); err == nil {
+		prootBin = "doki-proot"
+	}
+
+	cmd := exec.Command(prootBin, prootArgs...)
 	cmd.Dir = cleanRootfs
 	cmd.Stdout = logFile
 	cmd.Stdin = os.Stdin
@@ -777,6 +786,12 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	env := os.Environ()
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
 	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
+	// Image config env takes precedence (contains PATH, etc.)
+	if cfg.ImageConfig != nil {
+		for _, e := range cfg.ImageConfig.Env {
+			env = append(env, e)
+		}
+	}
 	for _, e := range cfg.Env {
 		env = append(env, e)
 	}

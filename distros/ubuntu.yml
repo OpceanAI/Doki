@@ -1,0 +1,13 @@
+name: ubuntu
+description: "Ubuntu - general purpose Linux"
+default_version: "24.04"
+source:
+  type: docker
+  image: ubuntu
+  tag: latest
+  registry: docker.io
+packages:
+  manager: apt
+  update: "apt update"
+  install: "apt install -y"
+aliases: [ubuntu, ubuntu:latest, ubuntu:24.04, ubuntu:noble]

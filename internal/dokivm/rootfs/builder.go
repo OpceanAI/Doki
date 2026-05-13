@@ -70,6 +70,7 @@ func (b *Builder) BuildRootfs(vmID string, rootfsDir string, sizeMB int) (string
 
 // BuildMinimalRootfs builds a minimal rootfs with just the OCI layers
 // and the doki-init binary injected.
+// Searches for doki-init-rust first, falls back to doki-init (Go).
 func (b *Builder) BuildMinimalRootfs(vmID string, layersDir string, dokiInitPath string) (string, error) {
 	vmDir := filepath.Join(b.workDir, vmID)
 	common.EnsureDir(vmDir)
@@ -82,9 +83,10 @@ func (b *Builder) BuildMinimalRootfs(vmID string, layersDir string, dokiInitPath
 		common.EnsureDir(filepath.Join(stagingDir, dir))
 	}
 
-	// Copy doki-init to /sbin/init.
-	if dokiInitPath != "" && common.PathExists(dokiInitPath) {
-		data, err := os.ReadFile(dokiInitPath)
+	// Find doki-init binary: try doki-init-rust first, then doki-init (Go).
+	initPath := b.findDokiInit(dokiInitPath)
+	if initPath != "" {
+		data, err := os.ReadFile(initPath)
 		if err != nil {
 			return "", fmt.Errorf("read doki-init: %w", err)
 		}
@@ -143,4 +145,24 @@ func (k *KernelManager) GetKernelPath() (string, error) {
 func (k *KernelManager) HasKernel() bool {
 	_, err := k.GetKernelPath()
 	return err == nil
+}
+
+// findDokiInit locates the doki-init binary.
+// Searches doki-init-rust first, then doki-init (Go fallback).
+func (b *Builder) findDokiInit(explicitPath string) string {
+	if explicitPath != "" && common.PathExists(explicitPath) {
+		return explicitPath
+	}
+	candidates := []string{
+		filepath.Join(b.workDir, "doki-init-rust"),
+		filepath.Join(b.workDir, "doki-init"),
+		"doki-init-rust",
+		"doki-init",
+	}
+	for _, c := range candidates {
+		if common.PathExists(c) {
+			return c
+		}
+	}
+	return ""
 }

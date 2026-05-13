@@ -2,3 +2,10 @@ bin/
 *.log
 .DS_Store
 /tmp/
+# Rust build artifacts
+cmd/doki-init-rust/target/
+# Doki binaries (built locally)
+doki
+dokid
+doki-compose
+doki-init

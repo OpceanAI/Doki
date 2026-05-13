@@ -1,0 +1,118 @@
+name: doki-immich
+version: "3.9"
+
+# Doki Compose - Immich self-hosted photo manager
+# Run: doki-compose -f test/immich/doki-compose.yaml up -d
+
+services:
+  # PostgreSQL 14+ is required for Immich
+  db:
+    image: pgvector/pgvector:pg16
+    restart: always
+    command: ["docker-entrypoint.sh", "postgres", "-p", "5433"]
+    environment:
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/16/bin
+      - LANG=en_US.utf8
+      - PGDATA=/var/lib/postgresql/data
+      - POSTGRES_USER=immich
+      - POSTGRES_PASSWORD=doki-immich-secret-pg
+      - POSTGRES_DB=immich
+    volumes:
+      - immich-db:/var/lib/postgresql/data
+    networks:
+      - immich-net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "immich"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and pub/sub
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: ["docker-entrypoint.sh", "redis-server", "--port", "6389", "--save", "60", "1", "--loglevel", "warning"]
+    environment:
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    volumes:
+      - immich-redis:/data
+    networks:
+      - immich-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Immich server - main API and web UI
+  server:
+    image: ghcr.io/immich-app/immich-server:release
+    restart: always
+    command: ["/bin/bash", "/usr/src/app/server/bin/start.sh"]
+    ports:
+      - "2283:3001"
+    volumes:
+      - immich-upload:/usr/src/app/upload
+      - immich-library:/usr/src/app/upload/library
+      - immich-thumbs:/usr/src/app/upload/thumbs
+      - immich-encoded:/usr/src/app/upload/encoded-video
+      - immich-profile:/usr/src/app/upload/profile
+    environment:
+      - IMMICH_HOST=0.0.0.0
+      - IMMICH_PORT=3001
+      - IMMICH_LOG_LEVEL=simple
+      - DB_HOSTNAME=db
+      - DB_USERNAME=immich
+      - DB_PASSWORD=doki-immich-secret-pg
+      - DB_DATABASE_NAME=immich
+      - DB_PORT=5433
+      - DB_VECTOR_EXTENSION=pgvector
+      - REDIS_HOSTNAME=redis
+      - REDIS_PORT=6389
+      - TYPESENSE_ENABLED=false
+    depends_on:
+      - db
+      - redis
+    networks:
+      - immich-net
+
+  # Machine learning service for face detection, object recognition
+  machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    restart: always
+    volumes:
+      - immich-ml-cache:/cache
+    environment:
+      - MACHINE_LEARNING_HOST=0.0.0.0
+      - MACHINE_LEARNING_PORT=3003
+      - MACHINE_LEARNING_LOG_LEVEL=simple
+      - MACHINE_LEARNING_CACHE_FOLDER=/cache
+      - MACHINE_LEARNING_MODEL_TTL=300
+      - MACHINE_LEARNING_MODEL_TTL_POLL_S=300
+      - MACHINE_LEARNING_REQUEST_THREADS=4
+      - MACHINE_LEARNING_WORKERS=1
+      - TRANSFORMERS_CACHE=/cache
+    networks:
+      - immich-net
+
+volumes:
+  immich-db:
+    driver: local
+  immich-redis:
+    driver: local
+  immich-upload:
+    driver: local
+  immich-library:
+    driver: local
+  immich-thumbs:
+    driver: local
+  immich-encoded:
+    driver: local
+  immich-profile:
+    driver: local
+  immich-ml-cache:
+    driver: local
+
+networks:
+  immich-net:
+    driver: bridge

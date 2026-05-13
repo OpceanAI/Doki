@@ -1,0 +1,27 @@
+# Dokifile - Open WebUI on Doki
+# Build:  doki build -f test/openwebui/Dokifile -t openwebui:doki .
+# Run:    doki run -d -p 3001:8080 -v openwebui-data:/app/backend/data \
+#           -e OLLAMA_BASE_URL=http://host.docker.internal:11434 openwebui:doki
+
+FROM ghcr.io/open-webui/open-webui:main
+
+# Custom Doki labels
+LABEL doki.app="open-webui"
+LABEL doki.description="Self-hosted AI chat interface"
+
+# Set default environment
+ENV WEBUI_HOST=0.0.0.0
+ENV WEBUI_PORT=8080
+ENV WEBUI_AUTH=True
+ENV ANONYMIZED_TELEMETRY=False
+ENV OLLAMA_BASE_URL=http://localhost:11434
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Expose web UI
+EXPOSE 8080
+
+# Default command
+CMD ["bash", "start.sh"]

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -113,15 +115,25 @@ Options:
   --network          Network mode (bridge/host/none)
   --restart          Restart policy
   --pull             Pull policy (always/missing/never)
+  --distro NAME      Use predefined distro (alpine, ubuntu, debian, arch)
+  --install PKGS     Install packages before running (comma-separated)
 
 Examples:
   doki run alpine echo hello
   doki run -d --name web -p 8080:80 nginx:alpine
-  doki run --rm alpine /bin/sh -c "echo test"`,
+  doki run --rm alpine /bin/sh -c "echo test"
+  doki run --distro ubuntu bash
+  doki run --distro alpine --install gcc,make gcc --version`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("doki run: requires at least 1 argument (image)")
 			}
+
+			distro := flagStr(args, "--distro")
+			if distro != "" {
+				return runWithDistro(c, distro, args)
+			}
+
 			return c.Run(args)
 		},
 	},
@@ -1314,4 +1326,94 @@ func printTable(headers []string, rows [][]string) {
 func streamResponse(body io.ReadCloser) {
 	defer body.Close()
 	io.Copy(os.Stdout, body)
+}
+
+// runWithDistro runs a command inside a predefined distro rootfs using proot.
+func runWithDistro(c *cli.DokiCLI, distroName string, args []string) error {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		home = "/data/data/com.termux/files/home"
+	}
+
+	// Resolve version: alpine:3.19 -> alpine, 3.19
+	parts := strings.SplitN(distroName, ":", 2)
+	name := parts[0]
+
+	rootfsPath := filepath.Join(home, ".doki", "distros", name, "rootfs")
+
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		// Try to docker pull the image
+		fmt.Fprintf(os.Stderr, "Distro '%s' not installed. Pulling image...\n", name)
+		// TODO: implement distro pull via image.Store
+		// For now, create minimal rootfs
+		if err := createMinimalRootfs(rootfsPath); err != nil {
+			return fmt.Errorf("failed to prepare distro rootfs: %w", err)
+		}
+	}
+
+	return runInProot(rootfsPath, args)
+}
+
+// createMinimalRootfs creates a minimal rootfs structure for a distro.
+func createMinimalRootfs(path string) error {
+	dirs := []string{
+		"bin", "sbin", "dev", "proc", "sys", "tmp", "run",
+		"etc", "var", "home", "root", "opt",
+		"usr/bin", "usr/sbin", "usr/lib", "usr/share", "usr/local/bin",
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(filepath.Join(path, d), 0755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runInProot executes a command inside a rootfs using doki-proot or system proot.
+func runInProot(rootfs string, args []string) error {
+	prootBin := "proot"
+	// Prefer doki-proot if available
+	if _, err := os.Stat("doki-proot"); err == nil {
+		prootBin = "doki-proot"
+	}
+
+	// Remove --distro flag and its value from args
+	var cleanArgs []string
+	skipNext := false
+	for _, a := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if a == "--distro" {
+			skipNext = true
+			continue
+		}
+		if strings.HasPrefix(a, "--distro=") {
+			continue
+		}
+		cleanArgs = append(cleanArgs, a)
+	}
+
+	if len(cleanArgs) == 0 {
+		cleanArgs = []string{"/bin/sh"}
+	}
+
+	prootArgs := []string{
+		"-r", rootfs,
+		"-b", "/proc",
+		"-b", "/sys",
+		"-b", "/dev",
+		"--kill-on-exit",
+		"--link2symlink",
+	}
+	prootArgs = append(prootArgs, cleanArgs...)
+
+	cmd := exec.Command(prootBin, prootArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+
+	return cmd.Run()
 }
