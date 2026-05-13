@@ -39,22 +39,6 @@ One binary. One API. Every platform.
 - **Runtime fixes:** Proot dispatch now wired, `ImageConfig.Env` inheritance, compose `ImageLayers` extraction, HTTP `WriteTimeout 30s→300s`.
 - **Immich:** Full stack running (PostgreSQL 18 + pgvector + cube + earthdistance, Redis 7, Immich Server v2.7.5).
 
-## What's New in v0.8
-
-This release contains **386+ fixes** and major stability improvements:
-
-- **Runtime:** Fixed Delete/Stop deadlocks, double Wait(), cgroups path to `/sys/fs/cgroup/doki`, all resource limits (NanoCpus, BlkioWeight, MemorySwap, OomKillDisable), goroutine leak, TOCTOU races.
-- **Tar extraction:** Whiteout files, device nodes, FIFOs, sparse files, xattrs/PAXRecords, setuid/setgid preservation, file ownership (Chown), mtime, gzip/bzip2/xz/zstd detection.
-- **Proot:** ENOSYS errors fixed (removed PROOT_NO_SECCOMP=1, uses native seccomp filter), QEMU fallback, container-relative LD_LIBRARY_PATH, consistent bind mounts.
-- **Volumes/Mounts:** Wired end-to-end in all 3 modes, ReadOnly rootfs, ShmSize propagation.
-- **Container lifecycle:** --init (tini), healthcheck via proot, --user, WorkingDir from image, restart policy with backoff, --entrypoint override.
-- **Logging:** Rotation (10MB/3 files), Docker multiplexed 8-byte frame streaming.
-- **Namespaces:** CLONE_NEWUSER for rootless, UID/GID mapping, pivot_root.
-- **Registry:** Multi-registry token auth, Basic auth, SHA256 verification, parallel downloads (3 concurrent), manifest cache.
-- **Builder:** RUN generates layers, COPY --from cross-stage, ARG/BUILDARG, build cache, .dockerignore, secrets.
-- **Compose:** Full spec support (networks, volumes, secrets, configs, healthcheck, profiles, env_file).
-- **API:** Streaming logs/stats, exec create/start separation, TLS + rate limiting (100 req/s) activated.
-
 ---
 
 </div>
