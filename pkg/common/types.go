@@ -393,6 +393,9 @@ func DefaultDaemonSocket() string {
 	if s := os.Getenv("DOKI_HOST"); s != "" {
 		return s
 	}
+	if s := os.Getenv("DOCKER_HOST"); s != "" {
+		return strings.TrimPrefix(s, "unix://")
+	}
 	socket := "/data/data/com.termux/files/usr/var/run/doki.sock"
 	if _, err := os.Stat(socket); err == nil {
 		return socket
