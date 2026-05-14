@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -438,7 +439,130 @@ func (c *Client) GetConfig(registry, name string, manifest *ManifestV2) ([]byte,
 }
 
 func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config []byte, layers map[string]io.Reader) error {
-	return fmt.Errorf("push not yet implemented in Doki")
+	configDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(config))
+
+	commonSources := []string{
+		"library/alpine", "library/ubuntu", "library/debian",
+		"library/centos", "library/fedora", "library/archlinux",
+	}
+
+	blobExists := func(digest string) bool {
+		u := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, name, digest)
+		resp, err := c.doAuthRequest("HEAD", u, nil, nil)
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}
+
+	tryCrossMount := func(digest, sourceRepo string) bool {
+		mountURL := fmt.Sprintf("https://%s/v2/%s/blobs/uploads/?mount=%s&from=%s",
+			registry, name, digest, sourceRepo)
+		resp, err := c.doAuthRequest("POST", mountURL, nil, nil)
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusAccepted
+	}
+
+	uploadBlob := func(digest string, data []byte) error {
+		initURL := fmt.Sprintf("https://%s/v2/%s/blobs/uploads/", registry, name)
+		resp, err := c.doAuthRequest("POST", initURL, nil, nil)
+		if err != nil {
+			return fmt.Errorf("initiate upload: %w", err)
+		}
+		location := resp.Header.Get("Location")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
+			return fmt.Errorf("initiate upload: status %d", resp.StatusCode)
+		}
+		if location == "" {
+			return fmt.Errorf("no upload location returned")
+		}
+
+		finalURL := fmt.Sprintf("%s&digest=%s", location, url.QueryEscape(digest))
+		uploadResp, err := c.doAuthRequest("PUT", finalURL, map[string]string{
+			"Content-Type":   "application/octet-stream",
+			"Content-Length": fmt.Sprintf("%d", len(data)),
+		}, bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("upload blob: %w", err)
+		}
+		uploadResp.Body.Close()
+		if uploadResp.StatusCode != http.StatusCreated {
+			return fmt.Errorf("upload blob: status %d", uploadResp.StatusCode)
+		}
+		return nil
+	}
+
+	// upload config blob
+	if !blobExists(configDigest) {
+		mounted := false
+		for _, src := range commonSources {
+			if tryCrossMount(configDigest, src) {
+				mounted = true
+				break
+			}
+		}
+		if !mounted {
+			if err := uploadBlob(configDigest, config); err != nil {
+				return fmt.Errorf("upload config: %w", err)
+			}
+		}
+	}
+
+	// upload layer blobs
+	for _, layer := range manifest.Layers {
+		if !blobExists(layer.Digest) {
+			mounted := false
+			for _, src := range commonSources {
+				if tryCrossMount(layer.Digest, src) {
+					mounted = true
+					break
+				}
+			}
+			if !mounted {
+				reader, ok := layers[layer.Digest]
+				if !ok {
+					return fmt.Errorf("layer data not provided for %s", layer.Digest)
+				}
+				layerData, err := io.ReadAll(reader)
+				if err != nil {
+					return fmt.Errorf("read layer %s: %w", layer.Digest, err)
+				}
+				expectedDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(layerData))
+				if expectedDigest != layer.Digest {
+					return fmt.Errorf("layer %s digest mismatch: expected %s got %s", layer.Digest, layer.Digest, expectedDigest)
+				}
+				if err := uploadBlob(layer.Digest, layerData); err != nil {
+					return fmt.Errorf("upload layer %s: %w", layer.Digest, err)
+				}
+			}
+		}
+	}
+
+	// upload manifest
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("marshal manifest: %w", err)
+	}
+	manifestURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, name, tag)
+	mediaType := "application/vnd.oci.image.manifest.v1+json"
+	resp, err := c.doAuthRequest("PUT", manifestURL, map[string]string{
+		"Content-Type": mediaType,
+	}, bytes.NewReader(manifestJSON))
+	if err != nil {
+		return fmt.Errorf("put manifest: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("put manifest: status %d body=%s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 func (c *Client) Close() {

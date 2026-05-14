@@ -42,6 +42,11 @@ type Server struct {
 	dnsSrv     *network.DNSServer
 	execStore  map[string]*common.ExecConfig
 	execMu     sync.RWMutex
+	authCreds  struct {
+		Username      string
+		Password      string
+		ServerAddress string
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -461,10 +466,35 @@ func (s *Server) handleSystemDf(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
-	// Placeholder - authentication token response.
+	var creds struct {
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		ServerAddress string `json:"serveraddress"`
+		IdentityToken string `json:"identitytoken"`
+	}
+	json.NewDecoder(r.Body).Decode(&creds)
+
+	if creds.Username == "" {
+		s.writeJSON(w, http.StatusOK, map[string]interface{}{
+			"Status":        "Login Succeeded",
+			"IdentityToken": "doki-token-anon-" + common.GenerateID(8),
+		})
+		return
+	}
+
+	if creds.ServerAddress == "" {
+		creds.ServerAddress = "https://index.docker.io/v1/"
+	}
+
+	s.authCreds.Username = creds.Username
+	s.authCreds.Password = creds.Password
+	s.authCreds.ServerAddress = creds.ServerAddress
+	s.image.SetRegistryAuth(creds.Username, creds.Password)
+
+	identityToken := "doki-token-" + common.GenerateID(16)
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"Status":        "Login Succeeded",
-		"IdentityToken": "doki-token-" + common.GenerateID(16),
+		"IdentityToken": identityToken,
 	})
 }
 
@@ -1541,7 +1571,42 @@ func (s *Server) handleImageHistory(w http.ResponseWriter, r *http.Request, id s
 }
 
 func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request, id string) {
-	s.writeError(w, http.StatusNotImplemented, "push not yet implemented in Doki")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	writeProgress := func(status, progress, detail string) {
+		msg := map[string]string{"status": status}
+		if progress != "" {
+			msg["progress"] = progress
+		}
+		if detail != "" {
+			msg["progressDetail"] = detail
+		}
+		json.NewEncoder(w).Encode(msg)
+		flusher.Flush()
+	}
+
+	record, err := s.image.Get(id)
+	if err != nil {
+		writeProgress("error", "image not found: "+id, "")
+		return
+	}
+	tag := id
+	if len(record.RepoTags) > 0 {
+		tag = record.RepoTags[0]
+	}
+
+	writeProgress("Pushing", "tag="+tag, "")
+	if err := s.image.Push(tag); err != nil {
+		writeProgress("error", "push failed: "+err.Error(), "")
+		return
+	}
+	writeProgress("Push complete", "tag="+tag, "")
 }
 
 func (s *Server) handleImageTag(w http.ResponseWriter, r *http.Request, id string) {
