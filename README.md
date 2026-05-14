@@ -152,7 +152,9 @@ curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/dokid-android-
 curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-compose-android-arm64   -o $PREFIX/bin/doki-compose
 curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-init-rust-android-arm64 -o $PREFIX/bin/doki-init
 curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-proot-android-arm64     -o $PREFIX/bin/doki-proot
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/proot-android-arm64          -o $PREFIX/bin/proot
 chmod +x $PREFIX/bin/doki*
+chmod +x $PREFIX/bin/proot
 ```
 
 **Pre-compiled binaries (Android/Termux ARMv7):**
@@ -164,7 +166,9 @@ curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/dokid-linux-ar
 curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-compose-linux-armv7   -o $PREFIX/bin/doki-compose
 curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-init-linux-armv7      -o $PREFIX/bin/doki-init
 curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-proot-android-armv7   -o $PREFIX/bin/doki-proot
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/proot-android-armv7        -o $PREFIX/bin/proot
 chmod +x $PREFIX/bin/doki*
+chmod +x $PREFIX/bin/proot
 ```
 
 **Build from source:**
