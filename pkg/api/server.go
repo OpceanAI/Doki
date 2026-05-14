@@ -1005,7 +1005,7 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 
 	flusher, _ := w.(http.Flusher)
 	for _, line := range lines {
-		s.writeLogLine(w, line, stdout, stderr, timestamps, sinceTs, untilTs)
+		s.writeLogLine(w, line, stdout, stderr, 1, timestamps, sinceTs, untilTs)
 	}
 	if flusher != nil {
 		flusher.Flush()
@@ -1044,7 +1044,7 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 				newLines := strings.Split(string(newContent[:n]), "\n")
 				for _, line := range newLines {
 					if line != "" {
-						s.writeLogLine(w, line, stdout, stderr, timestamps, sinceTs, untilTs)
+						s.writeLogLine(w, line, stdout, stderr, 1, timestamps, sinceTs, untilTs)
 					}
 				}
 				if flusher != nil {
@@ -1066,8 +1066,8 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 // writeLogLine writes a single log line in Docker multiplexed stream format.
 // Frame: [stream-type(1)][0][0][0][size(4, big-endian)][data]
 // Stream type: 1=stdout, 2=stderr, 0=stdin
-func (s *Server) writeLogLine(w io.Writer, line string, stdout, stderr bool, timestamps bool, sinceTs, untilTs int64) {
-	streamType := byte(1) // stdout
+func (s *Server) writeLogLine(w io.Writer, line string, stdout, stderr bool, streamType byte, timestamps bool, sinceTs, untilTs int64) {
+	// streamType: 1=stdout (default), 2=stderr
 
 	// Apply since/until filtering.
 	if timestamps {
