@@ -483,6 +483,29 @@ func (s *Store) Remove(idOrTag string) error {
 	}
 
 	os.RemoveAll(s.manifestPath(record.ID))
+
+	// Clean up layer blobs not shared with other images
+	if otherRecords, _ := s.listRecords(); len(otherRecords) <= 1 {
+		for _, layer := range record.Layers {
+			os.Remove(s.layerPath(layer))
+		}
+	} else {
+		// Check which layers are unique to this image
+		shared := make(map[string]bool)
+		for _, r := range otherRecords {
+			if r.ID == record.ID {
+				continue
+			}
+			for _, l := range r.Layers {
+				shared[l] = true
+			}
+		}
+		for _, layer := range record.Layers {
+			if !shared[layer] {
+				os.Remove(s.layerPath(layer))
+			}
+		}
+	}
 	return nil
 }
 
@@ -499,6 +522,10 @@ func (s *Store) Prune() ([]string, error) {
 	var removed []string
 	for _, record := range records {
 		os.RemoveAll(s.manifestPath(record.ID))
+		// Prune: delete ALL layer blobs since we're removing all images
+		for _, layer := range record.Layers {
+			os.Remove(s.layerPath(layer))
+		}
 		removed = append(removed, record.ID[:12])
 	}
 
