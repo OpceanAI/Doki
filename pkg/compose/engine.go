@@ -1089,11 +1089,13 @@ func (e *Engine) startService(name string) error {
 			cfg.RestartPolicy = common.RestartAlways
 		case "unless-stopped":
 			cfg.RestartPolicy = common.RestartUnlessStopped
-		case "on-failure", "on-failure:10":
-			cfg.RestartPolicy = common.RestartOnFailure
-			if strings.HasPrefix(svc.Restart, "on-failure:") {
-				if n, err := strconv.Atoi(strings.TrimPrefix(svc.Restart, "on-failure:")); err == nil {
-					cfg.RestartMaxRetries = n
+		default:
+			if strings.HasPrefix(svc.Restart, "on-failure") {
+				cfg.RestartPolicy = common.RestartOnFailure
+				if strings.HasPrefix(svc.Restart, "on-failure:") {
+					if n, err := strconv.Atoi(strings.TrimPrefix(svc.Restart, "on-failure:")); err == nil {
+						cfg.RestartMaxRetries = n
+					}
 				}
 			}
 		}
