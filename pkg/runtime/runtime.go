@@ -863,7 +863,9 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 			env = append(env, e)
 		}
 	}
-	for _, e := range cfg.Env {
+	// Validate env vars (filter invalid names, enforce size limits)
+	validEnv := common.ValidateEnv(cfg.Env)
+	for _, e := range validEnv {
 		env = append(env, e)
 	}
 	cmd.Env = env
@@ -1681,7 +1683,8 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 	env := os.Environ()
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
 	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
-	for _, e := range cfg.Env {
+	validEnv := common.ValidateEnv(cfg.Env)
+	for _, e := range validEnv {
 		env = append(env, e)
 	}
 	cmd.Env = env
