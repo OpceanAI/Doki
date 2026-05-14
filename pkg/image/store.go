@@ -2,6 +2,8 @@ package image
 
 import (
 	"archive/tar"
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -886,5 +888,64 @@ func (s *Store) Config(idOrTag string) (*Config, error) {
 
 // Push uploads an image to a registry.
 func (s *Store) Push(idOrTag string) error {
-	return fmt.Errorf("push not yet implemented in image store")
+	record, err := s.Get(idOrTag)
+	if err != nil {
+		return fmt.Errorf("get image: %w", err)
+	}
+	if record == nil {
+		return fmt.Errorf("image not found: %s", idOrTag)
+	}
+
+	var ref *registry.ImageRef
+	for _, t := range record.RepoTags {
+		if parsed, perr := registry.ParseImageRef(t); perr == nil {
+			ref = parsed
+			break
+		}
+	}
+	if ref == nil {
+		return fmt.Errorf("no valid repo tag found for image %s", idOrTag)
+	}
+
+	if record.Manifest == nil {
+		return fmt.Errorf("no manifest stored for image %s", idOrTag)
+	}
+
+	configData, err := json.Marshal(record.Config)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	layers := make(map[string]io.Reader)
+	for _, digest := range record.Layers {
+		f, err := os.Open(s.layerPath(digest))
+		if err != nil {
+			return fmt.Errorf("open layer %s: %w", digest, err)
+		}
+		defer f.Close()
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return fmt.Errorf("read layer %s: %w", digest, err)
+		}
+		layers[digest] = bytes.NewReader(data)
+	}
+
+	if err := s.registry.Push(ref.Registry, ref.Name, ref.Tag, record.Manifest, configData, layers); err != nil {
+		return fmt.Errorf("push: %w", err)
+	}
+
+	manifestDigest := fmt.Sprintf("%s@sha256:%x", ref.Name, sha256SumManifest(record.Manifest))
+	record.RepoDigests = append(record.RepoDigests, manifestDigest)
+	s.SaveRecord(record)
+
+	return nil
+}
+
+func sha256SumManifest(m *registry.ManifestV2) [32]byte {
+	data, _ := json.Marshal(m)
+	return sha256.Sum256(data)
+}
+
+func (s *Store) SetRegistryAuth(username, password string) {
+	s.registry.SetAuth(username, password)
 }

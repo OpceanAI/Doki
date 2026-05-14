@@ -69,8 +69,16 @@ services:
 	if e.file.Services["web"].Image != "nginx:alpine" {
 		t.Errorf("web.Image = %q, want nginx:alpine", e.file.Services["web"].Image)
 	}
-	if len(e.file.Services["web"].Ports) != 1 {
-		t.Errorf("len(web.Ports) = %d, want 1", len(e.file.Services["web"].Ports))
+	if ports, ok := e.file.Services["web"].Ports.([]interface{}); ok {
+		if len(ports) != 1 {
+			t.Errorf("len(web.Ports) = %d, want 1", len(ports))
+		}
+	} else if ports, ok := e.file.Services["web"].Ports.([]string); ok {
+		if len(ports) != 1 {
+			t.Errorf("len(web.Ports) = %d, want 1", len(ports))
+		}
+	} else {
+		t.Error("web.Ports is not a valid ports type")
 	}
 }
 

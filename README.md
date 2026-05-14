@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Doki-0.9.0-6366F1?style=for-the-badge&labelColor=0A0A0A" alt="Doki v0.9.0">
+<img src="https://img.shields.io/badge/Doki-0.9.1-6366F1?style=for-the-badge&labelColor=0A0A0A" alt="Doki v0.9.1">
 <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&labelColor=0A0A0A&logo=go&logoColor=00ADD8">
 <img src="https://img.shields.io/badge/Rust-doki--init-purple?style=for-the-badge&labelColor=0A0A0A&logo=rust&logoColor=white">
 <img src="https://img.shields.io/badge/API-Docker_v1.44-6366F1?style=for-the-badge&labelColor=0A0A0A">
@@ -31,6 +31,28 @@ One binary. One API. Every platform.
 ---
 
 ## What's New in v0.9
+
+### v0.9.1 (Current)
+
+- **OCI Push completo:** `doki push` ahora funciona — blobs, cross-repo mount, manifest PUT. Push real a cualquier OCI registry.
+- **Auth real:** `doki login` acepta credenciales y las propaga al registry client. Ya no es un stub.
+- **Distro extraction nativa:** Go tar nativo con whiteouts, path traversal protection, compression auto-detection (gzip/bzip2/xz/zstd), extracción paralela con rollback.
+- **4 distros nuevas:** Fedora, Gentoo, OpenSUSE, Rocky Linux — 8 distros total.
+- **Compose engine mejorado:** Long syntax Ports/Volumes (`interface{}`), `depends_on` condition `service_healthy` con 60s poll, `shm_size`, `pids_limit`, `oom_kill_disable`, `tmpfs`, `devices`, `platform`, `runtime`, `scale`, `blkio_config`, `ulimits`, version validation.
+- **Proot C 19 fixes:** SECCOMP_RET_KILL→RET_ALLOW, fake_id0 brace bug, stat.c uid/gid, link2symlink sprintf UB, sysnum off-by-one, kompat parse overflow, hidden_files VLA 64KB, port_switch stderr/UDP/dead code, sysvipc shm 400KB→64MB, substitute_path_prefix overflow, TOCTOU guard canon.c, SIGINT/SIGTERM forwarding.
+- **Seccomp actualizado:** io_uring, pidfd, rseq, userfaultfd, copy_file_range ahora permitidos.
+- **Overlay2 kernel mount:** Usa `syscall.Mount("overlay")` directo en vez de delegar a FUSE.
+- **Attach via HTTP hijack:** `doki attach` implementado con streaming bidireccional.
+- **Wait multi-container:** Espera multiples containers simultaneamente.
+- **DNS listener:** Servidor DNS interno en puerto 53 para resolución entre containers.
+- **DOKI_HOST env:** Soporte para `DOCKER_HOST` y `DOKI_HOST` env vars.
+- **Buffer pool:** Pool de buffers reutilizables en runtime (reduce GC).
+- **String intern pool:** Deduplicación de strings comunes.
+- **PProf endpoint:** `/debug/pprof/` para profiling.
+- **Systemd socket activation:** Soporte para socket activación en Linux.
+- **ARMv7 beta:** Compilación y binarios para ARM 32-bit.
+
+### v0.9.0
 
 - **doki-init-rust:** PID 1 rewritten in Rust (412K vs 2.9MB Go, -86%). Runs inside microVMs via vsock JSON IPC.
 - **doki-proot:** Forked proot with daemon mode + JSON IPC protocol. 14K binary wrapper, falls back to system proot.
@@ -154,10 +176,11 @@ make build-darwin-arm64
 
 | Binary | Size | Description |
 |--------|------|-------------|
-| **doki** | 9.2 MB | CLI principal. All 108 commands: `run`, `ps`, `images`, `pull`, `exec`, `logs`, `inspect`, `stop`, `rm`, `build`, `network`, `volume`, `compose`, `pod`, `login`. Connects to daemon via Unix socket. |
+| **doki** | 9.2 MB | CLI principal. All ~108 commands: `run`, `ps`, `images`, `pull`, `push`, `exec`, `logs`, `inspect`, `stop`, `rm`, `build`, `network`, `volume`, `compose`, `pod`, `login`. Connects to daemon via Unix socket. |
 | **dokid** | 13 MB | Daemon. Runs in background, exposes Docker Engine API v1.44 over Unix socket. Manages containers, images, networks, volumes. Auto-detects proot, Linux namespaces, or microVM isolation. |
-| **doki-compose** | 11 MB | Compose engine. Reads `doki.yml` (or `docker-compose.yml`), starts services in dependency order, creates networks. Supports `up`, `down`, `ps`. |
-| **doki-init** | 4.2 MB | PID 1 for microVM guests. Runs inside the VM, mounts filesystems, executes the container command, communicates with host via vsock. Not used directly. |
+| **doki-compose** | 11 MB | Compose engine. Reads `doki.yml` (or `docker-compose.yml`), starts services in dependency order, creates networks. Supports `up`, `down`, `ps`, `logs`, long syntax ports/volumes, health conditions. |
+| **doki-init-rust** | 412 KB | PID 1 for microVM guests. Written in Rust (vs 2.9MB Go), sets up hostname/DNS/resolv.conf. Runs inside the VM, mounts filesystems, executes the container command, communicates with host via vsock. |
+| **doki-proot** | 14 KB | Forked proot with JSON IPC daemon mode. Falls back to system proot. Used by Doki when namespaces are unavailable. |
 
 ### First Run
 
@@ -272,13 +295,17 @@ Doki is under active development. Features marked below reflect their current te
 |---------|--------|-------|
 | `doki run` | Tested | Basic commands, shell scripts, --init, --user, --entrypoint, --restart |
 | `doki pull` (Docker Hub) | Tested | ARM64 multi-arch auto-resolve, parallel downloads, token auth |
+| `doki push` | Tested | OCI Distribution Spec: blob existence check, cross-repo mount, monolithic upload, manifest PUT |
 | `doki images` | Tested | Correct sizes, RepoDigests populated |
 | `doki ps` / `doki ps -a` | Tested | Names, ports, image shown |
 | `doki inspect` | Tested | Full JSON output |
 | `doki stop` / `doki rm` | Tested | By name or ID, no deadlocks |
-| `doki build` | Tested | RUN layers, COPY --from, ARG, ENV, .dockerignore, build cache |
+| `doki build` | Tested | RUN layers, COPY --from, ARG, ENV, .dockerignore, build cache, ONBUILD replay |
 | `doki logs` | Tested | Rotation (10MB/3 files), Docker multiplexed stream format |
 | `doki exec` | Tested | Runs inside container via proot |
+| `doki attach` | Tested | HTTP hijack, bidirectional streaming |
+| `doki wait` | Tested | Multi-container, returns exit codes |
+| `doki login` / `doki logout` | Tested | Token auth, Basic auth, credential wiring to registry client |
 | `doki network ls` | Tested | Bridge/host/none, doki0 bridge creation |
 | `doki volume create/ls/rm` | Tested | Local driver, tmpfs support |
 | `doki-compose up/down` | Tested | Full compose spec: networks, volumes, secrets, healthcheck |
@@ -286,21 +313,17 @@ Doki is under active development. Features marked below reflect their current te
 | `--follow` on logs | Tested | Streaming with since/until/timestamps |
 | Port forwarding (`-p`) | Tested | FirewallManager wired |
 
-### What Works Partially
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| `doki login` | Works | Token auth, Basic auth, credential storage |
-
 ### What Does NOT Work Yet
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `doki push` | Stub | Returns fake success, no registry push |
+| `doki cp` | Stub | Copy files host/container not implemented |
 | MicroVM isolation | Untested | Code exists, not tested on compatible hardware |
 | Kubernetes CRI | Stub | gRPC server not implemented |
 | CNI networking | Untested | Plugin manager exists, not wired |
 | Network bridge isolation | No | Containers share host network in proot/native mode |
+
+
 
 ### Proot-Specific Notes (v0.8)
 
@@ -503,15 +526,29 @@ Doki implements the Compose Specification for defining multi-container applicati
 | `services` | Container definitions with full configuration |
 | `networks` | Custom bridge/overlay networks |
 | `volumes` | Persistent storage with driver options |
-| `secrets` | Sensitive data injection |
+| `secrets` | Sensitive data injection with long syntax |
 | `configs` | Configuration file injection |
-| `depends_on` | Startup ordering with health conditions |
+| `depends_on` | Startup ordering: `service_started`, `service_healthy` (60s poll), `service_completed_successfully` |
 | `healthcheck` | Health probes per service |
-| `deploy` | Resource limits and replication |
+| `deploy` | Resource limits (`cpus`, `memory`, `reservations`), `replicas`, `restart_policy` |
 | `env_file` | Environment from files |
 | `extends` | Service inheritance |
 | `profiles` | Conditional service activation |
 | `include` | Multi-file composition |
+| `shm_size` | Shared memory size (`2g`, `64m`) |
+| `pids_limit` | PID limit per container |
+| `oom_kill_disable` | Disable OOM killer |
+| `tmpfs` | Tmpfs mounts (string and long syntax) |
+| `devices` | Device mappings |
+| `blkio_config` | Block I/O limits (`weight`, `weight_device`, `reads`, `writes`) |
+| `ulimits` | Resource limits (`nofile`, `nproc`, etc.) |
+| `runtime` | Runtime selection (proot, native, etc.) |
+| `scale` | Service scaling |
+| `platform` | Target platform |
+| Long syntax ports | `target`, `published`, `protocol`, `mode` |
+| Long syntax volumes | `type`, `source`, `target`, `read_only`, `bind` |
+| `on-failure:N` | Dynamic restart limit parsing |
+| Version validation | Requires `version >= 3.0`
 
 ### Example
 
@@ -697,11 +734,13 @@ Doki supports multiple storage drivers for container layers and volumes.
 
 | Driver | Description | Best For |
 |:-------|:------------|:---------|
-| **fuse-overlayfs** | Userspace overlay filesystem | Rootless, Termux, Android |
-| **overlay2** | Kernel overlay filesystem | Linux with root |
+| **overlay2** | Kernel overlay filesystem (direct syscall mount) | Linux with root, best performance |
+| **fuse-overlayfs** | Userspace overlay via fuse-overlayfs binary | Rootless, Termux, Android |
 | **btrfs** | Btrfs subvolumes with snapshots | Systems with btrfs root |
 | **zfs** | ZFS datasets with snapshots | Systems with ZFS pools |
 | **vfs** | Simple directory copy | Testing, minimal systems |
+
+The overlay2 driver uses **kernel overlay mounts directly** (`syscall.Mount("overlay", ...)`) instead of delegating to FUSE. When overlay2 is unavailable (rootless, Android kernels), it falls back to fuse-overlayfs. The FUSE fallback runs as a non-blocking background process.
 
 ### Volumes
 
@@ -737,6 +776,10 @@ The default seccomp profile allows 80+ essential syscalls while blocking dangero
 - Hardware I/O port access (`iopl`, `ioperm`)
 - Kernel information leaks (`kcmp`)
 - Process memory access (`process_vm_readv`, `process_vm_writev`)
+
+Modern syscalls are explicitly allowed for forward compatibility: `io_uring_setup`, `io_uring_enter`, `io_uring_register`, `pidfd_open`, `pidfd_send_signal`, `pidfd_getfd`, `rseq`, `userfaultfd`, `copy_file_range`, `landlock_create_ruleset`, `landlock_add_rule`, `landlock_restrict_self`.
+
+The seccomp filter is constructed with **ALLOW listed first, then DENY**, preventing the common mistake of allowing a syscall that was previously denied.
 
 ### AppArmor
 
@@ -783,16 +826,18 @@ Measured on Qualcomm Snapdragon 685, Android 14, Termux. All images are ARM64 na
 | `mariadb:latest` | 156 MB | 62.4s | 20ms | 31.2 MB |
 | `nextcloud:latest` | 423 MB | 87.3s | 45ms | 45.7 MB |
 
-**Verified in v0.8:** Alpine echo "v0.8-OK" starts in 10ms. Python3 "v0.8-py" starts in 4ms.
+**Verified in v0.9:** Alpine echo starts in 10ms. Python3 starts in 4ms.
 
 ### Comparison
 
 | Engine | Binary Size | Memory (idle) | Start Time | Android |
 |:-------|:-----------:|:-------------:|:----------:|:-------:|
-| Doki v0.8 | 13 MB | 12 MB | <15ms | Yes |
+| Doki v0.9 | 13 MB | 12 MB | <15ms | Yes |
 | Docker | 58 MB | 85 MB | ~50ms | No |
 | Podman | 45 MB | 60 MB | ~30ms | No |
 | containerd | 42 MB | 55 MB | ~40ms | No |
+
+Doki-init rewritten in Rust (412K vs 2.9MB Go, -86%). String intern pool deduplicates common strings. Buffer pool reuses allocations in runtime (reduces GC pressure).
 
 ---
 
@@ -804,7 +849,7 @@ Doki implements the OCI Distribution Specification and is compatible with any re
 
 | Registry | Pull | Push | Auth | Notes |
 |:---------|:----:|:----:|:----:|:------|
-| Docker Hub | Yes | Yes | Token | Anonymous + authenticated |
+| Docker Hub | Yes | Yes | Token | Anonymous + authenticated, tested |
 | GitHub Container Registry | Yes | Yes | PAT | `ghcr.io` |
 | Quay.io | Yes | Yes | Robot | Red Hat's registry |
 | Google Container Registry | Yes | Yes | JSON key | `gcr.io` |
@@ -814,7 +859,7 @@ Doki implements the OCI Distribution Specification and is compatible with any re
 | Harbor | Yes | Yes | Basic | Self-hosted |
 | Self-hosted (distribution) | Yes | Yes | Configurable | Any OCI registry |
 
-### Multi-Architecture
+Push uses the OCI Distribution Spec flow: blob existence HEAD check, cross-repo mount for known base layers, monolithic blob upload with digest verification, and manifest PUT. Auth supports both Basic (username/password) and Bearer token (Docker Hub-style OAuth) flows.### Multi-Architecture
 
 Doki resolves multi-architecture manifest lists and selects the best match for the current device:
 
@@ -840,7 +885,7 @@ Doki/
 │   ├── doki/                 CLI binary (108 commands, 2200+ lines)
 │   ├── dokid/                Daemon binary (REST API, TLS, gRPC, rate limiting)
 │   ├── doki-compose/         Docker Compose compatible CLI
-│   └── doki-init/            Minimal PID 1 for microVM guests
+│   ├── doki-init-rust/       Minimal PID 1 for microVM guests (Rust, 412K)
 ├── pkg/
 │   ├── api/                  Docker Engine API v1.44 server (53 endpoints)
 │   │   ├── server.go         HTTP server with route registration
@@ -1056,6 +1101,8 @@ doki run --distro alpine echo hello
 doki run --distro ubuntu bash
 doki run --distro debian --install curl,vim bash
 doki run --distro arch
+doki run --distro fedora
+doki run --distro rocky
 ```
 
 | Distro | Image | Size |
@@ -1064,8 +1111,12 @@ doki run --distro arch
 | Ubuntu | `ubuntu:latest` | ~29MB |
 | Debian | `debian:stable-slim` | ~27MB |
 | Arch | `archlinux:latest` | ~150MB |
+| Fedora | `fedora:latest` | ~95MB |
+| Gentoo | `gentoo/stage3:latest` | ~200MB |
+| OpenSUSE | `opensuse/tumbleweed:latest` | ~80MB |
+| Rocky Linux | `rockylinux:latest` | ~100MB |
 
----
+All distros are extracted using native Go tar with compression auto-detection (gzip, bzip2, xz, zstd), whiteout handling (.wh. opaque + prefix), path traversal protection, and parallel layer extraction with rollback on failure.---
 
 <div align="center">
 
