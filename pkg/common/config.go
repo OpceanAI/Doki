@@ -2,9 +2,11 @@ package common
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 )
 
 const (
@@ -112,4 +114,27 @@ func isMacOS() bool {
 
 func isLinux() bool {
 	return goruntime.GOOS == "linux"
+}
+
+// HasSystemd checks if the system uses systemd as init.
+func HasSystemd() bool {
+	_, err := os.Stat("/run/systemd/system")
+	return err == nil
+}
+
+// SystemdListenFDs returns file descriptors passed by systemd socket activation.
+func SystemdListenFDs() []*os.File {
+	pid, _ := strconv.Atoi(os.Getenv("LISTEN_PID"))
+	if pid != os.Getpid() {
+		return nil
+	}
+	nfds, _ := strconv.Atoi(os.Getenv("LISTEN_FDS"))
+	if nfds <= 0 {
+		return nil
+	}
+	fds := make([]*os.File, nfds)
+	for i := 0; i < nfds; i++ {
+		fds[i] = os.NewFile(uintptr(3+i), fmt.Sprintf("systemd-fd-%d", i))
+	}
+	return fds
 }
