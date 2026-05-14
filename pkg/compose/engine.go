@@ -1423,6 +1423,30 @@ func toEnvSlice(v interface{}) []string {
 // parseVolume parses a volume specification string into a Mount.
 // Formats: "source:target:mode", "target", "volume_name:/target", etc.
 func parseVolume(spec, projectDir string) common.Mount {
+	// Long syntax: {type: volume, source: ..., target: ..., read_only: true}
+	if strings.HasPrefix(strings.TrimSpace(spec), "{") {
+		var v struct {
+			Type     string `yaml:"type"`
+			Source   string `yaml:"source"`
+			Target   string `yaml:"target"`
+			ReadOnly bool   `yaml:"read_only"`
+		}
+		if err := yaml.Unmarshal([]byte(spec), &v); err == nil && v.Target != "" {
+			mountType := common.MountBind
+			if v.Type == "volume" {
+				mountType = common.MountVolume
+			} else if v.Type == "tmpfs" {
+				mountType = common.MountTmpfs
+			}
+			return common.Mount{
+				Type:     mountType,
+				Source:   v.Source,
+				Target:   v.Target,
+				ReadOnly: v.ReadOnly,
+			}
+		}
+	}
+	// Short syntax: src:dst:mode
 	parts := strings.Split(spec, ":")
 	mnt := common.Mount{Type: common.MountBind}
 
