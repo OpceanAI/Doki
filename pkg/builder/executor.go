@@ -3,6 +3,7 @@ package builder
 import (
 	"archive/tar"
 	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/image"
@@ -372,7 +374,8 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 }
 
 func (b *Builder) downloadAdd(url, destPath string) error {
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
@@ -420,6 +423,26 @@ func extractArchive(archivePath, destDir string) error {
 		}
 		defer gzReader.Close()
 		reader = gzReader
+	} else if strings.HasSuffix(name, ".bz2") || strings.HasSuffix(name, ".tar.bz2") {
+		reader = bzip2.NewReader(f)
+	} else if strings.HasSuffix(name, ".xz") || strings.HasSuffix(name, ".txz") || strings.HasSuffix(name, ".tar.xz") {
+		cmd := exec.Command("xz", "-dc")
+		cmd.Stdin = f
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("xz decompress: %w", err)
+		}
+		reader = &out
+	} else if strings.HasSuffix(name, ".zst") || strings.HasSuffix(name, ".tar.zst") {
+		cmd := exec.Command("zstd", "-dc")
+		cmd.Stdin = f
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("zstd decompress: %w", err)
+		}
+		reader = &out
 	}
 
 	return ExtractTar(reader, destDir)

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
 )
@@ -55,10 +56,16 @@ func (o *OverlayFS) mountFuseOverlayFS(lowerDirs []string, upperDir, workDir, ta
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("fuse-overlayfs mount: %w", err)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("fuse-overlayfs start: %w", err)
 	}
+	// fuse-overlayfs daemonizes or stays in foreground — run in background
+	go func() {
+		cmd.Wait()
+	}()
 
+	// Give it a moment to mount
+	time.Sleep(100 * time.Millisecond)
 	return nil
 }
 

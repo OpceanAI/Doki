@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/OpceanAI/Doki/pkg/common"
 )
@@ -292,23 +293,28 @@ func (d *Overlay2Driver) Name() string {
 }
 
 func (d *Overlay2Driver) Get(id, mountLabel string) (string, error) {
-	return (&FuseOverlayFSDriver{
-		root:     d.root,
-		layerDir: d.layerDir,
-		mergeDir: d.mergeDir,
-		upperDir: d.upperDir,
-		workDir:  d.workDir,
-	}).Get(id, mountLabel)
+	lowerDir := filepath.Join(d.layerDir, id)
+	upperDir := filepath.Join(d.upperDir, id)
+	workDir := filepath.Join(d.workDir, id)
+	mergeDir := filepath.Join(d.mergeDir, id)
+
+	for _, dir := range []string{upperDir, workDir, mergeDir} {
+		os.MkdirAll(dir, 0755)
+	}
+
+	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+	if err := syscall.Mount("overlay", mergeDir, "overlay", 0, opts); err != nil {
+		return "", fmt.Errorf("overlay mount: %w", err)
+	}
+	return mergeDir, nil
 }
 
 func (d *Overlay2Driver) Put(id, mountLabel string) (string, error) {
-	return (&FuseOverlayFSDriver{
-		root:     d.root,
-		layerDir: d.layerDir,
-		mergeDir: d.mergeDir,
-		upperDir: d.upperDir,
-		workDir:  d.workDir,
-	}).Put(id, mountLabel)
+	mergeDir := filepath.Join(d.mergeDir, id)
+	if err := syscall.Unmount(mergeDir, 0); err != nil {
+		return "", fmt.Errorf("overlay unmount: %w", err)
+	}
+	return mergeDir, nil
 }
 
 func (d *Overlay2Driver) Exists(id string) bool {

@@ -147,6 +147,7 @@ type Builder struct {
 	cacheDir      string
 	secrets       map[string]string
 	dockerignore  *Dockerignore
+	noCache       bool
 }
 
 // NewBuilder creates a new image builder.
@@ -455,6 +456,9 @@ func (b *Builder) instructionHash(inst *Instruction, envMap map[string]string) s
 }
 
 func (b *Builder) checkCache(inst *Instruction, envMap map[string]string) (string, bool) {
+	if b.noCache {
+		return "", false
+	}
 	hash := b.instructionHash(inst, envMap)
 	cacheDir := b.ensureCacheDir()
 	cachePath := filepath.Join(cacheDir, hash+".tar")
@@ -547,6 +551,7 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 	if b.secrets == nil {
 		b.secrets = make(map[string]string)
 	}
+	b.noCache = cfg.NoCache
 
 	// Handle context tar
 	contextDir := cfg.Context
