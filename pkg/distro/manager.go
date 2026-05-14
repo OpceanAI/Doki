@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -131,13 +132,28 @@ func (m *DistroManager) GetRootfsPath(name string) string {
 
 func (m *DistroManager) extractRootfs(img interface{}, target string) error {
 	common.EnsureDir(target)
-	// TODO: Extract OCI layers to target directory
-	// For now, creates the directory structure
+	// Extract OCI image layers to target directory
+	if record, ok := img.(*image.ImageRecord); ok {
+		layers, _ := m.imageStore.GetLayerPaths(record.ID)
+		for _, layerPath := range layers {
+			if err := extractLayer(layerPath, target); err != nil {
+				return fmt.Errorf("extract layer %s: %w", filepath.Base(layerPath), err)
+			}
+		}
+		return nil
+	}
+	// Fallback: minimal directory structure
 	dirs := []string{"bin", "sbin", "dev", "proc", "sys", "tmp", "etc", "var", "run", "usr/bin", "usr/lib"}
 	for _, dir := range dirs {
 		common.EnsureDir(filepath.Join(target, dir))
 	}
 	return nil
+}
+
+func extractLayer(tarPath, dest string) error {
+	cmd := exec.Command("tar", "-xf", tarPath, "-C", dest, "--no-same-owner")
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func (m *DistroManager) saveMetadata(name string, meta *InstalledDistro) error {
