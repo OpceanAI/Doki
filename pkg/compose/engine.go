@@ -237,6 +237,11 @@ func (e *Engine) Load(path string) error {
 
 	e.file = &file
 
+	// Validate compose file version
+	if file.Version != "" && file.Version < "3.0" {
+		return fmt.Errorf("unsupported compose file version: %s (requires >= 3.0)", file.Version)
+	}
+
 	// Y24: Variable interpolation.
 	e.interpolateFile(e.file)
 
