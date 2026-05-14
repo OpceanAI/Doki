@@ -116,6 +116,27 @@ func isLinux() bool {
 	return goruntime.GOOS == "linux"
 }
 
+// AppDataDir returns the platform-specific data directory.
+func AppDataDir() string {
+	if isMacOS() {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, "Library", "Application Support", "doki")
+	}
+	if isAndroid() {
+		return "/data/data/com.termux/files/usr/var/lib/doki"
+	}
+	return "/var/lib/doki"
+}
+
+// LogDir returns the platform-specific log directory.
+func LogDir() string {
+	if isMacOS() {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, "Library", "Logs", "doki")
+	}
+	return "/var/log/doki"
+}
+
 // HasSystemd checks if the system uses systemd as init.
 func HasSystemd() bool {
 	_, err := os.Stat("/run/systemd/system")
