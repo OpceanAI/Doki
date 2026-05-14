@@ -163,6 +163,12 @@ func autoDetectVMM(cfg *VMMConfig) (VMM, error) {
 			return vmm, nil
 		}
 	}
+	// 3. Try QEMU (universal fallback).
+	if _, err := exec.LookPath("qemu-system-aarch64"); err == nil {
+		if vmm, err := createQEMU(cfg); err == nil {
+			return vmm, nil
+		}
+	}
 	return nil, fmt.Errorf("no compatible VMM found on this system")
 }
 
