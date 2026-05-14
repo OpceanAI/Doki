@@ -47,7 +47,12 @@ build-windows:
 	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -o bin/windows/doki-compose.exe ./cmd/doki-compose
 	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -o bin/windows/doki-init.exe ./cmd/doki-init
 
-build-all: build-android build-linux build-linux-arm64 build-darwin build-darwin-arm64 build-windows
+build-all: build-android build-linux build-linux-arm64 build-darwin build-darwin-arm64 build-windows build-armv7
+
+build-armv7:
+	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/doki ./cmd/doki
+	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/dokid ./cmd/dokid
+	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/doki-compose ./cmd/doki-compose
 
 test:
 	$(GO) test ./...

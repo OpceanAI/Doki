@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 )
 
 const (
@@ -93,4 +94,22 @@ func NetworkDir() string {
 // RuntimeDir returns the Doki runtime directory.
 func RuntimeDir() string {
 	return filepath.Join(DataDir(), "runtimes")
+}
+
+// OSType returns the operating system type.
+func OSType() string {
+	return goruntime.GOOS
+}
+
+func isAndroid() bool {
+	_, err := os.Stat("/system/build.prop")
+	return err == nil
+}
+
+func isMacOS() bool {
+	return goruntime.GOOS == "darwin"
+}
+
+func isLinux() bool {
+	return goruntime.GOOS == "linux"
 }
