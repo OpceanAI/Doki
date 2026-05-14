@@ -255,14 +255,61 @@ func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 }
 
 func (rt *Runtime) extractLayers(rootfsDir string, layers []string) error {
+	if len(layers) == 0 {
+		return nil
+	}
+
+	// Parallel extraction: max 3 concurrent goroutines
+	sem := make(chan struct{}, 3)
+	errCh := make(chan error, len(layers))
+	var wg sync.WaitGroup
+
+	// Track extracted layers for rollback
+	extracted := make([]string, 0, len(layers))
+	var mu sync.Mutex
+
 	for i, layerPath := range layers {
 		if !common.PathExists(layerPath) {
 			continue
 		}
-		if err := extractTarGz(layerPath, rootfsDir); err != nil {
-			return fmt.Errorf("layer %d (%s): %w", i, filepath.Base(layerPath), err)
+		wg.Add(1)
+		go func(idx int, path string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if err := extractTarGz(path, rootfsDir); err != nil {
+				errCh <- fmt.Errorf("layer %d (%s): %w", idx, filepath.Base(path), err)
+				return
+			}
+			mu.Lock()
+			extracted = append(extracted, path)
+			mu.Unlock()
+		}(i, layerPath)
+	}
+	wg.Wait()
+	close(errCh)
+
+	// Collect first error
+	var firstErr error
+	for err := range errCh {
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
+
+	// C13: Rollback on partial extraction failure
+	if firstErr != nil {
+		for _, lp := range extracted {
+			// Remove files that were successfully extracted
+			// from this layer by re-extracting with --diff or simple cleanup
+			_ = lp // In-place rollback not fully implemented yet
+		}
+		// Clean up partial rootfs
+		os.RemoveAll(rootfsDir)
+		return firstErr
+	}
+
 	return nil
 }
 
@@ -295,9 +342,25 @@ func extractTarGz(tarPath, dest string) error {
 	case n >= 2 && magic[0] == 0x42 && magic[1] == 0x5a:
 		decompressed = bzip2.NewReader(f)
 	case n >= 4 && magic[0] == 0xfd && magic[1] == 0x37 && magic[2] == 0x7a && magic[3] == 0x58:
-		return fmt.Errorf("tar: xz compression not supported")
+		// xz decompression via xz command
+		xzCmd := exec.Command("xz", "-dc")
+		xzCmd.Stdin = f
+		var xzOut bytes.Buffer
+		xzCmd.Stdout = &xzOut
+		if err := xzCmd.Run(); err != nil {
+			return fmt.Errorf("tar: xz decompression failed: %w", err)
+		}
+		decompressed = &xzOut
 	case n >= 4 && magic[0] == 0x28 && magic[1] == 0xb5 && magic[2] == 0x2f && magic[3] == 0xfd:
-		return fmt.Errorf("tar: zstd compression not supported")
+		// zstd decompression via zstd command
+		zstdCmd := exec.Command("zstd", "-dc")
+		zstdCmd.Stdin = f
+		var zstdOut bytes.Buffer
+		zstdCmd.Stdout = &zstdOut
+		if err := zstdCmd.Run(); err != nil {
+			return fmt.Errorf("tar: zstd decompression failed: %w", err)
+		}
+		decompressed = &zstdOut
 	default:
 		decompressed = f
 	}
@@ -325,15 +388,23 @@ func extractTarGz(tarPath, dest string) error {
 		// C1: Whiteout files - OCI layers use .wh.<filename> to mark deleted files.
 		baseName := filepath.Base(hdr.Name)
 		if strings.HasPrefix(baseName, ".wh.") {
+			// Opaque whiteout: .wh..wh..opq clears the entire directory
+			if baseName == ".wh..wh..opq" {
+				opqDir := filepath.Clean(filepath.Join(dest, filepath.Dir(hdr.Name)))
+				if strings.HasPrefix(opqDir, cleanDest+string(os.PathSeparator)) || opqDir == cleanDest {
+					entries, _ := os.ReadDir(opqDir)
+					for _, e := range entries {
+						os.RemoveAll(filepath.Join(opqDir, e.Name()))
+					}
+				}
+				continue
+			}
 			whTarget := filepath.Clean(filepath.Join(dest, filepath.Dir(hdr.Name), baseName[4:]))
 			if strings.HasPrefix(whTarget, cleanDest+string(os.PathSeparator)) || whTarget == cleanDest {
 				os.RemoveAll(whTarget)
 			}
 			continue
 		}
-
-		// C13: Rollback on partial extraction failure is not implemented.
-		// A failed layer extraction will leave partial state in the rootfs.
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
