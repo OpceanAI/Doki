@@ -538,6 +538,41 @@ func (s *Store) Exists(idOrTag string) bool {
 	return err == nil
 }
 
+// StartGC starts periodic garbage collection of unused blobs.
+func (s *Store) StartGC(interval time.Duration, maxAge time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.cleanupExpiredLayers(maxAge)
+		}
+	}()
+}
+
+func (s *Store) cleanupExpiredLayers(maxAge time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, _ := s.listRecords()
+	activeLayers := make(map[string]bool)
+	for _, r := range records {
+		for _, l := range r.Layers {
+			activeLayers[l] = true
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(s.root, "layers"))
+	for _, e := range entries {
+		layerDigest := e.Name()
+		if !activeLayers[layerDigest] {
+			layerPath := filepath.Join(s.root, "layers", layerDigest)
+			if info, err := os.Stat(layerPath); err == nil {
+				if time.Since(info.ModTime()) > maxAge {
+					os.Remove(layerPath)
+				}
+			}
+		}
+	}
+}
+
 // Inspect returns the full image config.
 func (s *Store) Inspect(idOrTag string) (*Config, error) {
 	record, err := s.Get(idOrTag)

@@ -2,10 +2,13 @@ package network
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 )
 
 // CNIPlugin represents a CNI (Container Network Interface) plugin.
@@ -239,13 +242,107 @@ func (f *FirewallManager) removeIptablesPortMapping(containerIP string, hostPort
 
 // DNSServer provides internal DNS resolution for containers.
 type DNSServer struct {
-	entries map[string]string // container name → IP
+	entries map[string]string
 	mu      sync.RWMutex
+	conn    *net.UDPConn
+	done    chan struct{}
 }
 
 // NewDNSServer creates a DNS server.
 func NewDNSServer() *DNSServer {
-	return &DNSServer{entries: make(map[string]string)}
+	return &DNSServer{
+		entries: make(map[string]string),
+		done:    make(chan struct{}),
+	}
+}
+
+func (d *DNSServer) Start(addr string) error {
+	var err error
+	d.conn, err = net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(addr), Port: 53})
+	if err != nil {
+		return err
+	}
+	go d.serve()
+	return nil
+}
+
+func (d *DNSServer) serve() {
+	buf := make([]byte, 512)
+	for {
+		select {
+		case <-d.done:
+			return
+		default:
+		}
+		d.conn.SetReadDeadline(time.Now().Add(time.Second))
+		n, clientAddr, err := d.conn.ReadFromUDP(buf)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue
+			}
+			continue
+		}
+		go d.handleQuery(buf[:n], clientAddr)
+	}
+}
+
+func (d *DNSServer) handleQuery(query []byte, clientAddr *net.UDPAddr) {
+	if len(query) < 13 {
+		return
+	}
+	// Extract domain name from DNS query (simple, non-recursive)
+	var domain strings.Builder
+	offset := 12
+	for offset < len(query) {
+		length := int(query[offset])
+		if length == 0 {
+			break
+		}
+		offset++
+		if domain.Len() > 0 {
+			domain.WriteByte('.')
+		}
+		domain.Write(query[offset : offset+length])
+		offset += length
+	}
+	name := domain.String()
+
+	d.mu.RLock()
+	ip, ok := d.entries[name]
+	d.mu.RUnlock()
+
+	if !ok {
+		return // NXDOMAIN (silent drop)
+	}
+
+	// Build response
+	response := make([]byte, 512)
+	copy(response, query[:2])                          // Transaction ID
+	response[2] = 0x81; response[3] = 0x80             // Flags: response, no error
+	response[4] = 0x00; response[5] = 0x01             // Questions: 1
+	response[6] = 0x00; response[7] = 0x01             // Answers: 1
+	copy(response[8:12], query[4:8])                    // Authority/Additional: 0
+	copy(response[12:], query[12:offset])               // Original question
+	answerStart := offset + 5                          // Skip question + null
+	response[answerStart-5+1] = 0x00; response[answerStart-5+3] = 0x01 // Type A
+	response[answerStart-5+5] = 0xC0; response[answerStart-5+6] = 0x0C // Pointer to name
+	response[answerStart-5+7] = 0x00; response[answerStart-5+8] = 0x01 // Type A
+	response[answerStart-5+9] = 0x00; response[answerStart-5+10] = 0x01 // Class IN
+	ttl := answerStart
+	response[ttl] = 0; response[ttl+1] = 0; response[ttl+2] = 0; response[ttl+3] = 60 // TTL 60s
+	response[ttl+4] = 0; response[ttl+5] = 4 // Data length
+	parsedIP := net.ParseIP(ip).To4()
+	if parsedIP != nil {
+		copy(response[ttl+6:], parsedIP)
+	}
+	d.conn.WriteToUDP(response[:ttl+10], clientAddr)
+}
+
+func (d *DNSServer) Stop() {
+	close(d.done)
+	if d.conn != nil {
+		d.conn.Close()
+	}
 }
 
 // AddEntry adds a DNS entry.
