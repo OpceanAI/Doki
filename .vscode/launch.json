@@ -1,0 +1,63 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Doki Build",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/doki",
+      "args": ["--help"],
+      "env": {
+        "CGO_ENABLED": "1"
+      }
+    },
+    {
+      "name": "Dokid Build",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/dokid",
+      "args": [],
+      "env": {
+        "CGO_ENABLED": "1"
+      }
+    },
+    {
+      "name": "Doki-Compose Build",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/doki-compose",
+      "args": ["--help"],
+      "env": {
+        "CGO_ENABLED": "1"
+      }
+    },
+    {
+      "name": "Test Package",
+      "type": "go",
+      "request": "launch",
+      "mode": "test",
+      "program": "${workspaceFolder}/pkg/${selectedPackage}",
+      "env": {
+        "CGO_ENABLED": "1"
+      }
+    },
+    {
+      "name": "Attach to Process",
+      "type": "go",
+      "request": "attach",
+      "mode": "remote",
+      "remotePath": "",
+      "port": 2345,
+      "host": "localhost"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "All Binaries",
+      "configurations": ["Doki Build", "Dokid Build", "Doki-Compose Build"]
+    }
+  ]
+}

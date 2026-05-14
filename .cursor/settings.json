@@ -1,0 +1,27 @@
+{
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": "source.organizeImports",
+  "go.toolsManagement.autoUpdate": true,
+  "go.useLanguageServer": true,
+  "go.testFlags": ["-v", "-race"],
+  "go.lintOnSave": "package",
+  "go.formatTool": "gofmt",
+  "files.associations": {
+    "*.md": "markdown",
+    "Dokifile": "dockerfile",
+    "*.yml": "yaml",
+    "*.yaml": "yaml"
+  },
+  "terminal.integrated.env.linux": {
+    "GO111MODULE": "on",
+    "CGO_ENABLED": "1"
+  },
+  "files.exclude": {
+    "**/.git": true,
+    "**/bin/": true
+  },
+  "search.exclude": {
+    "**/vendor": true,
+    "**/bin": true
+  }
+}

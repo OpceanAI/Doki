@@ -1,0 +1,91 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build All",
+      "type": "shell",
+      "command": "go build -o /tmp/doki ./cmd/doki && go build -o /tmp/dokid ./cmd/dokid && go build -o /tmp/doki-compose ./cmd/doki-compose",
+      "group": "build",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "Build doki",
+      "type": "shell",
+      "command": "go build -o bin/doki ./cmd/doki",
+      "group": "build",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "Build dokid",
+      "type": "shell",
+      "command": "go build -o bin/dokid ./cmd/dokid",
+      "group": "build",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "Build doki-compose",
+      "type": "shell",
+      "command": "go build -o bin/doki-compose ./cmd/doki-compose",
+      "group": "build",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "Test All",
+      "type": "shell",
+      "command": "go test ./pkg/...",
+      "group": "test",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "Test Runtime",
+      "type": "shell",
+      "command": "go test -v ./pkg/runtime/...",
+      "group": "test",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "Test Registry",
+      "type": "shell",
+      "command": "go test -v ./pkg/registry/...",
+      "group": "test",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "Vet",
+      "type": "shell",
+      "command": "go vet ./...",
+      "group": "build",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "Lint",
+      "type": "shell",
+      "command": "golangci-lint run ./...",
+      "group": "build"
+    },
+    {
+      "label": "Install",
+      "type": "shell",
+      "command": "make install",
+      "group": "build"
+    },
+    {
+      "label": "Clean",
+      "type": "shell",
+      "command": "rm -rf bin/ && go clean",
+      "group": "build"
+    },
+    {
+      "label": "Run doki help",
+      "type": "shell",
+      "command": "go run ./cmd/doki --help",
+      "group": "none"
+    },
+    {
+      "label": "Run dokid",
+      "type": "shell",
+      "command": "go run ./cmd/dokid &",
+      "group": "none"
+    }
+  ]
+}

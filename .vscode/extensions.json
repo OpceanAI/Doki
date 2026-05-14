@@ -1,0 +1,16 @@
+{
+  "recommendations": [
+    "golang.go",
+    "golang.goland",
+    "golangci.golangci-lint",
+    "formulahendry.docker-explorer",
+    "formulahendry.docker-support",
+    "ms-azuretools.vscode-docker",
+    "editorconfig.editorconfig",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "rust-lang.rust-analyzer",
+    "vadimcn.vscode-lldb",
+    "xdebug.xdebug"
+  ]
+}
