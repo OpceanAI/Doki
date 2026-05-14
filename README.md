@@ -146,12 +146,24 @@ Android is not a second-class platform. It is the largest deployed Linux ecosyst
 **Pre-compiled binaries (Android/Termux ARM64):**
 
 ```bash
-# Download all binaries
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki                   -o $PREFIX/bin/doki
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/dokid                  -o $PREFIX/bin/dokid
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-compose           -o $PREFIX/bin/doki-compose
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-init-rust         -o $PREFIX/bin/doki-init
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-proot             -o $PREFIX/bin/doki-proot
+# Download all ARM64 binaries
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-android-arm64           -o $PREFIX/bin/doki
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/dokid-android-arm64          -o $PREFIX/bin/dokid
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-compose-android-arm64   -o $PREFIX/bin/doki-compose
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-init-rust-android-arm64 -o $PREFIX/bin/doki-init
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-proot-android-arm64     -o $PREFIX/bin/doki-proot
+chmod +x $PREFIX/bin/doki*
+```
+
+**Pre-compiled binaries (Android/Termux ARMv7):**
+
+```bash
+# Download all ARMv7 binaries
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-linux-armv7           -o $PREFIX/bin/doki
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/dokid-linux-armv7          -o $PREFIX/bin/dokid
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-compose-linux-armv7   -o $PREFIX/bin/doki-compose
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-init-linux-armv7      -o $PREFIX/bin/doki-init
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-proot-android-armv7   -o $PREFIX/bin/doki-proot
 chmod +x $PREFIX/bin/doki*
 ```
 
@@ -164,6 +176,9 @@ cd Doki
 # Android / Termux (ARM64)
 make build-android
 make install
+
+# Android / Termux (ARMv7)
+make build-armv7
 
 # Linux (x86_64)
 make build-linux

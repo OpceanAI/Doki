@@ -50,9 +50,17 @@ build-windows:
 build-all: build-android build-linux build-linux-arm64 build-darwin build-darwin-arm64 build-windows build-armv7
 
 build-armv7:
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/doki ./cmd/doki
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/dokid ./cmd/dokid
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/doki-compose ./cmd/doki-compose
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/doki ./cmd/doki
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/dokid ./cmd/dokid
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/doki-compose ./cmd/doki-compose
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/doki-init ./cmd/doki-init
+
+build-android-armv7:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/android-armv7/doki ./cmd/doki
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/android-armv7/dokid ./cmd/dokid
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/android-armv7/doki-compose ./cmd/doki-compose
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/android-armv7/doki-init ./cmd/doki-init
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -o bin/armv7/doki-init ./cmd/doki-init
 
 test:
 	$(GO) test ./...
