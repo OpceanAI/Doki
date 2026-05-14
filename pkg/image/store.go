@@ -883,3 +883,8 @@ func (s *Store) Config(idOrTag string) (*Config, error) {
 	}
 	return record.Config, nil
 }
+
+// Push uploads an image to a registry.
+func (s *Store) Push(idOrTag string) error {
+	return fmt.Errorf("push not yet implemented in image store")
+}
