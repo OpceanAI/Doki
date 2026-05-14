@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -81,173 +82,32 @@ func RemoveString(slice []string, s string) []string {
 	return result
 }
 
-// EnsureDir creates a directory if it doesn't exist.
-func EnsureDir(path string) error {
-	return os.MkdirAll(path, 0755)
-}
-
-// PathExists checks if a path exists.
-func PathExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-// ResolvePath resolves a path relative to the Doki data directory.
-func ResolvePath(base, path string) string {
-	if filepath.IsAbs(path) {
-		return path
+// ValidateEnvVar checks if an environment variable name is valid per POSIX.
+func ValidateEnvVar(name string) bool {
+	if name == "" {
+		return false
 	}
-	return filepath.Join(base, path)
-}
-
-// CommandExists checks if a command is available in PATH.
-func CommandExists(cmd string) bool {
-	_, err := exec.LookPath(cmd)
-	return err == nil
-}
-
-// TrimQuotes removes surrounding quotes from a string.
-func TrimQuotes(s string) string {
-	if len(s) >= 2 {
-		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
-			return s[1 : len(s)-1]
+	for _, c := range name {
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
 		}
 	}
-	return s
+	return true
 }
 
-// CopyDir copies a directory recursively.
-func CopyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, path)
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return EnsureDir(target)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		info, _ := d.Info()
-		mode := os.FileMode(0644)
-		if info != nil {
-			mode = info.Mode()
-		}
-		return os.WriteFile(target, data, mode)
-	})
-}
-
-// WriteFileSafe writes data to a file, creating parent directories.
-func WriteFileSafe(path string, data []byte, mode os.FileMode) error {
-	if err := EnsureDir(filepath.Dir(path)); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, mode)
-}
-
-// ParseEnv parses a key=value environment variable.
-func ParseEnv(env string) (key, value string) {
-	parts := strings.SplitN(env, "=", 2)
-	key = parts[0]
-	if len(parts) > 1 {
-		value = parts[1]
-	}
-	return
-}
-
-// MergeEnv merges two environment slices.
-func MergeEnv(base, overrides []string) []string {
-	env := make(map[string]string)
-	for _, e := range base {
-		k, v := ParseEnv(e)
-		env[k] = v
-	}
-	for _, e := range overrides {
-		k, v := ParseEnv(e)
-		if v == "" {
-			delete(env, k)
-		} else {
-			env[k] = v
-		}
-	}
+// ValidateEnv validates env vars and applies size limits.
+func ValidateEnv(env []string) []string {
 	result := make([]string, 0, len(env))
-	for k, v := range env {
-		result = append(result, k+"="+v)
+	totalSize := 0
+	maxSize := 128 * 1024 // 128KB
+	for _, e := range env {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 && ValidateEnvVar(parts[0]) && totalSize < maxSize {
+			result = append(result, e)
+			totalSize += len(e)
+		}
 	}
 	return result
-}
-
-// ParseExtraHost parses an extra host entry.
-func ParseExtraHost(entry string) (string, string) {
-	parts := strings.SplitN(entry, ":", 2)
-	if len(parts) != 2 {
-		return "", ""
-	}
-	return parts[0], parts[1]
-}
-
-// ParsePortBinding parses a port binding string.
-func ParsePortBinding(binding string) (Port, PortBinding) {
-	var p Port
-	var pb PortBinding
-	p.Type = ProtocolTCP
-
-	// Strip protocol suffix: "80/tcp" → port=80, proto=tcp
-	rest := binding
-	if idx := strings.Index(rest, "/"); idx > 0 {
-		proto := rest[idx+1:]
-		rest = rest[:idx]
-		switch strings.ToLower(proto) {
-		case "udp":
-			p.Type = ProtocolUDP
-		case "sctp":
-			p.Type = ProtocolSCTP
-		}
-	}
-
-	parts := strings.Split(rest, ":")
-	switch len(parts) {
-	case 1:
-		p.PrivatePort = parsePort(parts[0])
-	case 2:
-		pb.HostPort = parts[0]
-		p.PrivatePort = parsePort(parts[1])
-	case 3:
-		pb.HostIP = parts[0]
-		pb.HostPort = parts[1]
-		p.PrivatePort = parsePort(parts[2])
-	}
-
-	if pb.HostPort == "" {
-		pb.HostPort = "0"
-	}
-
-	return p, pb
-}
-
-func parsePort(s string) uint16 {
-	var port uint16
-	for _, c := range s {
-		if c >= '0' && c <= '9' {
-			port = port*10 + uint16(c-'0')
-		} else {
-			break
-		}
-	}
-	return port
-}
-
-// ArgsEscaped checks if command-line args are already escaped.
-func ArgsEscaped(args []string) bool {
-	for _, arg := range args {
-		if strings.Contains(arg, " ") {
-			return true
-		}
-	}
-	return false
 }
 
 // SplitStrSlice splits a string by commas and trims whitespace.
@@ -264,4 +124,151 @@ func SplitStrSlice(s string) []string {
 		}
 	}
 	return result
+}
+
+// EnsureDir creates a directory if it doesn't exist.
+func EnsureDir(path string) error {
+	return os.MkdirAll(path, 0755)
+}
+
+// PathExists checks if a path exists on the filesystem.
+func PathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// ResolvePath resolves a path relative to a base directory.
+func ResolvePath(base, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
+}
+
+// CommandExists checks if a command exists in PATH.
+func CommandExists(cmd string) bool {
+	_, err := exec.LookPath(cmd)
+	return err == nil
+}
+
+// CopyDir recursively copies a directory.
+func CopyDir(src, dst string) error {
+	EnsureDir(dst)
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := CopyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			data, err := os.ReadFile(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// WriteFileSafe writes content to a file, creating parent directories.
+func WriteFileSafe(path, content string, mode os.FileMode) error {
+	EnsureDir(filepath.Dir(path))
+	return os.WriteFile(path, []byte(content), mode)
+}
+
+// ParseEnv splits an environment variable into key and value.
+func ParseEnv(env string) (string, string) {
+	parts := strings.SplitN(env, "=", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return env, ""
+}
+
+// MergeEnv merges two environment slices.
+func MergeEnv(base, overrides []string) []string {
+	env := make(map[string]string)
+	for _, e := range base {
+		k, v := ParseEnv(e)
+		env[k] = v
+	}
+	for _, e := range overrides {
+		k, v := ParseEnv(e)
+		env[k] = v
+	}
+	result := make([]string, 0, len(env))
+	for k, v := range env {
+		result = append(result, k+"="+v)
+	}
+	return result
+}
+
+// ParsePortBinding parses a Docker port binding string like "8080:80/tcp".
+func ParsePortBinding(binding string) (Port, PortBinding) {
+	port := Port{Type: ProtocolTCP}
+	bind := PortBinding{HostIP: "0.0.0.0"}
+	parts := strings.Split(binding, ":")
+	switch len(parts) {
+	case 1:
+		pp := strings.Split(parts[0], "/")
+		p, _ := parsePort(pp[0])
+		port.PrivatePort = p
+		if len(pp) > 1 {
+			if strings.ToLower(pp[1]) == "udp" {
+				port.Type = ProtocolUDP
+			}
+		}
+		port.PublicPort = p
+	case 2:
+		cport := strings.Split(parts[1], "/")
+		cp, _ := parsePort(cport[0])
+		port.PrivatePort = cp
+		hp, _ := parsePort(parts[0])
+		port.PublicPort = hp
+		if len(cport) > 1 && strings.ToLower(cport[1]) == "udp" {
+			port.Type = ProtocolUDP
+		}
+	case 3:
+		hp, _ := parsePort(parts[1])
+		port.PublicPort = hp
+		cport := strings.Split(parts[2], "/")
+		cp, _ := parsePort(cport[0])
+		port.PrivatePort = cp
+		bind.HostIP = parts[0]
+		if len(cport) > 1 && strings.ToLower(cport[1]) == "udp" {
+			port.Type = ProtocolUDP
+		}
+	}
+	return port, bind
+}
+
+func parsePort(s string) (uint16, error) {
+	p, err := strconv.ParseUint(s, 10, 16)
+	return uint16(p), err
+}
+
+// TrimQuotes strips surrounding quotes from a string.
+func TrimQuotes(s string) string {
+	if len(s) >= 2 && ((s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'')) {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// ArgsEscaped checks if command args need shell escaping.
+func ArgsEscaped(args []string) bool {
+	for _, arg := range args {
+		if strings.ContainsAny(arg, " \t") {
+			return true
+		}
+	}
+	return false
 }

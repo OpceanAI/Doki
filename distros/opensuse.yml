@@ -1,0 +1,13 @@
+name: opensuse
+description: "openSUSE Leap - stable, enterprise-ready"
+default_version: "15.6"
+source:
+  type: docker
+  image: opensuse/leap
+  tag: latest
+  registry: docker.io
+packages:
+  manager: zypper
+  update: "zypper refresh"
+  install: "zypper install -y"
+aliases: [opensuse, opensuse:latest, opensuse/leap, opensuse:leap]
