@@ -1195,10 +1195,39 @@ func (rt *Runtime) List() ([]*ContainerState, error) {
 func (rt *Runtime) Stats(id string) (map[string]interface{}, error) {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
+	stats := make(map[string]interface{})
 	if rt.cgMgr.IsAvailable() {
-		return rt.cgMgr.GetStats(id)
+		cgStats, _ := rt.cgMgr.GetStats(id)
+		if cgStats != nil {
+			for k, v := range cgStats {
+				stats[k] = v
+			}
+		}
 	}
-	return nil, nil
+	// Add network I/O stats from /proc/net/dev
+	stats["network"] = getNetworkStats()
+	return stats, nil
+}
+
+func getNetworkStats() map[string]uint64 {
+	data, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]uint64)
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines[2:] { // skip headers
+		parts := strings.Fields(strings.TrimSpace(line))
+		if len(parts) < 10 {
+			continue
+		}
+		iface := strings.TrimSuffix(parts[0], ":")
+		rx, _ := strconv.ParseUint(parts[1], 10, 64)
+		tx, _ := strconv.ParseUint(parts[9], 10, 64)
+		result[iface+"_rx"] = rx
+		result[iface+"_tx"] = tx
+	}
+	return result
 }
 
 func (rt *Runtime) GetLogs(id string, tail int) (string, error) {
