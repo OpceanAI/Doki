@@ -1118,6 +1118,9 @@ func (rt *Runtime) Pause(id string) error {
 	}
 	if rt.cgMgr.IsAvailable() {
 		rt.cgMgr.Freeze(id)
+	} else if state.Cmd != nil && state.Cmd.Process != nil {
+		// Fallback: SIGSTOP the process
+		state.Cmd.Process.Signal(syscall.SIGSTOP)
 	}
 	state.Status = common.StatePaused
 	return rt.saveState(state)
@@ -1132,6 +1135,9 @@ func (rt *Runtime) Unpause(id string) error {
 	}
 	if rt.cgMgr.IsAvailable() {
 		rt.cgMgr.Thaw(id)
+	} else if state.Cmd != nil && state.Cmd.Process != nil {
+		// Fallback: SIGCONT the process
+		state.Cmd.Process.Signal(syscall.SIGCONT)
 	}
 	state.Status = common.StateRunning
 	return rt.saveState(state)
@@ -1398,7 +1404,7 @@ func (rt *Runtime) StartHealthcheck(id string, cmd []string, interval, timeout t
 				rootfsDir + "/usr/sbin:" + rootfsDir + "/usr/bin:" +
 				rootfsDir + "/sbin:" + rootfsDir + "/bin"
 			if rt.mode == ModeProot && proot.IsAvailable() {
-				hcmd = exec.Command("proot", append([]string{"-r", rootfsDir}, cmd...)...)
+				hcmd = exec.Command(proot.FindProotBinary(), append([]string{"-r", rootfsDir}, cmd...)...)
 			} else {
 				hcmd = exec.Command(cmd[0], cmd[1:]...)
 				hcmd.Dir = rootfsDir

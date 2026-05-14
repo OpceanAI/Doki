@@ -22,9 +22,9 @@ func NewManager(rootfsDir string) *Manager {
 	return &Manager{rootfsDir: rootfsDir}
 }
 
-// findProotBinary locates the best available proot binary.
+// FindProotBinary locates the best available proot binary.
 // Searches for doki-proot first, falls back to system proot.
-func findProotBinary() string {
+func FindProotBinary() string {
 	exe, _ := os.Executable()
 	candidates := []string{
 		filepath.Join(filepath.Dir(exe), "doki-proot"),
@@ -121,7 +121,7 @@ func (m *Manager) Exec(rootfs string, args []string, env []string, workDir strin
 	}
 	prootArgs = append(prootArgs, args...)
 
-	prootBin := findProotBinary()
+	prootBin := FindProotBinary()
 	cmd := exec.Command(prootBin, prootArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -273,7 +273,7 @@ func RunCommand(rootfs string, args []string, env []string) (string, error) {
 	prootArgs = appendAndroidBinds(prootArgs)
 	prootArgs = append(prootArgs, args...)
 
-	prootBin := findProotBinary()
+	prootBin := FindProotBinary()
 	cmd := exec.Command(prootBin, prootArgs...)
 	cmd.Env = buildProotEnv(env)
 	output, err := cmd.CombinedOutput()
