@@ -24,6 +24,11 @@ fn main() {
     // Create /dev symlinks
     init::create_dev_symlinks();
 
+    // Set up hostname, hosts, resolv.conf
+    init::setup_hostname();
+    init::setup_etc_hosts();
+    init::setup_resolv();
+
     // Set up signal handlers
     signal::setup_handlers();
 
