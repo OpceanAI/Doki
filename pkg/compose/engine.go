@@ -38,9 +38,9 @@ type Service struct {
 	Entrypoint   interface{}         `yaml:"entrypoint,omitempty"`
 	Environment  interface{}         `yaml:"environment,omitempty"`
 	EnvFile      interface{}         `yaml:"env_file,omitempty"`
-	Ports        []string            `yaml:"ports,omitempty"`
+	Ports        interface{}         `yaml:"ports,omitempty"`
 	Expose       []string            `yaml:"expose,omitempty"`
-	Volumes      []string            `yaml:"volumes,omitempty"`
+	Volumes      interface{}         `yaml:"volumes,omitempty"`
 	Networks     interface{}         `yaml:"networks,omitempty"`
 	NetworkMode  string              `yaml:"network_mode,omitempty"`
 	DependsOn    interface{}         `yaml:"depends_on,omitempty"`
@@ -78,6 +78,13 @@ type Service struct {
 	OomScoreAdj  int                 `yaml:"oom_score_adj,omitempty"`
 	MacAddress   string              `yaml:"mac_address,omitempty"`
 	LogDriver    string              `yaml:"logging.driver,omitempty"`
+	Ulimits      map[string]interface{} `yaml:"ulimits,omitempty"`
+	Tmpfs        interface{}         `yaml:"tmpfs,omitempty"`
+	BlkioConfig  map[string]interface{} `yaml:"blkio_config,omitempty"`
+	Devices      []string            `yaml:"devices,omitempty"`
+	Platform     string              `yaml:"platform,omitempty"`
+	Runtime      string              `yaml:"runtime,omitempty"`
+	Scale        int                 `yaml:"scale,omitempty"`
 }
 
 // BuildConfig defines build settings for a service.
@@ -322,11 +329,11 @@ func (e *Engine) interpolateService(name string, svc *Service) {
 	if svc.ExtraHosts != nil {
 		svc.ExtraHosts = e.interpolateInterface(svc.ExtraHosts)
 	}
-	for i, p := range svc.Ports {
-		svc.Ports[i] = e.interpolate(p)
+	if svc.Ports != nil {
+		svc.Ports = e.interpolateInterface(svc.Ports)
 	}
-	for i, v := range svc.Volumes {
-		svc.Volumes[i] = e.interpolate(v)
+	if svc.Volumes != nil {
+		svc.Volumes = e.interpolateInterface(svc.Volumes)
 	}
 	for i, s := range svc.Secrets {
 		svc.Secrets[i] = e.interpolate(s)
@@ -574,10 +581,10 @@ func (e *Engine) mergeService(target, base *Service) {
 	if target.EnvFile == nil && base.EnvFile != nil {
 		target.EnvFile = base.EnvFile
 	}
-	if len(target.Ports) == 0 {
+	if len(toStringSlice(target.Ports)) == 0 {
 		target.Ports = base.Ports
 	}
-	if len(target.Volumes) == 0 {
+	if len(toStringSlice(target.Volumes)) == 0 {
 		target.Volumes = base.Volumes
 	}
 	if target.Networks == nil && base.Networks != nil {
@@ -1121,15 +1128,17 @@ func (e *Engine) startService(name string) error {
 		}
 	}
 
-	// Parse ports.
-	for _, portSpec := range svc.Ports {
-		port, _ := common.ParsePortBinding(portSpec)
+	// Parse ports (support short and long syntax).
+	portSpecs := toStringSlice(svc.Ports)
+	for _, ps := range portSpecs {
+		port, _ := common.ParsePortBinding(ps)
 		cfg.Ports = append(cfg.Ports, port)
 	}
 
-	// Y1-Y3: Parse volumes and add mounts.
-	for _, volSpec := range svc.Volumes {
-		mnt := parseVolume(volSpec, e.projectDir)
+	// Y1-Y3: Parse volumes (support short and long syntax).
+	volSpecs := toStringSlice(svc.Volumes)
+	for _, vs := range volSpecs {
+		mnt := parseVolume(vs, e.projectDir)
 		if mnt.Target != "" {
 			cfg.Mounts = append(cfg.Mounts, mnt)
 		}
@@ -1165,6 +1174,33 @@ func (e *Engine) startService(name string) error {
 				ReadOnly: true,
 			})
 		}
+	}
+
+	// Wire remaining compose fields
+	if svc.Platform != "" {
+		cfg.ImageRef = svc.Platform + "/" + cfg.ImageRef
+	}
+	if svc.Runtime != "" {
+		cfg.Runtime = svc.Runtime
+	}
+	// Devices
+	for _, dev := range svc.Devices {
+		parts := strings.SplitN(dev, ":", 3)
+		if len(parts) >= 2 {
+			cfg.Mounts = append(cfg.Mounts, common.Mount{
+				Type:   common.MountBind,
+				Source: parts[0],
+				Target: parts[1],
+			})
+		}
+	}
+	// Tmpfs mounts
+	tmpfsSpecs := toStringSlice(svc.Tmpfs)
+	for _, ts := range tmpfsSpecs {
+		cfg.Mounts = append(cfg.Mounts, common.Mount{
+			Type:   common.MountTmpfs,
+			Target: ts,
+		})
 	}
 
 	// Create container.
