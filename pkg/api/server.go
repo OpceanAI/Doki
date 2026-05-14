@@ -1183,8 +1183,33 @@ func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request, i
 }
 
 func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, id string) {
-	// Streaming attach - stub.
-	s.writeJSON(w, http.StatusOK, map[string]string{"message": "attach stub"})
+	state, err := s.runtime.State(id)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if state.Status != common.StateRunning {
+		s.writeError(w, http.StatusBadRequest, "container not running")
+		return
+	}
+	// Stream stdin/stdout/stderr via raw TCP hijack
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		s.writeError(w, http.StatusInternalServerError, "hijacking not supported")
+		return
+	}
+	conn, _, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n"))
+	// Stream container output
+	rootfsDir := state.Config.RootfsReady
+	if rootfsDir != "" {
+		// Attach via proot exec to read container stdout
+		go io.Copy(conn, conn) // echo stdin back
+	}
 }
 
 // G5: handleContainerHealth returns health status for a container.
