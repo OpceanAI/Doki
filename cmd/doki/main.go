@@ -115,15 +115,18 @@ Options:
   --network          Network mode (bridge/host/none)
   --restart          Restart policy
   --pull             Pull policy (always/missing/never)
-  --distro NAME      Use predefined distro (alpine, ubuntu, debian, arch)
+  --distro NAME      Use predefined distro (alpine, ubuntu, debian, arch, fedora, opensuse, gentoo, rocky)
   --install PKGS     Install packages before running (comma-separated)
+  --platform ARCH    Set platform (linux/arm64, linux/amd64)
+  --privileged       Give extended privileges
 
 Examples:
   doki run alpine echo hello
   doki run -d --name web -p 8080:80 nginx:alpine
   doki run --rm alpine /bin/sh -c "echo test"
   doki run --distro ubuntu bash
-  doki run --distro alpine --install gcc,make gcc --version`,
+  doki run --distro alpine --install gcc,make gcc --version
+  doki run --platform linux/arm64 alpine uname -m`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("doki run: requires at least 1 argument (image)")

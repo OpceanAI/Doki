@@ -661,6 +661,15 @@ func IsSlirp4netnsAvailable() bool {
 	return err == nil
 }
 
+// SetPortForwarding sets up a TCP proxy from hostPort to containerPort.
+func SetPortForwarding(hostPort, containerPort int) error {
+	cmd := exec.Command("socat", fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", hostPort),
+		fmt.Sprintf("TCP:localhost:%d", containerPort))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Start()
+}
+
 // Inspect returns network details.
 func (m *Manager) Inspect(idOrName string) (*common.NetworkInfo, error) {
 	nw, err := m.GetNetwork(idOrName)
