@@ -886,9 +886,13 @@ func (e *Engine) Ps() ([]common.ContainerInfo, error) {
 
 	containers := make([]common.ContainerInfo, 0)
 	for _, state := range states {
+		shortID := state.ID
+		if len(shortID) > 12 {
+			shortID = shortID[:12]
+		}
 		containers = append(containers, common.ContainerInfo{
-			ID:      state.ID[:12],
-			Names:   []string{"/" + state.ID[:12]},
+			ID:      shortID,
+			Names:   []string{"/" + shortID},
 			State:   state.Status,
 			Status:  string(state.Status),
 			Created: state.Created.Unix(),

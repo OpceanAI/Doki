@@ -21,9 +21,9 @@ func (b *Builder) ExecuteStage(stage *Stage, contextDir, rootDir string) error {
 	workDir := rootDir
 
 	for _, inst := range stage.Instructions {
-		// Substitute variables before execution
-		inst.Args = substituteVarsInSlice(inst.Args, b.envMap, b.argDefaults, nil)
-		inst.Raw = substituteVars(inst.Raw, b.envMap, b.argDefaults, nil)
+		// Substitute variables before execution (includes BuildConfig.BuildArgs)
+		inst.Args = substituteVarsInSlice(inst.Args, b.envMap, b.argDefaults, b.argDefaults)
+		inst.Raw = substituteVars(inst.Raw, b.envMap, b.argDefaults, b.argDefaults)
 
 		if err := b.executeInstructionReal(stage, &inst, contextDir, rootDir, &workDir); err != nil {
 			return fmt.Errorf("line %d (%s): %w", inst.LineNum, inst.Type, err)
@@ -744,8 +744,8 @@ func CreateTar(dir string, writer io.Writer) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
 		io.Copy(tw, f)
+		f.Close()
 		return nil
 	})
 }
