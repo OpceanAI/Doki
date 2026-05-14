@@ -72,6 +72,12 @@ type Service struct {
 	Secrets      []string            `yaml:"secrets,omitempty"`
 	Configs      []string            `yaml:"configs,omitempty"`
 	ContainerName string             `yaml:"container_name,omitempty"`
+	ShmSize      string              `yaml:"shm_size,omitempty"`
+	PidsLimit    int64               `yaml:"pids_limit,omitempty"`
+	OomKillDisable bool              `yaml:"oom_kill_disable,omitempty"`
+	OomScoreAdj  int                 `yaml:"oom_score_adj,omitempty"`
+	MacAddress   string              `yaml:"mac_address,omitempty"`
+	LogDriver    string              `yaml:"logging.driver,omitempty"`
 }
 
 // BuildConfig defines build settings for a service.
@@ -1026,6 +1032,29 @@ func (e *Engine) startService(name string) error {
 	cfg.CapAdd = svc.CapAdd
 	cfg.CapDrop = svc.CapDrop
 	cfg.SecurityOpt = svc.SecurityOpt
+
+	// Wire compose niche fields into container config
+	if svc.ShmSize != "" {
+		sz := parseMemory(svc.ShmSize)
+		if sz > 0 {
+			if cfg.Resources == nil {
+				cfg.Resources = &runtime.Resources{}
+			}
+			cfg.Resources.ShmSize = sz
+		}
+	}
+	if svc.PidsLimit > 0 {
+		if cfg.Resources == nil {
+			cfg.Resources = &runtime.Resources{}
+		}
+		cfg.Resources.PidsLimit = svc.PidsLimit
+	}
+	if svc.OomKillDisable {
+		if cfg.Resources == nil {
+			cfg.Resources = &runtime.Resources{}
+		}
+		cfg.Resources.OomKillDisable = true
+	}
 
 	if svc.Sysctls != nil {
 		cfg.Sysctls = svc.Sysctls
