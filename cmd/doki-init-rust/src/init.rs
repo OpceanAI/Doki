@@ -63,3 +63,24 @@ pub fn create_dev_symlinks() {
         }
     }
 }
+
+/// Set hostname from environment or default.
+pub fn setup_hostname() {
+    let hostname = std::env::var("DOKI_HOSTNAME")
+        .unwrap_or_else(|_| "doki-vm".to_string());
+    let c_name = CString::new(hostname).unwrap_or_default();
+    unsafe { libc::sethostname(c_name.as_ptr(), c_name.as_bytes().len()); }
+}
+
+/// Write basic /etc/hosts.
+pub fn setup_etc_hosts() {
+    let _ = fs::write("/etc/hosts", b"127.0.0.1 localhost\n::1 localhost\n");
+}
+
+/// Write /etc/resolv.conf from env or use default DNS.
+pub fn setup_resolv() {
+    let content = std::env::var("DOKI_DNS")
+        .map(|d| format!("nameserver {}\n", d))
+        .unwrap_or_else(|_| "nameserver 8.8.8.8\n".to_string());
+    let _ = fs::write("/etc/resolv.conf", content.as_bytes());
+}
