@@ -1,0 +1,43 @@
+{
+  "go.toolsManagement.autoUpdate": true,
+  "go.lintTool": "golangci-lint",
+  "go.lintOnSave": "package",
+  "go.formatTool": "gofmt",
+  "go.useLanguageServer": true,
+  "go.alternateTools": {
+    "go": "/data/data/com.termux/files/home/go/bin/go"
+  },
+  "go.testFlags": ["-v", "-race"],
+  "go.testEnvVars": {
+    "CGO_ENABLED": "1"
+  },
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": "source.organizeImports",
+    "editor.defaultFormatter": "golang.go"
+  },
+  "files.exclude": {
+    "**/.git": true,
+    "**/bin/": true,
+    "**/vendor/": false
+  },
+  "search.exclude": {
+    "**/vendor": true,
+    "**/bin": true
+  },
+  "go.gopath": "/data/data/com.termux/files/home/go",
+  "go.goroot": "/data/data/com.termux/files/home/go",
+  "terminal.integrated.env.linux": {
+    "GO111MODULE": "on",
+    "CGO_ENABLED": "1"
+  },
+  "files.associations": {
+    "*.md": "markdown",
+    "Dokifile": "dockerfile",
+    "*.yml": "yaml",
+    "*.yaml": "yaml"
+  },
+  "yaml.schemas": {
+    "docker-compose": "http://json.schemastore.org/docker-compose"
+  }
+}

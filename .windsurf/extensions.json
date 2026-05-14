@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "golang.go",
+    "golangci.golangci-lint",
+    "editorconfig.editorconfig",
+    "vadimcn.vscode-lldb"
+  ]
+}

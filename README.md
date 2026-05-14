@@ -34,23 +34,23 @@ One binary. One API. Every platform.
 
 ### v0.9.1 (Current)
 
-- **OCI Push completo:** `doki push` ahora funciona — blobs, cross-repo mount, manifest PUT. Push real a cualquier OCI registry.
-- **Auth real:** `doki login` acepta credenciales y las propaga al registry client. Ya no es un stub.
-- **Distro extraction nativa:** Go tar nativo con whiteouts, path traversal protection, compression auto-detection (gzip/bzip2/xz/zstd), extracción paralela con rollback.
-- **4 distros nuevas:** Fedora, Gentoo, OpenSUSE, Rocky Linux — 8 distros total.
-- **Compose engine mejorado:** Long syntax Ports/Volumes (`interface{}`), `depends_on` condition `service_healthy` con 60s poll, `shm_size`, `pids_limit`, `oom_kill_disable`, `tmpfs`, `devices`, `platform`, `runtime`, `scale`, `blkio_config`, `ulimits`, version validation.
-- **Proot C 19 fixes:** SECCOMP_RET_KILL→RET_ALLOW, fake_id0 brace bug, stat.c uid/gid, link2symlink sprintf UB, sysnum off-by-one, kompat parse overflow, hidden_files VLA 64KB, port_switch stderr/UDP/dead code, sysvipc shm 400KB→64MB, substitute_path_prefix overflow, TOCTOU guard canon.c, SIGINT/SIGTERM forwarding.
-- **Seccomp actualizado:** io_uring, pidfd, rseq, userfaultfd, copy_file_range ahora permitidos.
-- **Overlay2 kernel mount:** Usa `syscall.Mount("overlay")` directo en vez de delegar a FUSE.
-- **Attach via HTTP hijack:** `doki attach` implementado con streaming bidireccional.
-- **Wait multi-container:** Espera multiples containers simultaneamente.
-- **DNS listener:** Servidor DNS interno en puerto 53 para resolución entre containers.
-- **DOKI_HOST env:** Soporte para `DOCKER_HOST` y `DOKI_HOST` env vars.
-- **Buffer pool:** Pool de buffers reutilizables en runtime (reduce GC).
-- **String intern pool:** Deduplicación de strings comunes.
-- **PProf endpoint:** `/debug/pprof/` para profiling.
-- **Systemd socket activation:** Soporte para socket activación en Linux.
-- **ARMv7 beta:** Compilación y binarios para ARM 32-bit.
+- **OCI Push:** `doki push` now works — blob upload, cross-repo mount, manifest PUT to any OCI registry
+- **Registry Auth:** `doki login` accepts credentials and propagates to registry client
+- **Native tar extraction:** Go-native tar with whiteouts, path traversal protection, compression auto-detection (gzip/bzip2/xz/zstd), parallel extraction with rollback
+- **4 new distros:** Fedora, Gentoo, OpenSUSE, Rocky Linux — 8 distros total
+- **Improved Compose engine:** Long syntax Ports/Volumes, `depends_on` health conditions with 60s poll, 30+ new fields (shm_size, pids_limit, oom_kill_disable, tmpfs, devices, platform, runtime, scale, blkio_config, ulimits)
+- **19 Proot C fixes:** SECCOMP_RET_ALLOW, fake_id0 brace bug, stat.c uid/gid fix, link2symlink UB, sysnum off-by-one, kompat overflow, hidden_files VLA 64KB, port_switch fixes, sysvipc shm 400KB→64MB, overflow checks, TOCTOU guard, signal forwarding
+- **Updated seccomp:** io_uring, pidfd, rseq, userfaultfd, copy_file_range now allowed
+- **Overlay2 kernel mount:** Uses `syscall.Mount("overlay")` directly instead of FUSE delegation
+- **Attach via HTTP hijack:** `doki attach` implemented with bidirectional streaming
+- **Multi-container wait:** Waits for multiple containers simultaneously
+- **DNS listener:** Internal DNS server on port 53 for inter-container resolution
+- **DOKI_HOST env:** Supports `DOCKER_HOST` and `DOKI_HOST` environment variables
+- **Buffer pool:** Reusable buffer pool in runtime (reduces GC pressure)
+- **String intern pool:** Common string deduplication
+- **PProf endpoint:** `/debug/pprof/` for profiling
+- **Systemd socket activation:** Linux socket activation support
+- **ARMv7 beta:** Compilation and binaries for 32-bit ARM devices
 
 ### v0.9.0
 
@@ -146,11 +146,12 @@ Android is not a second-class platform. It is the largest deployed Linux ecosyst
 **Pre-compiled binaries (Android/Termux ARM64):**
 
 ```bash
-# Download all 4 binaries
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.8.0/doki           -o $PREFIX/bin/doki
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.8.0/dokid          -o $PREFIX/bin/dokid
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.8.0/doki-compose   -o $PREFIX/bin/doki-compose
-curl -L https://github.com/OpceanAI/Doki/releases/download/v0.8.0/doki-init      -o $PREFIX/bin/doki-init
+# Download all binaries
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki                   -o $PREFIX/bin/doki
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/dokid                  -o $PREFIX/bin/dokid
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-compose           -o $PREFIX/bin/doki-compose
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-init-rust         -o $PREFIX/bin/doki-init
+curl -L https://github.com/OpceanAI/Doki/releases/download/v0.9.1/doki-proot             -o $PREFIX/bin/doki-proot
 chmod +x $PREFIX/bin/doki*
 ```
 
