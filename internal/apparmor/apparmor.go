@@ -131,11 +131,6 @@ func IsEnabled() bool {
 		return true
 	}
 	_, err = os.Stat("/sys/module/apparmor")
-	if err == nil {
-		return true
-	}
-	// Android: check for SELinux instead (AppArmor not available).
-	_, err = os.Stat("/sys/fs/selinux")
 	return err == nil
 }
 
@@ -188,7 +183,3 @@ func UnloadProfile(name string) error {
 	return nil
 }
 
-func stringContains(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && 
-		(len(s) >= len(substr))
-}

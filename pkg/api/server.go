@@ -295,6 +295,9 @@ func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/events", s.handleEvents)
 	s.router.HandleFunc("/system/df", s.handleSystemDf)
 	s.router.HandleFunc("/auth", s.handleAuth)
+	s.router.HandleFunc("/_ping", s.handlePing)
+	s.router.HandleFunc("/health", http.HandlerFunc(HealthHandler))
+	s.router.HandleFunc("/metrics", http.HandlerFunc(MetricsHandler))
 
 	// Legacy swarm endpoints (no-op for compatibility).
 	s.router.HandleFunc("/swarm", s.handleSwarmNoop)
@@ -389,8 +392,8 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		OSType:            "linux",
 		OperatingSystem:   detectOS(),
 		Architecture:      goruntime.GOARCH,
-		NCPU:              4,
-		MemTotal:          8192 * 1024 * 1024,
+		NCPU:              goruntime.NumCPU(),
+		MemTotal:          getTotalMem(),
 		Driver:            "fuse-overlayfs",
 		Containers:        len(containers),
 		ContainersRunning: running,
@@ -2281,4 +2284,21 @@ func parseSignal(s string) syscall.Signal {
 	default:
 		return syscall.SIGKILL
 	}
+}
+
+func getTotalMem() int64 {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 8 * 1024 * 1024 * 1024
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				kb, _ := strconv.ParseInt(parts[1], 10, 64)
+				return kb * 1024
+			}
+		}
+	}
+	return 8 * 1024 * 1024 * 1024
 }

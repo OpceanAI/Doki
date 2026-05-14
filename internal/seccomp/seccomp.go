@@ -39,24 +39,20 @@ func DefaultProfile() *Profile {
 		Architectures: []string{"SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"},
 		Flags:         []string{"SECCOMP_FILTER_FLAG_TSYNC"},
 		Syscalls: []SyscallRule{
-			// Allow essential syscalls.
-			{Names: allowedSyscalls(), Action: "SCMP_ACT_ALLOW"},
-			// Explicitly block dangerous syscalls.
+			// DENY dangerous syscalls FIRST (first-match wins semantics)
 			{Names: []string{
 				"kexec_load", "kexec_file_load",
-				"create_module", "init_module", "finit_module", "delete_module",
-				"lookup_dcookie", "iopl", "ioperm",
-				"af_alg",        // CVE-2026-31431 - CopyFail
-				"socketcall",    // multiplexer, also blocked for AF_ALG
-				"kcmp",          // kernel information leak
-				"process_madvise", "process_vm_readv", "process_vm_writev",
-				"perf_event_open", "bpf", "userfaultfd",
+				"reboot", "swapoff", "swapon",
+				"bpf", "perf_event_open",
+				"fanotify_init", "fanotify_mark",
+				"init_module", "finit_module", "delete_module",
+				"socketcall",
 			}, Action: "SCMP_ACT_ERRNO"},
+			// Then ALLOW essential syscalls
+			{Names: allowedSyscalls(), Action: "SCMP_ACT_ALLOW"},
 		},
 	}
 }
-
-// PrivilegedProfile returns a minimal profile for privileged containers.
 func PrivilegedProfile() *Profile {
 	return &Profile{
 		DefaultAction: "SCMP_ACT_ALLOW",
