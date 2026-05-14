@@ -28,6 +28,8 @@ import (
 	"github.com/OpceanAI/Doki/pkg/storage"
 )
 
+var bufPool = sync.Pool{New: func() interface{} { b := make([]byte, 4096); return &b }}
+
 // ExecutionMode defines how a container process is run.
 type ExecutionMode int
 
