@@ -157,6 +157,12 @@ func allowedSyscalls() []string {
 
 		// Random.
 		"getrandom",
+		"rseq",
+		"pidfd_open", "pidfd_getfd", "pidfd_send_signal",
+		"name_to_handle_at", "open_by_handle_at",
+		"userfaultfd", "membarrier",
+		"copy_file_range",
+		"io_uring_setup", "io_uring_enter", "io_uring_register",
 	}
 }
 
