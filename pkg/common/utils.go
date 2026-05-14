@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -108,6 +109,28 @@ func ValidateEnv(env []string) []string {
 		}
 	}
 	return result
+}
+
+// StringIntern is a simple interning pool for path deduplication.
+var stringIntern = struct {
+	mu   sync.RWMutex
+	pool map[string]string
+}{pool: make(map[string]string, 256)}
+
+func InternString(s string) string {
+	if s == "" {
+		return s
+	}
+	stringIntern.mu.RLock()
+	interned, ok := stringIntern.pool[s]
+	stringIntern.mu.RUnlock()
+	if ok {
+		return interned
+	}
+	stringIntern.mu.Lock()
+	stringIntern.pool[s] = s
+	stringIntern.mu.Unlock()
+	return s
 }
 
 // SplitStrSlice splits a string by commas and trims whitespace.

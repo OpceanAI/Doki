@@ -299,6 +299,9 @@ func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/_ping", s.handlePing)
 	s.router.HandleFunc("/health", http.HandlerFunc(HealthHandler))
 	s.router.HandleFunc("/metrics", http.HandlerFunc(MetricsHandler))
+	if os.Getenv("DOKI_PPROF") != "" {
+		s.router.HandleFunc("/debug/pprof/", http.HandlerFunc(PprofHandler))
+	}
 
 	// Legacy swarm endpoints (no-op for compatibility).
 	s.router.HandleFunc("/swarm", s.handleSwarmNoop)
