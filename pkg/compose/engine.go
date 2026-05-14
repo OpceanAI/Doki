@@ -685,11 +685,46 @@ func (e *Engine) Up() error {
 			continue
 		}
 
+		// Wait for depends_on conditions (service_healthy, etc.)
+		if err := e.waitForDependencies(svc); err != nil {
+			return fmt.Errorf("wait for dependencies of %s: %w", svcName, err)
+		}
+
 		if err := e.startService(svcName); err != nil {
 			return fmt.Errorf("start service %s: %w", svcName, err)
 		}
 	}
 
+	return nil
+}
+
+// waitForDependencies polls health status of services listed in depends_on
+// when condition is "service_healthy".
+func (e *Engine) waitForDependencies(svc *Service) error {
+	deps := svc.DependsOn
+	if deps == nil {
+		return nil
+	}
+	switch d := deps.(type) {
+	case []interface{}:
+		for _, dep := range d {
+			if m, ok := dep.(map[string]interface{}); ok {
+				if cond, _ := m["condition"].(string); cond == "service_healthy" {
+					if name, _ := m["service"].(string); name != "" {
+						containerID := e.containerName(name)
+						// Poll health up to 60s
+						for i := 0; i < 60; i++ {
+							state, err := e.runtime.State(containerID)
+							if err == nil && state.HealthStatus != nil && state.HealthStatus.Status == "healthy" {
+								break
+							}
+							time.Sleep(time.Second)
+						}
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 
