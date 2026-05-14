@@ -36,9 +36,6 @@ fn main() {
         }
     };
 
-    let _mode = env::var("DOKI_INIT_MODE").unwrap_or_default();
-
-    // 5. Determine mode
     let mode = env::var("DOKI_INIT_MODE").unwrap_or_default();
 
     match mode.as_str() {

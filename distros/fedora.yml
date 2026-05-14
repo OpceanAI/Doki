@@ -1,0 +1,13 @@
+name: fedora
+description: "Fedora Linux - cutting edge, community-driven"
+default_version: "40"
+source:
+  type: docker
+  image: fedora
+  tag: latest
+  registry: docker.io
+packages:
+  manager: dnf
+  update: "dnf update -y"
+  install: "dnf install -y"
+aliases: [fedora, fedora:latest, fedora:40]
