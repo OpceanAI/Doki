@@ -657,6 +657,27 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 		// Initialize per-stage image config
 		stage.ImageConfig = &image.ImageConfig{}
 
+		// Replay ONBUILD triggers from parent stage/image
+		if stage.FromStage != "" || stage.From != "" {
+			// Find parent stage
+			var parentStage *Stage
+			for _, s := range stages {
+				if (stage.FromStage != "" && s.Name == stage.FromStage) ||
+					(stage.FromStage == "" && s.Name == stage.From) {
+					parentStage = s
+					break
+				}
+			}
+			if parentStage != nil {
+				if onbuildData, ok := parentStage.Metadata["onbuild"]; ok && onbuildData != "" {
+					instType := parentStage.Metadata["onbuild_type"]
+					args := strings.Fields(onbuildData)
+					onbuildInst := Instruction{Type: instType, Args: args, Raw: strings.Join(args, " ")}
+					stage.Instructions = append([]Instruction{onbuildInst}, stage.Instructions...)
+				}
+			}
+		}
+
 		// Execute stage instructions
 		if err := b.ExecuteStage(stage, contextDir, workDir); err != nil {
 			return fmt.Errorf("stage %s: %w", stage.From, err)
@@ -678,6 +699,18 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 	// Save the final image
 	finalStage := stages[len(stages)-1]
 	return b.commitImage(finalStage, finalWorkDir, cfg.Tags)
+}
+
+// parseOnbuildInstructions parses stored ONBUILD metadata into Instruction structs.
+func parseOnbuildInstructions(onbuildData string) []*Instruction {
+	// Format: "type|arg1 arg2 ..."
+	parts := strings.SplitN(onbuildData, "|", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	instType := parts[0]
+	args := strings.Fields(parts[1])
+	return []*Instruction{{Type: instType, Args: args, Raw: strings.Join(args, " ")}}
 }
 
 func (b *Builder) extractBaseImageToDir(imageRef, destDir string) error {

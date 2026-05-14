@@ -686,6 +686,11 @@ func (b *Builder) executeArg(stage *Stage, inst *Instruction) error {
 }
 
 func (b *Builder) executeOnbuild(stage *Stage, inst *Instruction) error {
+	// Store type|raw for later replay
+	if stage.Metadata == nil {
+		stage.Metadata = make(map[string]string)
+	}
+	stage.Metadata["onbuild_type"] = inst.Type
 	stage.Metadata["onbuild"] = strings.Join(inst.Args, " ")
 	return nil
 }
