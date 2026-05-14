@@ -1,0 +1,13 @@
+name: rockylinux
+description: "Rocky Linux - RHEL-compatible, community enterprise"
+default_version: "9"
+source:
+  type: docker
+  image: rockylinux
+  tag: latest
+  registry: docker.io
+packages:
+  manager: dnf
+  update: "dnf update -y"
+  install: "dnf install -y"
+aliases: [rockylinux, rocky, rockylinux:latest, rockylinux:9]

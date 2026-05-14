@@ -1,0 +1,13 @@
+name: gentoo
+description: "Gentoo Linux - source-based, highly customizable"
+default_version: "latest"
+source:
+  type: docker
+  image: gentoo/stage3
+  tag: latest
+  registry: docker.io
+packages:
+  manager: emerge
+  update: "emerge --sync"
+  install: "emerge --ask=n"
+aliases: [gentoo, gentoo:latest, gentoo/stage3]

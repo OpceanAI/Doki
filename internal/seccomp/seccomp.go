@@ -39,27 +39,34 @@ func DefaultProfile() *Profile {
 		Architectures: []string{"SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"},
 		Flags:         []string{"SECCOMP_FILTER_FLAG_TSYNC"},
 		Syscalls: []SyscallRule{
-			// DENY dangerous syscalls FIRST (first-match wins semantics)
+			// DENY dangerous syscalls FIRST (first-match-wins semantics)
 			{Names: []string{
 				"kexec_load", "kexec_file_load",
 				"reboot", "swapoff", "swapon",
 				"bpf", "perf_event_open",
 				"fanotify_init", "fanotify_mark",
 				"init_module", "finit_module", "delete_module",
-				"socketcall",
+				"socketcall", "iopl", "ioperm",
+				"acct", "uselib", "ustat",
+				"bdflush", "create_module", "get_kernel_syms",
+				"_sysctl", "s390_utc", "utc",
+				"process_vm_writev", "process_vm_readv",
+				"modify_ldt", "pciconfig_read", "pciconfig_write",
+				"vhangup", "nfsservctl", "pivot_root",
 			}, Action: "SCMP_ACT_ERRNO"},
 			// Then ALLOW essential syscalls
 			{Names: allowedSyscalls(), Action: "SCMP_ACT_ALLOW"},
 		},
 	}
 }
+
 func PrivilegedProfile() *Profile {
 	return &Profile{
 		DefaultAction: "SCMP_ACT_ALLOW",
+		Syscalls: []SyscallRule{},
 	}
 }
 
-// UnconfinedProfile returns an unconfined (no seccomp) profile.
 func UnconfinedProfile() *Profile {
 	return nil
 }

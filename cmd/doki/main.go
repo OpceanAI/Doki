@@ -985,11 +985,43 @@ Commands:
 // Build groupCommands sub-command proxies by referencing the original commands.
 func init() {
 	groupCommands["container"].SubCommands = map[string]*Command{
-		"ls":  commands["ps"],
-		"rm":  commands["rm"],
+		"ls":       commands["ps"],
+		"rm":       commands["rm"],
+		"inspect":  commands["inspect"],
+		"start":    commands["start"],
+		"stop":     commands["stop"],
+		"restart":  commands["restart"],
+		"kill":     commands["kill"],
+		"pause":    commands["pause"],
+		"unpause":  commands["unpause"],
+		"exec":     commands["exec"],
+		"logs":     commands["logs"],
+		"top":      commands["top"],
+		"stats":    commands["stats"],
+		"port":     commands["port"],
+		"rename":   commands["rename"],
+		"update":   commands["update"],
+		"wait":     commands["wait"],
+		"attach":   commands["attach"],
+		"commit":   commands["commit"],
+		"diff":     commands["diff"],
+		"cp":       commands["cp"],
+		"export":   commands["export"],
+		"prune":    commands["prune"],
 	}
 	groupCommands["image"].SubCommands = map[string]*Command{
-		"ls": commands["images"],
+		"ls":      commands["images"],
+		"pull":    commands["pull"],
+		"push":    commands["push"],
+		"build":   commands["build"],
+		"history": commands["history"],
+		"inspect": commands["inspect"],
+		"tag":     commands["tag"],
+		"rm":      commands["rmi"],
+		"save":    commands["save"],
+		"load":    commands["load"],
+		"import":  commands["import"],
+		"prune":   commands["prune"],
 	}
 }
 
