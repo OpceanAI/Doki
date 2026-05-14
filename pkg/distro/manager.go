@@ -180,3 +180,34 @@ func (m *DistroManager) List() []string {
 	}
 	return names
 }
+
+// Remove deletes an installed distro.
+func (m *DistroManager) Remove(name string) error {
+	distroPath := filepath.Join(m.distroDir, name)
+	return os.RemoveAll(distroPath)
+}
+
+// Update re-pulls and re-extracts a distro.
+func (m *DistroManager) Update(def *DistroDefinition) error {
+	m.Remove(def.Name)
+	return m.EnsureInstalled(def)
+}
+
+// Search looks for available pre-defined distros by name.
+func (m *DistroManager) Search(query string) []string {
+	var results []string
+	for _, def := range m.defs {
+		if strings.Contains(def.Name, query) || strings.Contains(def.Description, query) {
+			results = append(results, def.Name)
+		}
+	}
+	return results
+}
+
+// RegisterDef adds a custom distro definition.
+func (m *DistroManager) RegisterDef(def *DistroDefinition) {
+	m.defs[def.Name] = def
+	for _, alias := range def.Aliases {
+		m.defs[alias] = def
+	}
+}
