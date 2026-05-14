@@ -933,10 +933,18 @@ func (e *Engine) startService(name string) error {
 	if len(cmd) == 0 {
 		if record, err := e.image.Get(imageName); err == nil && record.Config != nil {
 			cmd = record.Config.Config.Cmd
-			if len(cmd) == 0 {
-				cmd = record.Config.Config.Entrypoint
-			}
 		}
+	}
+
+	// Merge Entrypoint with Cmd (service's Entrypoint overrides image's)
+	entrypoint := toStringSlice(svc.Entrypoint)
+	if len(entrypoint) == 0 {
+		if record, err := e.image.Get(imageName); err == nil && record.Config != nil {
+			entrypoint = record.Config.Config.Entrypoint
+		}
+	}
+	if len(entrypoint) > 0 {
+		cmd = append(entrypoint, cmd...)
 	}
 	if len(cmd) == 0 {
 		cmd = []string{"/bin/sh"}

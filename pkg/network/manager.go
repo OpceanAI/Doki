@@ -361,18 +361,24 @@ func (m *Manager) allocateIP(nw *Network) string {
 		usedIPs[ep.IPv4Address] = true
 	}
 
-	// Iterate all valid host addresses in subnet.
+	// Iterate all valid host addresses in subnet (skip broadcast).
 	ip := ipNet.IP.To4()
 	if ip == nil {
 		return ""
 	}
 	mask := ipNet.Mask
+	// Compute broadcast address (all ones in host portion)
+	broadcast := make(net.IP, len(ip))
+	copy(broadcast, ip)
+	for j := range broadcast {
+		broadcast[j] |= ^mask[j]
+	}
 	// Skip network address (all 0)
 	incrementIP(ip, mask)
 	// Skip gateway (.1)
 	incrementIP(ip, mask)
 
-	for ipNet.Contains(ip) {
+	for ipNet.Contains(ip) && !ip.Equal(broadcast) {
 		ipStr := ip.String()
 		if !usedIPs[ipStr] && ipStr != nw.Gateway {
 			return ipStr
