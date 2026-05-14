@@ -218,10 +218,11 @@ func (f *FirewallManager) RemovePortMapping(containerIP string, hostPort, contai
 }
 
 func (f *FirewallManager) removeNftablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
-	handle := fmt.Sprintf("dpt %d dnat to %s:%d", hostPort, containerIP, containerPort)
-	cmd := exec.Command("nft", "delete", "rule", "ip", "nat", "DOKI", "handle", handle)
-	_ = cmd.Run()
-	return nil
+	// nft delete requires a numeric handle - use iptables as reliable fallback
+	cmd := exec.Command("iptables", "-t", "nat", "-D", "DOKI",
+		"-p", proto, "--dport", fmt.Sprintf("%d", hostPort),
+		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIP, containerPort))
+	return cmd.Run()
 }
 
 func (f *FirewallManager) removeIptablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {

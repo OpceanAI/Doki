@@ -425,12 +425,17 @@ Update configuration of one or more containers.`,
 
 Block until one or more containers stop, then print their exit codes.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			if len(args) > 0 {
-				exitCode, err := c.Wait(args[0])
-				if err != nil {
-					return err
+			containerIDs := cleanIDs(args)
+			if len(containerIDs) > 0 {
+				var lastExit int
+				for _, id := range containerIDs {
+					exitCode, err := c.Wait(id)
+					if err != nil {
+						return err
+					}
+					lastExit = exitCode
 				}
-				os.Exit(exitCode)
+				os.Exit(lastExit)
 			}
 			return nil
 		},
