@@ -5,6 +5,7 @@
 <img src="https://img.shields.io/badge/Rust-doki--init-purple?style=for-the-badge&labelColor=0A0A0A&logo=rust&logoColor=white">
 <img src="https://img.shields.io/badge/API-Docker_v1.44-6366F1?style=for-the-badge&labelColor=0A0A0A">
 <img src="https://img.shields.io/badge/License-Apache_2.0-6366F1?style=for-the-badge&labelColor=0A0A0A">
+<img src="https://img.shields.io/badge/Website-doki.opceanai.com-06b6d4?style=for-the-badge&labelColor=0A0A0A&link=https://doki.opceanai.com">
 <img src="https://img.shields.io/badge/Mirrors-GitHub_|_GitLab_|_Codeberg-FCA121?style=for-the-badge&labelColor=0A0A0A">
 
 <br><br>
@@ -143,7 +144,13 @@ Android is not a second-class platform. It is the largest deployed Linux ecosyst
 
 ### Installation
 
-**Pre-compiled binaries (Android/Termux ARM64):**
+**One-liner (any architecture):**
+
+```bash
+curl -sL https://doki.opceanai.com | sh
+```
+
+**Manual download (Android/Termux ARM64):**
 
 ```bash
 # Download all ARM64 binaries
@@ -1098,6 +1105,7 @@ limitations under the License.
 
 | Platform | Repository | Wiki |
 |:---------|:-----------|:-----|
+| Website | [doki.opceanai.com](https://doki.opceanai.com) | Landing page |
 | GitHub | [OpceanAI/Doki](https://github.com/OpceanAI/Doki) | [Wiki](https://github.com/OpceanAI/Doki/wiki) |
 | GitLab | [aguitauwu/doki](https://gitlab.com/aguitauwu/doki) | [Wiki](https://gitlab.com/aguitauwu/doki/-/wikis) |
 | Codeberg | [aguitauwu/Doki](https://codeberg.org/aguitauwu/Doki) | [Wiki](https://codeberg.org/aguitauwu/Doki/wiki) |
