@@ -7,37 +7,15 @@ on:
     branches: [ main ]
 
 jobs:
-  sonarqube:
+  build:
+    name: Build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
-      - name: Run SonarQube Scanner
-        if: env.SONARQUBE_TOKEN != ''
-        uses: SonarSource/sonarqube-scan-action@master
+      - uses: sonarsource/sonarqube-scan-action@master
         env:
-          SONAR_HOST_URL: http://187.124.95.123:9000
-          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
-        with:
-          args: >
-            -Dsonar.projectKey=doki
-            -Dsonar.projectName=Doki
-            -Dsonar.sources=.
-            -Dsonar.inclusions=**/*.go,**/*.c,**/*.rs
-            -Dsonar.exclusions=**/*_test.go,**/vendor/**,**/node_modules/**
-
-      - name: SonarQube Quality Gate
-        if: env.SONARQUBE_TOKEN != ''
-        uses: SonarSource/sonarqube-quality-gate-action@master
-        timeout-minutes: 5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
-          SONAR_HOST_URL: http://187.124.95.123:9000
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
