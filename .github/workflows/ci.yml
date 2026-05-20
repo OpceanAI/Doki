@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.26', '1.27']
+        go: ['1.26', '1.28']
 
     steps:
       - name: Checkout
@@ -31,9 +31,9 @@ jobs:
         run: go vet ./...
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.65.0
+          version: v2.12
 
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
