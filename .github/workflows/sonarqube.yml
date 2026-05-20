@@ -24,7 +24,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.60
+          version: v1.61
 
       - name: Run SonarQube Scanner
         uses: SonarSource/sonarqube-scan-action@master
