@@ -9,7 +9,6 @@ on:
 jobs:
   sonarqube:
     runs-on: ubuntu-latest
-    if: ${{ secrets.SONARQUBE_TOKEN != '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,6 +21,7 @@ jobs:
           go-version: '1.23'
 
       - name: Run SonarQube Scanner
+        if: env.SONARQUBE_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@master
         env:
           SONAR_HOST_URL: http://187.124.95.123:9000
@@ -35,6 +35,7 @@ jobs:
             -Dsonar.exclusions=**/*_test.go,**/vendor/**,**/node_modules/**
 
       - name: SonarQube Quality Gate
+        if: env.SONARQUBE_TOKEN != ''
         uses: SonarSource/sonarqube-quality-gate-action@master
         timeout-minutes: 5
         env:
