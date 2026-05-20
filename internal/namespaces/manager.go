@@ -1,3 +1,5 @@
+//go:build linux
+
 package namespaces
 
 import (
@@ -10,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/OpceanAI/Doki/pkg/common"
+	"golang.org/x/sys/unix"
 )
 
 // Type represents a Linux namespace type.
@@ -38,8 +41,8 @@ var cloneFlags = map[Type]int{
 
 // Manager manages Linux namespaces for containers.
 type Manager struct {
-	root    string
-	nsPids  map[string][]int // containerID -> keeper process pids
+	root   string
+	nsPids map[string][]int // containerID -> keeper process pids
 }
 
 // NewManager creates a new namespace manager.
@@ -281,9 +284,8 @@ func JoinNamespace(nsType Type, path string) error {
 		return fmt.Errorf("unknown namespace type: %s", nsType)
 	}
 
-	_, _, errno := syscall.RawSyscall(syscall.SYS_SETNS, f.Fd(), uintptr(flag), 0)
-	if errno != 0 {
-		return fmt.Errorf("setns %s: %w", nsType, errno)
+	if err := unix.Setns(int(f.Fd()), flag); err != nil {
+		return fmt.Errorf("setns %s: %w", nsType, err)
 	}
 
 	return nil
@@ -333,13 +335,11 @@ func CreatePersistentNamespace(targetPath string, pid int, nsType Type) error {
 	}
 	f.Close()
 
-	cmd := exec.Command("mount", "--bind", nsPath, targetPath)
-	return cmd.Run()
+	return exec.Command("mount", "--bind", nsPath, targetPath).Run()
 }
 
 // DeletePersistentNamespace removes a persistent namespace.
 func (m *Manager) DeletePersistentNamespace(containerID string) error {
-	// Kill namespace keeper processes.
 	if pids, ok := m.nsPids[containerID]; ok {
 		for _, pid := range pids {
 			syscall.Kill(pid, syscall.SIGKILL)
