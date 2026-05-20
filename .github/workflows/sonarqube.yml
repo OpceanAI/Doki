@@ -19,13 +19,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
+          go-version: '1.26'
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12
-          args: --timeout=5m
 
       - name: Run SonarQube Scanner
         uses: SonarSource/sonarqube-scan-action@master

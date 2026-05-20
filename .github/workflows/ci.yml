@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.22', '1.23']
+        go: ['1.26', '1.27']
 
     steps:
       - name: Checkout
@@ -22,12 +22,18 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          cache: true
 
       - name: Build
         run: go build ./...
 
       - name: Vet
         run: go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: v1.65.0
 
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
