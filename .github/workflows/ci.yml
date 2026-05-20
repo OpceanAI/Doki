@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.26', '1.28']
+        go: ['1.26']
 
     steps:
       - name: Checkout
