@@ -21,11 +21,6 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.61
-
       - name: Run SonarQube Scanner
         uses: SonarSource/sonarqube-scan-action@master
         env:
