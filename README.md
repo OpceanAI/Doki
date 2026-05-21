@@ -1,77 +1,5 @@
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="680" height="200" viewBox="0 0 680 200">
-    <defs>
-      <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" style="stop-color:#0f0f23"/>
-        <stop offset="50%" style="stop-color:#1a1a3e"/>
-        <stop offset="100%" style="stop-color:#0f0f23"/>
-      </linearGradient>
-      <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" style="stop-color:#6366f1"/>
-        <stop offset="50%" style="stop-color:#818cf8"/>
-        <stop offset="100%" style="stop-color:#6366f1"/>
-      </linearGradient>
-      <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" style="stop-color:#e0e7ff"/>
-        <stop offset="100%" style="stop-color:#c7d2fe"/>
-      </linearGradient>
-      <filter id="glow">
-        <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-        <feMerge>
-          <feMergeNode in="coloredBlur"/>
-          <feMergeNode in="SourceGraphic"/>
-        </feMerge>
-      </filter>
-      <filter id="softGlow">
-        <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-        <feMerge>
-          <feMergeNode in="coloredBlur"/>
-          <feMergeNode in="SourceGraphic"/>
-        </feMerge>
-      </filter>
-    </defs>
-    <rect width="680" height="200" rx="16" fill="url(#bg)" stroke="#6366f1" stroke-width="1" stroke-opacity="0.3"/>
-    <!-- Animated dots -->
-    <circle cx="50" cy="40" r="1.5" fill="#6366f1" opacity="0.4">
-      <animate attributeName="opacity" values="0.2;0.8;0.2" dur="3s" repeatCount="indefinite"/>
-    </circle>
-    <circle cx="620" cy="30" r="1" fill="#818cf8" opacity="0.3">
-      <animate attributeName="opacity" values="0.1;0.6;0.1" dur="4s" repeatCount="indefinite"/>
-    </circle>
-    <circle cx="100" cy="170" r="1" fill="#6366f1" opacity="0.3">
-      <animate attributeName="opacity" values="0.2;0.7;0.2" dur="2.5s" repeatCount="indefinite"/>
-    </circle>
-    <circle cx="580" cy="160" r="1.5" fill="#818cf8" opacity="0.4">
-      <animate attributeName="opacity" values="0.3;0.9;0.3" dur="3.5s" repeatCount="indefinite"/>
-    </circle>
-    <circle cx="340" cy="25" r="1" fill="#6366f1" opacity="0.3">
-      <animate attributeName="opacity" values="0.1;0.5;0.1" dur="5s" repeatCount="indefinite"/>
-    </circle>
-    <!-- Container icon -->
-    <g transform="translate(310, 30)" filter="url(#glow)">
-      <rect x="0" y="0" width="60" height="40" rx="6" fill="none" stroke="url(#accent)" stroke-width="2"/>
-      <rect x="8" y="8" width="12" height="12" rx="2" fill="#6366f1" opacity="0.8">
-        <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
-      </rect>
-      <rect x="24" y="8" width="12" height="12" rx="2" fill="#818cf8" opacity="0.6">
-        <animate attributeName="opacity" values="0.3;0.8;0.3" dur="2.5s" repeatCount="indefinite"/>
-      </rect>
-      <rect x="40" y="8" width="12" height="12" rx="2" fill="#6366f1" opacity="0.4">
-        <animate attributeName="opacity" values="0.2;0.7;0.2" dur="3s" repeatCount="indefinite"/>
-      </rect>
-      <line x1="8" y1="28" x2="52" y2="28" stroke="#6366f1" stroke-width="1.5" opacity="0.5"/>
-    </g>
-    <!-- Title -->
-    <text x="340" y="115" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="42" font-weight="800" fill="url(#textGrad)" letter-spacing="8">DOKI</text>
-    <!-- Subtitle -->
-    <text x="340" y="145" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="13" fill="#94a3b8" letter-spacing="4">THE UNIVERSAL CONTAINER ENGINE</text>
-    <!-- Divider line -->
-    <line x1="240" y1="158" x2="440" y2="158" stroke="url(#accent)" stroke-width="1" opacity="0.4"/>
-    <!-- Badges -->
-    <text x="340" y="178" text-anchor="middle" font-family="monospace" font-size="10" fill="#64748b" letter-spacing="1">v0.9.1 · Go 1.26+ · Rust · Docker API v1.44 · Apache 2.0</text>
-    <!-- Bottom accent line -->
-    <line x1="0" y1="199" x2="680" y2="199" stroke="url(#accent)" stroke-width="1" opacity="0.2"/>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/banner.svg" alt="Doki Banner" width="680">
 </p>
 
 <p align="center">
@@ -95,19 +23,7 @@
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <defs>
-      <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" style="stop-color:#6366f1;stop-opacity:0"/>
-        <stop offset="50%" style="stop-color:#6366f1;stop-opacity:1"/>
-        <stop offset="100%" style="stop-color:#6366f1;stop-opacity:0"/>
-      </linearGradient>
-    </defs>
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/wave.svg" alt="Wave Divider" width="600">
 </p>
 
 # The Universal Container Engine
@@ -121,30 +37,13 @@
 <br>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Linux-000?style=for-the-badge&logo=linux&logoColor=fff" alt="Linux">
-  <img src="https://img.shields.io/badge/macOS-000?style=for-the-badge&logo=apple&logoColor=fff" alt="macOS">
-  <img src="https://img.shields.io/badge/Android-000?style=for-the-badge&logo=android&logoColor=3DDC84" alt="Android">
-  <img src="https://img.shields.io/badge/Termux-000?style=for-the-badge" alt="Termux">
-  <img src="https://img.shields.io/badge/Rootless-000?style=for-the-badge" alt="Rootless">
-  <img src="https://img.shields.io/badge/CRI--Ready-000?style=for-the-badge" alt="CRI-Ready">
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/platforms.svg" alt="Platforms" width="600">
 </p>
 
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <defs>
-      <linearGradient id="lineGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" style="stop-color:#6366f1;stop-opacity:0"/>
-        <stop offset="50%" style="stop-color:#6366f1;stop-opacity:1"/>
-        <stop offset="100%" style="stop-color:#6366f1;stop-opacity:0"/>
-      </linearGradient>
-    </defs>
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad2)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## Overview
@@ -163,6 +62,10 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 <br>
 
 ## Comparison
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/comparison.svg" alt="Binary Size Comparison" width="600">
+</p>
 
 | Metric | Doki | Docker | Podman | containerd |
 |:-------|:----:|:------:|:------:|:----------:|
@@ -192,12 +95,7 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## Features
@@ -248,12 +146,7 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/wave.svg" alt="Wave Divider" width="600">
 </p>
 
 ## Quick Start
@@ -318,12 +211,7 @@ docker.listContainers().then(console.log);
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## Architecture
@@ -363,12 +251,7 @@ DokiVM provides hardware-level isolation via lightweight virtual machines.
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## CLI
@@ -437,12 +320,7 @@ Doki provides **108 commands** across 8 categories.
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/wave.svg" alt="Wave Divider" width="600">
 </p>
 
 ## Dokifile Builder
@@ -540,12 +418,7 @@ services:
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## REST API
@@ -643,12 +516,7 @@ doki run -p 8080-8090:80 nginx:alpine               # Port range
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## Security
@@ -685,15 +553,14 @@ landlock_create_ruleset, landlock_add_rule         # Landlock sandboxing
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/wave.svg" alt="Wave Divider" width="600">
 </p>
 
 ## Performance
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/performance.svg" alt="Performance Chart" width="600">
+</p>
 
 Measured on **Qualcomm Snapdragon 685, Android 14, Termux**. Cold pull, ARM64 native binaries.
 
@@ -759,12 +626,7 @@ doki run --distro opensuse
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## Configuration
@@ -802,12 +664,7 @@ doki run --distro opensuse
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/wave.svg" alt="Wave Divider" width="600">
 </p>
 
 ## Building
@@ -857,12 +714,7 @@ GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-init ./c
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## Project Structure
@@ -902,12 +754,7 @@ Doki/
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## Known Limitations
@@ -947,12 +794,7 @@ Doki/
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/wave.svg" alt="Wave Divider" width="600">
 </p>
 
 ## What's New
@@ -986,12 +828,7 @@ Doki/
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## Contributing
@@ -1025,12 +862,7 @@ go test ./...
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="80" viewBox="0 0 600 80">
-    <line x1="0" y1="40" x2="600" y2="40" stroke="url(#lineGrad)" stroke-width="1"/>
-    <circle cx="300" cy="40" r="4" fill="#6366f1">
-      <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
-    </circle>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/divider.svg" alt="Divider" width="600">
 </p>
 
 ## License
@@ -1073,17 +905,7 @@ limitations under the License.
 <br>
 
 <p align="center">
-  <svg xmlns="http://www.w3.org/2000/svg" width="400" height="60" viewBox="0 0 400 60">
-    <defs>
-      <linearGradient id="footerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" style="stop-color:#6366f1;stop-opacity:0"/>
-        <stop offset="50%" style="stop-color:#6366f1;stop-opacity:0.6"/>
-        <stop offset="100%" style="stop-color:#6366f1;stop-opacity:0"/>
-      </linearGradient>
-    </defs>
-    <line x1="0" y1="30" x2="400" y2="30" stroke="url(#footerGrad)" stroke-width="1"/>
-    <text x="200" y="50" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#64748b" letter-spacing="2">THE CONTAINER ENGINE FOR THE OTHER 3 BILLION DEVICES</text>
-  </svg>
+  <img src="https://raw.githubusercontent.com/OpceanAI/Doki/main/.github/assets/footer.svg" alt="Footer" width="400">
 </p>
 
 <p align="center">
