@@ -7,12 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
@@ -71,19 +73,27 @@ func (d *Dockerignore) Matches(path string) bool {
 
 func matchDoubleStar(pattern, name string) bool {
 	parts := strings.Split(pattern, "**")
-	switch len(parts) {
-	case 1:
+	if len(parts) == 1 {
 		matched, _ := filepath.Match(pattern, name)
 		return matched
-	case 2:
-		for i := 0; i <= len(name); i++ {
-			if matchDoubleStar(parts[0], name[:i]) {
-				if matched, _ := filepath.Match(parts[1], name[i:]); matched {
-					return true
-				}
-				if matchDoubleStar(parts[1], name[i:]) {
-					return true
-				}
+	}
+	prefix := parts[0]
+	rest := strings.Join(parts[1:], "**")
+	for i := 0; i <= len(name); i++ {
+		leftMatch := false
+		if prefix == "" {
+			leftMatch = true
+		} else {
+			if m, _ := filepath.Match(prefix, name[:i]); m {
+				leftMatch = true
+			}
+		}
+		if leftMatch {
+			if m, _ := filepath.Match(rest, name[i:]); m {
+				return true
+			}
+			if matchDoubleStar(rest, name[i:]) {
+				return true
 			}
 		}
 	}
@@ -148,6 +158,9 @@ type Builder struct {
 	secrets       map[string]string
 	dockerignore  *Dockerignore
 	noCache       bool
+	cache         *BuildCache
+	progress      *ProgressTracker
+	log           *slog.Logger
 }
 
 // NewBuilder creates a new image builder.
@@ -159,7 +172,26 @@ func NewBuilder(store *image.Store) *Builder {
 		envMap:      make(map[string]string),
 		argDefaults: make(map[string]string),
 		secrets:     make(map[string]string),
+		log:         slog.Default().With("component", "builder"),
 	}
+}
+
+// WithCache sets the build cache for the builder.
+func (b *Builder) WithCache(cache *BuildCache) *Builder {
+	b.cache = cache
+	return b
+}
+
+// WithProgress sets the progress tracker for the builder.
+func (b *Builder) WithProgress(tracker *ProgressTracker) *Builder {
+	b.progress = tracker
+	return b
+}
+
+// WithLog sets the logger for the builder.
+func (b *Builder) WithLog(log *slog.Logger) *Builder {
+	b.log = log
+	return b
 }
 
 // NewDokifileParser creates a new Dokifile parser.
@@ -422,7 +454,9 @@ func (b *Builder) ensureCacheDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	b.cacheDir = filepath.Join(home, ".doki", "cache", "build")
-	common.EnsureDir(b.cacheDir)
+	if err := common.EnsureDir(b.cacheDir); err != nil {
+		b.log.Warn("failed to create cache dir", "path", b.cacheDir, "err", err)
+	}
 	return b.cacheDir
 }
 
@@ -438,7 +472,9 @@ func (b *Builder) saveLayer(rootDir string, createdBy string) (string, int64, er
 	digest := "sha256:" + digestHex
 
 	layerPath := b.store.GetLayerPath(digest)
-	common.EnsureDir(filepath.Dir(layerPath))
+	if err := common.EnsureDir(filepath.Dir(layerPath)); err != nil {
+		return "", 0, fmt.Errorf("create layer dir: %w", err)
+	}
 	if err := os.WriteFile(layerPath, buf.Bytes(), 0644); err != nil {
 		return "", 0, fmt.Errorf("write layer: %w", err)
 	}
@@ -507,8 +543,8 @@ func applyChowChmod(path string, chown, chmod string) error {
 			gid, _ = strconv.Atoi(gidStr)
 		}
 		if uid >= 0 && gid >= 0 {
-			if err := os.Chown(path, uid, gid); err != nil {
-				return fmt.Errorf("chown %s: %w", path, err)
+			if err := os.Lchown(path, uid, gid); err != nil {
+				return fmt.Errorf("lchown %s: %w", path, err)
 			}
 		}
 	}
@@ -539,6 +575,8 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 	// Parse .dockerignore
 	if di, err := ParseDockerignore(filepath.Join(cfg.Context, ".dockerignore")); err == nil {
 		b.dockerignore = di
+	} else if !os.IsNotExist(err) {
+		b.log.Warn("failed to parse .dockerignore", "err", err)
 	}
 
 	// Initialize build args and secrets
@@ -625,17 +663,24 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 
 	// Build each stage
 	var finalWorkDir string
+	var workDirs []string
+	defer func() {
+		for _, d := range workDirs {
+			os.RemoveAll(d)
+		}
+	}()
+
 	for _, stage := range stages {
 		workDir, err := os.MkdirTemp("", "doki-build-")
 		if err != nil {
 			return fmt.Errorf("create build temp dir: %w", err)
 		}
+		workDirs = append(workDirs, workDir)
 
 		if stage.FromStage != "" {
 			// Multi-stage: copy from referenced stage dir
 			if srcDir, ok := b.stageDirs[stage.FromStage]; ok {
 				if err := common.CopyDir(srcDir, workDir); err != nil {
-					os.RemoveAll(workDir)
 					return fmt.Errorf("copy from stage %s: %w", stage.FromStage, err)
 				}
 			}
@@ -643,13 +688,11 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 			// Pull base image if needed
 			if !b.store.Exists(stage.From) && cfg.Pull {
 				if _, err := b.store.Pull(stage.From); err != nil {
-					os.RemoveAll(workDir)
 					return fmt.Errorf("pull base image %s: %w", stage.From, err)
 				}
 			}
 			// Extract base image layers into workDir
 			if err := b.extractBaseImageToDir(stage.From, workDir); err != nil {
-				os.RemoveAll(workDir)
 				return fmt.Errorf("extract base image %s: %w", stage.From, err)
 			}
 		}
@@ -689,11 +732,6 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 		}
 
 		finalWorkDir = workDir
-
-		// Clean up intermediate stages (not the last one)
-		if len(stages) > 1 && stage != stages[len(stages)-1] {
-			defer os.RemoveAll(workDir)
-		}
 	}
 
 	// Save the final image
@@ -761,7 +799,10 @@ func (b *Builder) commitImage(stage *Stage, workDir string, tags []string) error
 		tags = []string{"doki:latest"}
 	}
 
-	configData, _ := json.Marshal(config)
+	configData, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
 	configDigest := "sha256:" + hex.EncodeToString(sha256Hash(configData))
 
 	record := &image.ImageRecord{
@@ -784,11 +825,20 @@ func sha256Hash(data []byte) []byte {
 	return h.Sum(nil)
 }
 
+var (
+	getArchOnce sync.Once
+	getArchVal  string
+)
+
 func getArch() string {
-	if arch, err := exec.Command("uname", "-m").Output(); err == nil {
-		return strings.TrimSpace(string(arch))
-	}
-	return "arm64"
+	getArchOnce.Do(func() {
+		if arch, err := exec.Command("uname", "-m").Output(); err == nil {
+			getArchVal = strings.TrimSpace(string(arch))
+		} else {
+			getArchVal = "arm64"
+		}
+	})
+	return getArchVal
 }
 
 func parseArgs(s string) []string {
@@ -912,7 +962,7 @@ func (b *Builder) executeInstruction(stage *Stage, inst *Instruction) error {
 		if len(inst.Args) > 0 {
 			dir = inst.Args[0]
 		}
-		return b.executeWorkdir(stage, inst, &dir)
+		return b.executeWorkdir(stage, inst, "/", &dir)
 	case "USER":
 		return b.executeUser(stage, inst)
 	case "EXPOSE":

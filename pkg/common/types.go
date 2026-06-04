@@ -8,10 +8,16 @@ import (
 )
 
 // DokiVersion is the current version of the Doki engine.
-const DokiVersion = "0.8.0"
+// Bumped to v0.9.2: bugfixes (DNS activation, slog, atomic state, 16KB page size).
+const DokiVersion = "0.9.2"
 
 // DokiAPIVersion is the compatible Docker Engine API version.
-const DokiAPIVersion = "1.44"
+// Aligned with Docker Engine 29.5.x (May 2026) max API.
+const DokiAPIVersion = "1.48"
+
+// DokiMinClient is the minimum API version we accept from clients.
+// Below this we negotiate up.
+const DokiMinClient = "1.43"
 
 // ContainerState represents the state of a container.
 type ContainerState string
@@ -391,7 +397,7 @@ type SearchResult struct {
 // DefaultDaemonSocket returns the default daemon socket path.
 func DefaultDaemonSocket() string {
 	if s := os.Getenv("DOKI_HOST"); s != "" {
-		return s
+		return strings.TrimPrefix(s, "unix://")
 	}
 	if s := os.Getenv("DOCKER_HOST"); s != "" {
 		return strings.TrimPrefix(s, "unix://")
@@ -418,6 +424,8 @@ type ImageRef struct {
 }
 
 // ParseImageRefString parses an image reference.
+// Supports formats: name, name:tag, registry/name, registry/name:tag,
+// registry:port/name, registry:port/name:tag, name@digest, name:tag@digest
 func ParseImageRefString(ref string) (*ImageRef, error) {
 	ir := &ImageRef{Tag: "latest"}
 
@@ -425,18 +433,22 @@ func ParseImageRefString(ref string) (*ImageRef, error) {
 		ir.Digest = ref[idx+1:]
 		ref = ref[:idx]
 	}
-	if idx := strings.Index(ref, ":"); idx != -1 {
-		ir.Tag = ref[idx+1:]
-		ref = ref[:idx]
-	}
 
 	parts := strings.SplitN(ref, "/", 3)
 	switch len(parts) {
 	case 1:
+		if idx := strings.Index(parts[0], ":"); idx != -1 {
+			ir.Tag = parts[0][idx+1:]
+			parts[0] = parts[0][:idx]
+		}
 		ir.Registry = "registry-1.docker.io"
 		ir.Name = "library/" + parts[0]
 	case 2:
-		if strings.Contains(parts[0], ".") || parts[0] == "localhost" {
+		if idx := strings.Index(parts[1], ":"); idx != -1 {
+			ir.Tag = parts[1][idx+1:]
+			parts[1] = parts[1][:idx]
+		}
+		if strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost" {
 			ir.Registry = parts[0]
 			ir.Name = parts[1]
 		} else {
@@ -444,6 +456,10 @@ func ParseImageRefString(ref string) (*ImageRef, error) {
 			ir.Name = parts[0] + "/" + parts[1]
 		}
 	case 3:
+		if idx := strings.Index(parts[2], ":"); idx != -1 {
+			ir.Tag = parts[2][idx+1:]
+			parts[2] = parts[2][:idx]
+		}
 		ir.Registry = parts[0]
 		ir.Name = parts[1] + "/" + parts[2]
 	}

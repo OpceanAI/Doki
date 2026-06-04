@@ -1,4 +1,5 @@
 bin/
+releases/
 *.log
 .DS_Store
 /tmp/

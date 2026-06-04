@@ -134,7 +134,7 @@ func TestGenerateMacAddr(t *testing.T) {
 func TestNewManager(t *testing.T) {
 	dir := t.TempDir()
 	fw := NewFirewallManager(FirewallIptables)
-	dns := NewDNSServer()
+	dns := NewDNSServer(nil)
 
 	m, err := NewManager(dir, fw, dns)
 	if err != nil {
@@ -168,7 +168,7 @@ func TestNewManager(t *testing.T) {
 
 func TestCreateNetwork(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	cfg := &NetworkConfig{
 		Name:   "testnet",
@@ -195,7 +195,7 @@ func TestCreateNetwork(t *testing.T) {
 
 func TestCreateDuplicateNetwork(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	m.CreateNetwork(&NetworkConfig{Name: "duplicate", Driver: "bridge"})
 	_, err := m.CreateNetwork(&NetworkConfig{Name: "duplicate", Driver: "bridge"})
@@ -206,7 +206,7 @@ func TestCreateDuplicateNetwork(t *testing.T) {
 
 func TestGetNetwork(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	created, _ := m.CreateNetwork(&NetworkConfig{Name: "getnet", Driver: "bridge"})
 
@@ -229,7 +229,7 @@ func TestGetNetwork(t *testing.T) {
 
 func TestGetNetworkNotFound(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	_, err := m.GetNetwork("nonexistent")
 	if err == nil {
@@ -239,7 +239,7 @@ func TestGetNetworkNotFound(t *testing.T) {
 
 func TestRemoveNetwork(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	m.CreateNetwork(&NetworkConfig{Name: "removable", Driver: "bridge"})
 
@@ -255,7 +255,7 @@ func TestRemoveNetwork(t *testing.T) {
 
 func TestCannotRemoveBuiltinNetwork(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	err := m.RemoveNetwork("bridge")
 	if err == nil {
@@ -265,7 +265,7 @@ func TestCannotRemoveBuiltinNetwork(t *testing.T) {
 
 func TestRemoveNetworkWithEndpoints(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	nw, _ := m.CreateNetwork(&NetworkConfig{Name: "inuse", Driver: "bridge"})
 	nw.Containers["container1"] = &Endpoint{}
@@ -278,7 +278,7 @@ func TestRemoveNetworkWithEndpoints(t *testing.T) {
 
 func TestConnect(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	nw, _ := m.CreateNetwork(&NetworkConfig{
 		Name:   "conn",
@@ -304,7 +304,7 @@ func TestConnect(t *testing.T) {
 
 func TestDisconnect(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	nw, _ := m.CreateNetwork(&NetworkConfig{
 		Name:   "disconn",
@@ -326,7 +326,7 @@ func TestDisconnect(t *testing.T) {
 
 func TestPrune(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	m.CreateNetwork(&NetworkConfig{Name: "prune1", Driver: "bridge"})
 	m.CreateNetwork(&NetworkConfig{Name: "prune2", Driver: "bridge"})
@@ -342,7 +342,7 @@ func TestPrune(t *testing.T) {
 
 func TestPruneSkipsBuiltins(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	pruned, err := m.Prune()
 	if err != nil {
@@ -359,7 +359,7 @@ func TestPruneSkipsBuiltins(t *testing.T) {
 
 func TestInspect(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	m.CreateNetwork(&NetworkConfig{
 		Name:   "inspectnet",
@@ -381,7 +381,7 @@ func TestInspect(t *testing.T) {
 
 func TestListNetworks(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer())
+	m, _ := NewManager(dir, NewFirewallManager(FirewallIptables), NewDNSServer(nil))
 
 	nets, err := m.ListNetworks()
 	if err != nil {
@@ -433,7 +433,7 @@ func TestDetectFirewallBackend(t *testing.T) {
 }
 
 func TestDNSServerNew(t *testing.T) {
-	dns := NewDNSServer()
+	dns := NewDNSServer(nil)
 	if dns == nil {
 		t.Fatal("NewDNSServer returned nil")
 	}

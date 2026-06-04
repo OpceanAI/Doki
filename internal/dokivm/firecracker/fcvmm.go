@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -105,13 +106,23 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 		Timeout: 10 * time.Second,
 	}
 
-	v.configureMachine(client)
-	v.configureBootSource(client, vmID)
-	v.configureDrives(client, vmID)
-	v.configureNetwork(client, vmID)
+	if err := v.configureMachine(client); err != nil {
+		return fmt.Errorf("configure machine: %w", err)
+	}
+	if err := v.configureBootSource(client, vmID); err != nil {
+		return fmt.Errorf("configure boot source: %w", err)
+	}
+	if err := v.configureDrives(client, vmID); err != nil {
+		return fmt.Errorf("configure drives: %w", err)
+	}
+	if err := v.configureNetwork(client, vmID); err != nil {
+		return fmt.Errorf("configure network: %w", err)
+	}
 
 	// Start the VM.
-	v.sendAction(client, "InstanceStart")
+	if err := v.sendAction(client, "InstanceStart"); err != nil {
+		return fmt.Errorf("start VM: %w", err)
+	}
 
 	vm.State = dokivm.VMStateRunning
 	vm.StartedAt = time.Now()
@@ -129,39 +140,61 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 	return nil
 }
 
-func (v *VMM) configureMachine(client *http.Client) {
+func (v *VMM) configureMachine(client *http.Client) error {
 	body := map[string]interface{}{
 		"vcpu_count":  1,
 		"mem_size_mib": 128,
 		"cpu_template": "T2",
 	}
-	data, _ := json.Marshal(body)
-	req, _ := http.NewRequest("PUT", "http://unix/machine-config", bytes.NewReader(data))
-	req.Header.Set("Content-Type", "application/json")
-	resp, _ := client.Do(req)
-	if resp != nil {
-		resp.Body.Close()
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal machine config: %w", err)
 	}
+	req, err := http.NewRequest("PUT", "http://unix/machine-config", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("create machine config request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send machine config: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("machine config: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
-func (v *VMM) configureBootSource(client *http.Client, vmID string) {
+func (v *VMM) configureBootSource(client *http.Client, vmID string) error {
 	body := map[string]interface{}{
 		"kernel_image_path": filepath.Join(v.cfg.KernelPath),
 		"boot_args":         "console=ttyS0 reboot=k panic=1 pci=off nomodules ro quiet doki.init=1",
 	}
-	data, _ := json.Marshal(body)
-	req, _ := http.NewRequest("PUT", "http://unix/boot-source", bytes.NewReader(data))
-	req.Header.Set("Content-Type", "application/json")
-	resp, _ := client.Do(req)
-	if resp != nil {
-		resp.Body.Close()
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal boot source: %w", err)
 	}
+	req, err := http.NewRequest("PUT", "http://unix/boot-source", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("create boot source request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send boot source: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("boot source: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
-func (v *VMM) configureDrives(client *http.Client, vmID string) {
+func (v *VMM) configureDrives(client *http.Client, vmID string) error {
 	rootfsPath := filepath.Join(v.cfg.WorkDir, vmID, "rootfs.ext4")
 	if _, err := os.Stat(rootfsPath); err != nil {
-		return
+		return nil // no rootfs to configure
 	}
 	body := map[string]interface{}{
 		"drive_id":      "rootfs",
@@ -169,41 +202,78 @@ func (v *VMM) configureDrives(client *http.Client, vmID string) {
 		"is_root_device": true,
 		"is_read_only":   false,
 	}
-	data, _ := json.Marshal(body)
-	req, _ := http.NewRequest("PUT", "http://unix/drives/rootfs", bytes.NewReader(data))
-	req.Header.Set("Content-Type", "application/json")
-	resp, _ := client.Do(req)
-	if resp != nil {
-		resp.Body.Close()
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal drive config: %w", err)
 	}
+	req, err := http.NewRequest("PUT", "http://unix/drives/rootfs", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("create drive config request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send drive config: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("drive config: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
-func (v *VMM) configureNetwork(client *http.Client, vmID string) {
-	tapName := fmt.Sprintf("doki-fc-%s", vmID[:8])
+func (v *VMM) configureNetwork(client *http.Client, vmID string) error {
+	idPart := vmID
+	if len(idPart) > 8 {
+		idPart = idPart[:8]
+	}
+	tapName := fmt.Sprintf("doki-fc-%s", idPart)
 	body := map[string]interface{}{
 		"iface_id":     "eth0",
 		"host_dev_name": tapName,
 	}
-	data, _ := json.Marshal(body)
-	req, _ := http.NewRequest("PUT", "http://unix/network-interfaces/eth0", bytes.NewReader(data))
-	req.Header.Set("Content-Type", "application/json")
-	resp, _ := client.Do(req)
-	if resp != nil {
-		resp.Body.Close()
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal network config: %w", err)
 	}
+	req, err := http.NewRequest("PUT", "http://unix/network-interfaces/eth0", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("create network config request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send network config: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("network config: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
-func (v *VMM) sendAction(client *http.Client, action string) {
+func (v *VMM) sendAction(client *http.Client, action string) error {
 	body := map[string]interface{}{
 		"action_type": action,
 	}
-	data, _ := json.Marshal(body)
-	req, _ := http.NewRequest("PUT", "http://unix/actions", bytes.NewReader(data))
-	req.Header.Set("Content-Type", "application/json")
-	resp, _ := client.Do(req)
-	if resp != nil {
-		resp.Body.Close()
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal action: %w", err)
 	}
+	req, err := http.NewRequest("PUT", "http://unix/actions", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("create action request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send action: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("action %s: status %d", action, resp.StatusCode)
+	}
+	return nil
 }
 
 func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) error {
@@ -213,8 +283,13 @@ func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) erro
 	if !ok || vm.PID == 0 {
 		return nil
 	}
-	proc, _ := os.FindProcess(vm.PID)
-	proc.Signal(syscall.SIGTERM)
+	proc, err := os.FindProcess(vm.PID)
+	if err != nil {
+		return fmt.Errorf("find process %d: %w", vm.PID, err)
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		slog.Warn("firecracker: SIGTERM failed", "pid", vm.PID, "err", err)
+	}
 	select {
 	case <-time.After(timeout):
 		proc.Signal(syscall.SIGKILL)
@@ -232,8 +307,13 @@ func (v *VMM) Kill(ctx context.Context, vmID string) error {
 	if !ok || vm.PID == 0 {
 		return nil
 	}
-	proc, _ := os.FindProcess(vm.PID)
-	proc.Signal(syscall.SIGKILL)
+	proc, err := os.FindProcess(vm.PID)
+	if err != nil {
+		return fmt.Errorf("find process %d: %w", vm.PID, err)
+	}
+	if err := proc.Signal(syscall.SIGKILL); err != nil {
+		slog.Warn("firecracker: SIGKILL failed", "pid", vm.PID, "err", err)
+	}
 	vm.State = dokivm.VMStateStopped
 	return nil
 }

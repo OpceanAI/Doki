@@ -25,11 +25,12 @@ type Command struct {
 
 func main() {
 	socket := os.Getenv("DOKI_HOST")
+	socket = strings.TrimPrefix(socket, "unix://")
 	if socket == "" {
 		socket = common.DefaultDaemonSocket()
 	}
 	if h := os.Getenv("DOCKER_HOST"); h != "" && socket == common.DefaultDaemonSocket() {
-		socket = h
+		socket = strings.TrimPrefix(h, "unix://")
 	}
 
 	c := cli.New(socket)
@@ -669,11 +670,24 @@ Options:
 			quiet := flagBool(args, "-q", "--quiet")
 			rmFlag := !flagBool(args, "--rm=false")
 			contextDir := "."
-			for i := len(args) - 1; i >= 0; i-- {
-				if !strings.HasPrefix(args[i], "-") {
-					contextDir = args[i]
-					break
+			skip := 0
+			for _, a := range args {
+				if skip > 0 {
+					skip--
+					continue
 				}
+				if a == "-t" || a == "--tag" || a == "-f" || a == "--file" {
+					skip = 1
+					continue
+				}
+				if strings.HasPrefix(a, "-") && strings.Contains(a, "=") {
+					continue
+				}
+				if strings.HasPrefix(a, "-") {
+					continue
+				}
+				contextDir = a
+				break
 			}
 			return c.Build(contextDir, f, tags, nil, noCache, pull, quiet, rmFlag)
 		},
@@ -1446,6 +1460,7 @@ func runInProot(rootfs string, args []string) error {
 		"-b", "/dev",
 		"--kill-on-exit",
 		"--link2symlink",
+		"-i", "0:0",
 	}
 	prootArgs = append(prootArgs, cleanArgs...)
 

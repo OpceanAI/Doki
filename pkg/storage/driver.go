@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -112,6 +113,73 @@ func (m *Manager) Driver() Driver {
 	return m.driver
 }
 
+// StorageStats returns storage statistics.
+type StorageStats struct {
+	DriverName  string `json:"driver_name"`
+	RootPath    string `json:"root_path"`
+	LayerCount  int    `json:"layer_count"`
+	TotalSize   int64  `json:"total_size"`
+	FreeSpace   int64  `json:"free_space"`
+}
+
+// Stats returns storage statistics.
+func (m *Manager) Stats() StorageStats {
+	stats := StorageStats{
+		DriverName: m.driver.Name(),
+		RootPath:   m.root,
+	}
+
+	// Count layers.
+	layersDir := filepath.Join(m.root, "layers")
+	entries, err := os.ReadDir(layersDir)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				stats.LayerCount++
+			}
+		}
+	}
+
+	// Get disk usage.
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(m.root, &stat); err == nil {
+		stats.FreeSpace = int64(stat.Bavail) * int64(stat.Bsize)
+	}
+
+	return stats
+}
+
+// DetectBestDriver detects the best available storage driver for the system.
+func DetectBestDriver(root string) string {
+	// 1. Try overlay2 (best performance, requires kernel support).
+	if canUseOverlay2() {
+		return DriverOverlay2
+	}
+	// 2. Try btrfs (if root is on btrfs).
+	if isBtrfs(root) {
+		return "btrfs"
+	}
+	// 3. Try zfs.
+	if _, err := exec.LookPath("zfs"); err == nil {
+		return "zfs"
+	}
+	// 4. Fallback to fuse-overlayfs.
+	return DriverFuseOverlayFS
+}
+
+func canUseOverlay2() bool {
+	// Check if kernel supports overlayfs.
+	if err := exec.Command("modprobe", "overlay").Run(); err == nil {
+		return true
+	}
+	// Check if overlay module is loaded.
+	data, err := os.ReadFile("/proc/filesystems")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "overlay")
+}
+
 // FuseOverlayFSDriver implements the Driver interface using fuse-overlayfs.
 type FuseOverlayFSDriver struct {
 	root      string
@@ -216,7 +284,10 @@ func (d *FuseOverlayFSDriver) Remove(id string) error {
 
 func (d *FuseOverlayFSDriver) Cleanup() error {
 	for _, dir := range []string{d.mergeDir, d.workDir} {
-		entries, _ := os.ReadDir(dir)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
 		for _, entry := range entries {
 			unmountOverlay(filepath.Join(dir, entry.Name()))
 		}
@@ -253,7 +324,10 @@ func (d *FuseOverlayFSDriver) getLowerDirs(id string) ([]string, error) {
 	var lowerDirs []string
 	for _, parent := range parents {
 		lowerDirs = append(lowerDirs, filepath.Join(d.layerDir, parent))
-		parentLowerDirs, _ := d.getLowerDirs(parent)
+		parentLowerDirs, err := d.getLowerDirs(parent)
+		if err != nil {
+			return nil, err
+		}
 		lowerDirs = append(lowerDirs, parentLowerDirs...)
 	}
 
@@ -299,7 +373,9 @@ func (d *Overlay2Driver) Get(id, mountLabel string) (string, error) {
 	mergeDir := filepath.Join(d.mergeDir, id)
 
 	for _, dir := range []string{upperDir, workDir, mergeDir} {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", fmt.Errorf("create dir %s: %w", dir, err)
+		}
 	}
 
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)

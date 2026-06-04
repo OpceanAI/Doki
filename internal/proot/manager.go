@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/OpceanAI/Doki/pkg/common"
 )
@@ -50,14 +49,39 @@ func IsAvailable() bool {
 	return p != ""
 }
 
+// ShouldUseProot returns true when proot should be the preferred execution mode.
+// Typically on Android/Termux where user namespaces are not available.
+func ShouldUseProot() bool {
+	if _, err := os.Stat("/system/bin/adb"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/data/data/com.termux"); err == nil {
+		return true
+	}
+	return false
+}
+
 // IsTermuxProot checks if the proot binary is the Termux-specific build.
 func IsTermuxProot() bool {
-	p, _ := exec.LookPath("proot")
+	p, err := exec.LookPath("proot")
+	if err != nil {
+		return false
+	}
 	return strings.Contains(p, "/data/data/com.termux")
 }
 
-// buildProotBaseArgs returns the common proot arguments for all execution methods.
-func buildProotBaseArgs(rootfs string) []string {
+// DetectKernelRelease reads the actual kernel release from /proc.
+func DetectKernelRelease() string {
+	data, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err == nil && len(data) > 2 {
+		return strings.TrimSpace(string(data))
+	}
+	return "6.17.0-PRoot-Distro"
+}
+
+// BuildProotBaseArgs returns the common proot arguments for all execution methods.
+// If uid/gid are >= 0, adds -i flag to impersonate that user inside proot.
+func BuildProotBaseArgs(rootfs string, uid, gid int) []string {
 	args := []string{
 		"-r", rootfs,
 		"-b", "/proc",
@@ -67,7 +91,11 @@ func buildProotBaseArgs(rootfs string) []string {
 		"-b", "/dev/urandom:/dev/random",
 		"--kill-on-exit",
 		"--link2symlink",
-		"--kernel-release=6.17.0-PRoot-Distro",
+		"--kernel-release=" + DetectKernelRelease(),
+	}
+
+	if uid >= 0 && gid >= 0 {
+		args = append(args, "-i", fmt.Sprintf("%d:%d", uid, gid))
 	}
 
 	selinuxTarget := filepath.Join(rootfs, "sys", "fs", "selinux")
@@ -77,8 +105,8 @@ func buildProotBaseArgs(rootfs string) []string {
 	return args
 }
 
-// appendAndroidBinds appends Android-specific bind mounts to proot args.
-func appendAndroidBinds(args []string) []string {
+// AppendAndroidBinds appends Android-specific bind mounts to proot args.
+func AppendAndroidBinds(args []string) []string {
 	for _, dir := range []string{
 		"/apex", "/system", "/vendor",
 		"/storage", "/sdcard",
@@ -102,7 +130,7 @@ func appendAndroidBinds(args []string) []string {
 
 // buildProotEnv builds the environment slice for proot execution.
 func buildProotEnv(userEnv []string) []string {
-	env := os.Environ()
+	env := common.StripHostEnv(os.Environ())
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
 	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
 	for _, e := range userEnv {
@@ -112,165 +140,11 @@ func buildProotEnv(userEnv []string) []string {
 }
 
 // Exec executes a command in a proot-based environment.
-func (m *Manager) Exec(rootfs string, args []string, env []string, workDir string) error {
-	prootArgs := buildProotBaseArgs(rootfs)
-	prootArgs = appendAndroidBinds(prootArgs)
+func (m *Manager) Exec(rootfs string, args []string, env []string, workDir string) (string, error) {
+	prootArgs := BuildProotBaseArgs(rootfs, -1, -1)
 
-	if workDir != "" {
-		prootArgs = append(prootArgs, "-w", workDir)
-	}
-	prootArgs = append(prootArgs, args...)
-
-	prootBin := FindProotBinary()
-	cmd := exec.Command(prootBin, prootArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = buildProotEnv(env)
-
-	return cmd.Run()
-}
-
-// PrepareRootfs prepares a rootfs directory for proot usage.
-func (m *Manager) PrepareRootfs(rootfs string, bindMounts map[string]string) error {
-	if err := common.EnsureDir(rootfs); err != nil {
-		return fmt.Errorf("create rootfs dir: %w", err)
-	}
-
-	// Create essential directories.
-	dirs := []string{
-		"proc", "sys", "dev", "tmp", "run",
-		"etc", "var", "home", "root", "opt",
-		"usr/bin", "usr/lib", "usr/share",
-	}
-
-	for _, dir := range dirs {
-		if err := common.EnsureDir(filepath.Join(rootfs, dir)); err != nil {
-			return err
-		}
-	}
-
-	// Create symlinks.
-	symlinks := map[string]string{
-		filepath.Join(rootfs, "usr/bin/env"): "/bin/env",
-	}
-
-	for link, target := range symlinks {
-		os.Remove(link)
-		os.Symlink(target, link)
-	}
-
-	return nil
-}
-
-// ExtractLayer extracts a container layer to the rootfs.
-func (m *Manager) ExtractLayer(rootfs, layerPath string) error {
-	cmd := exec.Command("tar", "-xf", layerPath, "-C", rootfs, "--no-same-owner")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-// CopyFile copies a file into the proot root filesystem.
-func (m *Manager) CopyFile(rootfs, src, dest string, mode os.FileMode) error {
-	target := filepath.Join(rootfs, dest)
-
-	if err := common.EnsureDir(filepath.Dir(target)); err != nil {
-		return err
-	}
-
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(target, data, mode)
-}
-
-// WriteFile writes content to a file inside the proot root filesystem.
-func (m *Manager) WriteFile(rootfs, dest, content string, mode os.FileMode) error {
-	target := filepath.Join(rootfs, dest)
-
-	if err := common.EnsureDir(filepath.Dir(target)); err != nil {
-		return err
-	}
-
-	return os.WriteFile(target, []byte(content), mode)
-}
-
-// ReadFile reads a file from inside the proot root filesystem.
-func (m *Manager) ReadFile(rootfs, path string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(rootfs, path))
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-// ResolvePath resolves a path relative to the proot root filesystem.
-func (m *Manager) ResolvePath(rootfs, path string) string {
-	if filepath.IsAbs(path) {
-		return filepath.Join(rootfs, path)
-	}
-	return filepath.Join(rootfs, path)
-}
-
-// SetupEnvironment prepares the environment for proot execution.
-func SetupEnvironment(env []string) []string {
-	prootEnv := []string{}
-
-	for _, e := range env {
-		// Filter out potentially dangerous variables.
-		if strings.HasPrefix(e, "LD_PRELOAD=") ||
-			strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
-			continue
-		}
-		prootEnv = append(prootEnv, e)
-	}
-
-	return prootEnv
-}
-
-// CanUseNamespaces checks if user namespaces are available on the system.
-func CanUseNamespaces() bool {
-	// Check /proc/sys/kernel/unprivileged_userns_clone.
-	data, err := os.ReadFile("/proc/sys/kernel/unprivileged_userns_clone")
-	if err == nil {
-		return strings.TrimSpace(string(data)) == "1"
-	}
-
-	// Fallback: try to create a user namespace.
-	cmd := exec.Command("unshare", "-U", "true")
-	err = cmd.Run()
-	return err == nil
-}
-
-// ShouldUseProot determines whether proot fallback should be used.
-func ShouldUseProot() bool {
-	if !IsAvailable() {
-		return false
-	}
-
-	// If can use namespaces, prefer them.
-	if CanUseNamespaces() {
-		return false
-	}
-
-	// On Android, use proot as fallback.
-	for _, path := range []string{"/system/build.prop", "/system/bin", "/vendor"} {
-		if _, err := os.Stat(path); err == nil {
-			return true
-		}
-	}
-
-	return false
-}
-
-// RunCommand runs a command inside a proot environment and captures output.
-func RunCommand(rootfs string, args []string, env []string) (string, error) {
-	prootArgs := buildProotBaseArgs(rootfs)
-	prootArgs = appendAndroidBinds(prootArgs)
+	// AppendAndroidBinds adds Android-specific mount points.
+	prootArgs = AppendAndroidBinds(prootArgs)
 	prootArgs = append(prootArgs, args...)
 
 	prootBin := FindProotBinary()

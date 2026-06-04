@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	goruntime "runtime"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,10 +40,10 @@ type Server struct {
 	events     chan *common.SystemEventsResponse
 	middleware []func(http.Handler) http.Handler
 	handler    http.Handler
-	dnsSrv     *network.DNSServer
-	execStore  map[string]*common.ExecConfig
-	execMu     sync.RWMutex
-	authCreds  struct {
+	// dnsSrv removed: DNS is managed through network.Manager, not directly.
+	execStore map[string]*common.ExecConfig
+	execMu    sync.RWMutex
+	authCreds struct {
 		Username      string
 		Password      string
 		ServerAddress string
@@ -103,6 +104,13 @@ func NewVolumeManager(root string) *VolumeManager {
 	return vm
 }
 
+func validateVolumeName(name string) bool {
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") || strings.Contains(name, string(os.PathSeparator)) {
+		return false
+	}
+	return true
+}
+
 func (vm *VolumeManager) loadFromDisk() {
 	entries, _ := os.ReadDir(vm.root)
 	for _, entry := range entries {
@@ -124,6 +132,10 @@ func (vm *VolumeManager) loadFromDisk() {
 func (vm *VolumeManager) Create(name string, driver string, opts map[string]string, labels map[string]string) (*common.VolumeInfo, error) {
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
+
+	if !validateVolumeName(name) {
+		return nil, fmt.Errorf("invalid volume name: %q contains path traversal characters", name)
+	}
 
 	if _, exists := vm.volumes[name]; exists {
 		return nil, common.NewErrConflict("volume", name)
@@ -147,8 +159,13 @@ func (vm *VolumeManager) Create(name string, driver string, opts map[string]stri
 	}
 
 	// Persist to disk.
-	data, _ := json.Marshal(vol)
-	os.WriteFile(filepath.Join(mountpoint, "volume.json"), data, 0644)
+	data, err := json.Marshal(vol)
+	if err != nil {
+		return nil, fmt.Errorf("marshal volume metadata: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(mountpoint, "volume.json"), data, 0644); err != nil {
+		return nil, fmt.Errorf("write volume metadata: %w", err)
+	}
 
 	vm.volumes[name] = vol
 	return vol, nil
@@ -301,7 +318,6 @@ func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/events", s.handleEvents)
 	s.router.HandleFunc("/system/df", s.handleSystemDf)
 	s.router.HandleFunc("/auth", s.handleAuth)
-	s.router.HandleFunc("/_ping", s.handlePing)
 	s.router.HandleFunc("/health", http.HandlerFunc(HealthHandler))
 	s.router.HandleFunc("/metrics", http.HandlerFunc(MetricsHandler))
 	if os.Getenv("DOKI_PPROF") != "" {
@@ -331,7 +347,9 @@ func (s *Server) registerRoutes() {
 // Listen starts the API server.
 func (s *Server) Listen() error {
 	// Remove existing socket.
-	os.Remove(s.config.SocketPath)
+	if err := os.Remove(s.config.SocketPath); err != nil && !os.IsNotExist(err) {
+		slog.Warn("remove socket", "path", s.config.SocketPath, "err", err)
+	}
 
 	listener, err := net.Listen("unix", s.config.SocketPath)
 	if err != nil {
@@ -348,7 +366,9 @@ func (s *Server) Listen() error {
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		slog.Warn("writeJSON: encode failed", "err", err)
+	}
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
@@ -379,7 +399,10 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
-	containers, _ := s.runtime.List()
+	containers, err := s.runtime.List()
+	if err != nil {
+		slog.Warn("system info: list containers", "err", err)
+	}
 	var running, paused, stopped int
 	for _, c := range containers {
 		switch c.Status {
@@ -392,7 +415,10 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	images, _ := s.image.List()
+	images, err := s.image.List()
+	if err != nil {
+		slog.Warn("system info: list images", "err", err)
+	}
 
 	info := &common.SystemInfo{
 		ID:                "DOKI",
@@ -432,9 +458,18 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case event := <-s.events:
-			data, _ := json.Marshal(event)
-			w.Write(data)
-			w.Write([]byte("\n"))
+			data, err := json.Marshal(event)
+			if err != nil {
+				slog.Warn("events: marshal event", "err", err)
+				continue
+			}
+			if _, err := w.Write(data); err != nil {
+				slog.Warn("events: write", "err", err)
+				return
+			}
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return
+			}
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
@@ -443,18 +478,24 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSystemDf(w http.ResponseWriter, r *http.Request) {
-	containers, _ := s.runtime.List()
-	images, _ := s.image.List()
+	containers, err := s.runtime.List()
+	if err != nil {
+		slog.Warn("system df: list containers", "err", err)
+	}
+	images, err := s.image.List()
+	if err != nil {
+		slog.Warn("system df: list images", "err", err)
+	}
 	var totalSize int64
 	for _, img := range images {
 		totalSize += img.Size
 	}
 	type dfResponse struct {
-		LayersSize  int64         `json:"LayersSize"`
-		Images      interface{}   `json:"Images"`
-		Containers  interface{}   `json:"Containers"`
-		Volumes     interface{}   `json:"Volumes"`
-		BuildCache  interface{}   `json:"BuildCache"`
+		LayersSize int64       `json:"LayersSize"`
+		Images     interface{} `json:"Images"`
+		Containers interface{} `json:"Containers"`
+		Volumes    interface{} `json:"Volumes"`
+		BuildCache interface{} `json:"BuildCache"`
 	}
 	s.writeJSON(w, http.StatusOK, dfResponse{
 		LayersSize: totalSize,
@@ -472,7 +513,10 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		ServerAddress string `json:"serveraddress"`
 		IdentityToken string `json:"identitytoken"`
 	}
-	json.NewDecoder(r.Body).Decode(&creds)
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid JSON"})
+		return
+	}
 
 	if creds.Username == "" {
 		s.writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -526,16 +570,16 @@ func (s *Server) handleContainersList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Image       string              `json:"Image"`
-		Cmd         []string            `json:"Cmd"`
-		Entrypoint  []string            `json:"Entrypoint"`
-		Env         []string            `json:"Env"`
-		Tty         bool                `json:"Tty"`
-		OpenStdin   bool                `json:"OpenStdin"`
-		WorkingDir  string              `json:"WorkingDir"`
-		HostConfig  *common.HostConfig  `json:"HostConfig"`
-		Labels      map[string]string   `json:"Labels"`
-		ContainerName string            `json:"Name,omitempty"`
+		Image         string             `json:"Image"`
+		Cmd           []string           `json:"Cmd"`
+		Entrypoint    []string           `json:"Entrypoint"`
+		Env           []string           `json:"Env"`
+		Tty           bool               `json:"Tty"`
+		OpenStdin     bool               `json:"OpenStdin"`
+		WorkingDir    string             `json:"WorkingDir"`
+		HostConfig    *common.HostConfig `json:"HostConfig"`
+		Labels        map[string]string  `json:"Labels"`
+		ContainerName string             `json:"Name,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -616,11 +660,11 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := &dokiruntime.Config{
-		ID:          containerID,
-		Args:        cmd,
-		Env:         req.Env,
-		Tty:         req.Tty,
-		ImageRef:    req.Image,
+		ID:       containerID,
+		Args:     cmd,
+		Env:      req.Env,
+		Tty:      req.Tty,
+		ImageRef: req.Image,
 	}
 
 	// Copy user-provided labels.
@@ -680,6 +724,7 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		cfg.DNSOptions = req.HostConfig.DNSOptions
 		cfg.ExtraHosts = req.HostConfig.ExtraHosts
 		cfg.Init = req.HostConfig.Init
+		cfg.Runtime = req.HostConfig.Runtime
 		// Pass restart policy from HostConfig.
 		cfg.RestartPolicy = common.RestartPolicy(req.HostConfig.RestartPolicy.Name)
 		cfg.RestartMaxRetries = req.HostConfig.RestartPolicy.MaximumRetryCount
@@ -705,6 +750,11 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 				readOnly = true
 			}
 			if source != "" && target != "" {
+				// Validate bind mount source: must be absolute and clean (no path traversal).
+				if !filepath.IsAbs(source) || filepath.Clean(source) != source {
+					s.writeError(w, http.StatusBadRequest, "invalid bind mount source: must be an absolute path without traversal")
+					return
+				}
 				cfg.Mounts = append(cfg.Mounts, common.Mount{
 					Type:     common.MountBind,
 					Source:   source,
@@ -734,19 +784,30 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Extract ports from port bindings.
-		for _, bind := range req.HostConfig.PortBindings {
+		for containerPort, bind := range req.HostConfig.PortBindings {
+			proto := common.ProtocolTCP
+			if parts := strings.SplitN(containerPort, "/", 2); len(parts) == 2 {
+				containerPort = parts[0]
+				proto = common.PortProtocol(parts[1])
+			}
+			privPort, err := strconv.Atoi(containerPort)
+			if err != nil {
+				continue
+			}
 			for _, pb := range bind {
-				if port, err := strconv.Atoi(pb.HostPort); err == nil && port > 0 {
-					// AE10: Enforce port binding restrictions.
-					if !req.HostConfig.Privileged && uint16(port) < 1024 {
-						continue
-					}
-					cfg.Ports = append(cfg.Ports, common.Port{
-						PrivatePort: uint16(port),
-						PublicPort:  uint16(port),
-						Type:        common.ProtocolTCP,
-					})
+				pubPort, err := strconv.Atoi(pb.HostPort)
+				if err != nil || pubPort <= 0 {
+					continue
 				}
+				// AE10: Enforce port binding restrictions.
+				if !req.HostConfig.Privileged && uint16(pubPort) < 1024 {
+					continue
+				}
+				cfg.Ports = append(cfg.Ports, common.Port{
+					PrivatePort: uint16(privPort),
+					PublicPort:  uint16(pubPort),
+					Type:        proto,
+				})
 			}
 		}
 	}
@@ -762,7 +823,6 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		"Warnings": []string{},
 	})
 
-	_ = imgRecord
 }
 
 func (s *Server) handleContainerDispatch(w http.ResponseWriter, r *http.Request) {
@@ -811,9 +871,11 @@ func (s *Server) handleContainerDispatch(w http.ResponseWriter, r *http.Request)
 	case action == "export" && r.Method == "GET":
 		s.handleContainerExport(w, r, containerID)
 	case action == "archive" && (r.Method == "GET" || r.Method == "PUT"):
-		s.writeError(w, http.StatusNotImplemented, "container cp not yet implemented")
+		s.handleContainerArchive(w, r, containerID)
+	case action == "resize" && r.Method == "POST":
+		s.handleContainerResize(w, r, containerID)
 	case action == "update" && r.Method == "POST":
-		s.handleContainerUpdate(w, r, containerID)  // Line: 779
+		s.handleContainerUpdate(w, r, containerID) // Line: 779
 	case r.Method == "DELETE":
 		s.handleContainerDelete(w, r, containerID)
 	default:
@@ -857,7 +919,14 @@ func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request, id
 		if state.Config != nil && state.Config.NetworkMode != "" {
 			networkMode = string(state.Config.NetworkMode)
 		}
-		s.network.SetupNetwork(id, state.Pid, networkMode)
+		if err := s.network.SetupNetwork(id, state.Pid, networkMode); err != nil {
+			slog.Warn("network setup", "id", id, "err", err)
+		}
+		if state.Config != nil && len(state.Config.Ports) > 0 {
+			if err := s.network.ApplyPortForwardings(id, state.Config.Ports, state.Pid); err != nil {
+				slog.Warn("port forwarding setup", "id", id, "err", err)
+			}
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -870,12 +939,16 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request, id 
 		}
 	}
 
+	s.network.RemovePortForwardings(id)
+
 	if state, err := s.runtime.State(id); err == nil && state != nil && state.Config != nil {
 		networkMode := string(state.Config.NetworkMode)
 		if networkMode == "" {
 			networkMode = string(common.NetworkBridge)
 		}
-		s.network.TeardownNetwork(id, networkMode)
+		if err := s.network.TeardownNetwork(id, networkMode); err != nil {
+			slog.Warn("network teardown", "id", id, "err", err)
+		}
 	}
 
 	if err := s.runtime.Stop(id, timeout); err != nil {
@@ -892,6 +965,8 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request, 
 			timeout = v
 		}
 	}
+	s.network.RemovePortForwardings(id)
+
 	if err := s.runtime.Stop(id, timeout); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "stop: "+err.Error())
 		return
@@ -906,7 +981,14 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request, 
 		if state.Config != nil && state.Config.NetworkMode != "" {
 			networkMode = string(state.Config.NetworkMode)
 		}
-		s.network.SetupNetwork(id, state.Pid, networkMode)
+		if err := s.network.SetupNetwork(id, state.Pid, networkMode); err != nil {
+			slog.Warn("network setup", "id", id, "err", err)
+		}
+		if state.Config != nil && len(state.Config.Ports) > 0 {
+			if err := s.network.ApplyPortForwardings(id, state.Config.Ports, state.Pid); err != nil {
+				slog.Warn("port forwarding setup", "id", id, "err", err)
+			}
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -916,6 +998,8 @@ func (s *Server) handleContainerKill(w http.ResponseWriter, r *http.Request, id 
 	if s := r.URL.Query().Get("signal"); s != "" {
 		sig = parseSignal(s)
 	}
+	s.network.RemovePortForwardings(id)
+
 	if err := s.runtime.Kill(id, sig); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1047,7 +1131,10 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 
 	// If follow mode, tail the log file.
 	done := r.Context().Done()
-	offset, _ := logFile.Seek(0, io.SeekEnd)
+	offset, err := logFile.Seek(0, io.SeekEnd)
+	if err != nil {
+		return
+	}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -1065,9 +1152,16 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 				if err != nil {
 					return
 				}
-				f.Seek(offset, io.SeekStart)
+				if _, err := f.Seek(offset, io.SeekStart); err != nil {
+					f.Close()
+					return
+				}
 				newContent := make([]byte, fi.Size()-offset)
-				n, _ := io.ReadFull(f, newContent)
+				n, err := io.ReadFull(f, newContent)
+				if err != nil {
+					f.Close()
+					return
+				}
 				f.Close()
 				offset += int64(n)
 
@@ -1129,27 +1223,10 @@ func (s *Server) writeLogLine(w io.Writer, line string, stdout, stderr bool, str
 	w.Write([]byte(line))
 }
 
-func (s *Server) handleContainerTop(w http.ResponseWriter, r *http.Request, id string) {
-	state, err := s.runtime.State(id)
-	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	cmdline := ""
-	if data, e := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", state.Pid)); e == nil {
-		cmdline = strings.ReplaceAll(string(data), "\x00", " ")
-	}
-	if cmdline == "" {
-		cmdline = "-"
-	}
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"Titles":    []string{"PID", "USER", "COMMAND"},
-		"Processes": [][]string{{fmt.Sprintf("%d", state.Pid), "root", cmdline}},
-	})
-}
-
 func (s *Server) handleContainerDelete(w http.ResponseWriter, r *http.Request, id string) {
 	force := r.URL.Query().Get("force") == "true"
+
+	s.network.RemovePortForwardings(id)
 
 	if err := s.runtime.Delete(id, force); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -1160,7 +1237,7 @@ func (s *Server) handleContainerDelete(w http.ResponseWriter, r *http.Request, i
 
 func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request, id string) {
 	stream := r.URL.Query().Get("stream")
-	_ = stream
+	_ = stream // future: support streaming stats
 
 	stats, err := s.runtime.Stats(id)
 	if err != nil {
@@ -1186,33 +1263,6 @@ func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request, id
 	w.Write(data)
 	w.Write([]byte("\n"))
 	flusher.Flush()
-}
-
-func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request, id string) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Name == "" {
-		s.writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	state, err := s.runtime.State(id)
-	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	// Store the new name in container labels.
-	if state.Config != nil {
-		if state.Config.Annotations == nil {
-			state.Config.Annotations = make(map[string]string)
-		}
-		state.Config.Annotations["doki.name"] = req.Name
-	}
-	s.writeJSON(w, http.StatusOK, map[string]string{"name": req.Name})
 }
 
 func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, id string) {
@@ -1277,33 +1327,49 @@ func (s *Server) handleContainerExport(w http.ResponseWriter, r *http.Request, i
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.tar", id[:12]))
 	tw := tar.NewWriter(w)
 	defer tw.Close()
-	filepath.Walk(rootfsDir, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(rootfsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
-		rel, _ := filepath.Rel(rootfsDir, path)
+		rel, err := filepath.Rel(rootfsDir, path)
+		if err != nil {
+			return err
+		}
 		if rel == "." {
 			return nil
 		}
-		hdr, _ := tar.FileInfoHeader(info, "")
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
 		hdr.Name = rel
-		tw.WriteHeader(hdr)
+		hdr.Mode &^= 0777 // mask permissions to 0777 (BUG 43)
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
 		if !info.IsDir() {
-			f, _ := os.Open(path)
-			if f != nil {
-				io.Copy(tw, f)
-				f.Close()
+			f, err := os.Open(path)
+			if err != nil {
+				return err
 			}
+			if _, err := io.Copy(tw, f); err != nil {
+				f.Close()
+				return err
+			}
+			f.Close()
 		}
 		return nil
-	})
+	}); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "export walk: "+err.Error())
+		return
+	}
 }
 
 func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, id string) {
 	var req struct {
-		Memory       int64 `json:"Memory"`
-		MemorySwap   int64 `json:"MemorySwap"`
-		NanoCpus     int64 `json:"NanoCpus"`
+		Memory        int64 `json:"Memory"`
+		MemorySwap    int64 `json:"MemorySwap"`
+		NanoCpus      int64 `json:"NanoCpus"`
 		RestartPolicy struct {
 			Name string `json:"Name"`
 		} `json:"RestartPolicy"`
@@ -1366,12 +1432,18 @@ func (s *Server) handleContainerHealth(w http.ResponseWriter, r *http.Request, i
 }
 
 func (s *Server) handleContainersPrune(w http.ResponseWriter, r *http.Request) {
-	states, _ := s.runtime.List()
+	states, err := s.runtime.List()
+	if err != nil {
+		slog.Warn("prune: list containers", "err", err)
+	}
 	var pruned []string
 	for _, state := range states {
 		if state.Status != common.StateRunning {
-			s.runtime.Delete(state.ID, true)
-			pruned = append(pruned, common.ShortID(state.ID))
+			if err := s.runtime.Delete(state.ID, true); err != nil {
+				slog.Warn("prune: delete container", "id", state.ID, "err", err)
+			} else {
+				pruned = append(pruned, common.ShortID(state.ID))
+			}
 		}
 	}
 
@@ -1442,7 +1514,7 @@ func (s *Server) handleExecDispatch(w http.ResponseWriter, r *http.Request) {
 	case action == "start" && r.Method == "POST":
 		s.handleExecStart(w, r, execID)
 	case action == "resize" && r.Method == "POST":
-		s.writeJSON(w, http.StatusOK, map[string]string{})
+		s.handleExecResize(w, r, execID)
 	case action == "json" || (len(parts) == 1 && r.Method == "GET"):
 		s.execMu.RLock()
 		cfg, ok := s.execStore[execID]
@@ -1472,7 +1544,7 @@ func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID 
 		return
 	}
 
-	if err := s.runtime.Exec(cfg.ContainerID, cfg.Cmd, cfg.Env, cfg.Tty); err != nil {
+	if err := s.runtime.Exec(cfg.ContainerID, cfg.Cmd, cfg.Env, cfg.WorkingDir, cfg.User); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "exec: "+err.Error())
 		return
 	}
@@ -1495,8 +1567,11 @@ func (s *Server) handleImagesList(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, images)
 }
 
+type nopFlusher struct{}
+
+func (nopFlusher) Flush() {}
+
 func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request) {
-	// Pull image.
 	imageName := r.URL.Query().Get("fromImage")
 	if imageName == "" {
 		s.writeError(w, http.StatusBadRequest, "fromImage query parameter required")
@@ -1508,18 +1583,29 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request) {
 		imageName = imageName + ":" + tag
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		flusher = nopFlusher{}
+	}
+
+	// Send initial status
+	json.NewEncoder(w).Encode(map[string]string{"status": "Pulling from " + imageName, "id": imageName})
+	flusher.Flush()
+
 	record, err := s.image.Pull(imageName)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "pull: "+err.Error())
+		json.NewEncoder(w).Encode(map[string]string{"status": "error: " + err.Error(), "id": imageName})
+		flusher.Flush()
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "pulling " + imageName,
+		"status": "Pull complete",
 		"id":     common.ShortID(record.ID),
 	})
+	flusher.Flush()
 }
 
 func (s *Server) handleImageDispatch(w http.ResponseWriter, r *http.Request) {
@@ -1614,7 +1700,10 @@ func (s *Server) handleImageTag(w http.ResponseWriter, r *http.Request, id strin
 		Repo string `json:"repo"`
 		Tag  string `json:"tag"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
 	if req.Tag != "" {
 		req.Repo = req.Repo + ":" + req.Tag
 	}
@@ -1671,8 +1760,7 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		dockerfile = r.URL.Query().Get("dokifile")
 	}
 	tag := r.URL.Query().Get("t")
-	noCache := r.URL.Query().Get("nocache") == "true"
-	_ = noCache // Future: skip cache when building
+	_ = r.URL.Query().Get("nocache") == "true"
 
 	if dockerfile == "" {
 		// Try default names.
@@ -1708,52 +1796,25 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pull base images first.
-	for _, stage := range stages {
-		if stage.From != "" && !s.image.Exists(stage.From) {
-			if _, err := s.image.Pull(stage.From); err != nil {
-				s.writeError(w, http.StatusInternalServerError, "pull base image "+stage.From+": "+err.Error())
-				return
-			}
-		}
-	}
-
 	b := builder.NewBuilder(s.image)
-	workDir, _ := os.MkdirTemp("", "doki-build-")
-	defer os.RemoveAll(workDir)
 
-	// Execute each stage sequentially.
-	for _, stage := range stages {
-		if err := b.ExecuteStage(stage, contextDir, workDir); err != nil {
-			s.writeError(w, http.StatusInternalServerError, "build error at stage "+stage.From+": "+err.Error())
-			return
-		}
+	buildCfg := &builder.BuildConfig{
+		Context:  contextDir,
+		Dokifile: dockerfile,
+		Tags:     []string{tag},
+		Pull:     true,
+		NoCache:  r.URL.Query().Get("nocache") == "true",
 	}
 
-	// Tag the built image if requested, using the base image as output.
-	baseImage := stages[len(stages)-1].From
-	if tag != "" {
-		if record, err := s.image.Get(baseImage); err == nil && record != nil {
-			newRecord := &image.ImageRecord{
-				ID:           record.ID,
-				RepoTags:     []string{tag},
-				RepoDigests:  record.RepoDigests,
-				Config:       record.Config,
-				Manifest:     record.Manifest,
-				Size:         record.Size,
-				Created:      common.NowTimestamp(),
-				Architecture: record.Architecture,
-				OS:           record.OS,
-				Layers:       record.Layers,
-			}
-			s.image.SaveRecord(newRecord)
-		}
+	if err := b.Build(buildCfg); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "build error: "+err.Error())
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"stream": fmt.Sprintf("Successfully built %s (from %s)\n", tag, baseImage),
+		"stream": fmt.Sprintf("Successfully built %s\n", tag),
 	})
 }
 
@@ -1801,7 +1862,10 @@ func (s *Server) handleNetworkCreate(w http.ResponseWriter, r *http.Request) {
 		Labels     map[string]string `json:"Labels"`
 	}
 
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
 
 	if req.Driver == "" {
 		req.Driver = "bridge"
@@ -1853,10 +1917,13 @@ func (s *Server) handleNetworkDispatch(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, info)
 	case action == "connect" && r.Method == "POST":
 		var req struct {
-			Container      string                          `json:"Container"`
-			EndpointConfig *common.EndpointSettings        `json:"EndpointConfig"`
+			Container      string                   `json:"Container"`
+			EndpointConfig *common.EndpointSettings `json:"EndpointConfig"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
 		var aliases []string
 		var pid int
 		if state, err := s.runtime.State(req.Container); err == nil && state != nil {
@@ -1871,7 +1938,10 @@ func (s *Server) handleNetworkDispatch(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Container string `json:"Container"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
 		var pid int
 		if state, err := s.runtime.State(req.Container); err == nil && state != nil {
 			pid = state.Pid
@@ -1919,7 +1989,10 @@ func (s *Server) handleVolumeCreate(w http.ResponseWriter, r *http.Request) {
 		Labels     map[string]string `json:"Labels"`
 	}
 
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
 
 	if req.Name == "" {
 		req.Name = common.GenerateID(32)
@@ -2030,20 +2103,24 @@ func (s *Server) stateToJSON(state *dokiruntime.ContainerState) *common.Containe
 			}
 		}
 	}
+	imageRef := ""
+	if state.Config != nil {
+		imageRef = state.Config.ImageRef
+	}
 	return &common.ContainerJSON{
-		ContainerInfo:  s.stateToInfo(state),
-		Config:         cfg,
-		Image:          state.Config.ImageRef,
-		Driver:         "doki",
-		Platform:       "linux",
-		LogPath:        state.LogPath,
-		RestartCount:   state.RestartCount,
+		ContainerInfo:   s.stateToInfo(state),
+		Config:          cfg,
+		Image:           imageRef,
+		Driver:          "doki",
+		Platform:        "linux",
+		LogPath:         state.LogPath,
+		RestartCount:    state.RestartCount,
 		AppArmorProfile: "",
-		MountLabel:     "",
-		ProcessLabel:   "",
-		ResolvConfPath: "",
-		HostnamePath:   "",
-		HostsPath:      "",
+		MountLabel:      "",
+		ProcessLabel:    "",
+		ResolvConfPath:  "",
+		HostnamePath:    "",
+		HostsPath:       "",
 	}
 }
 
@@ -2084,16 +2161,18 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		Author    string `json:"Author"`
 		Message   string `json:"Message"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
 	repo := r.URL.Query().Get("repo")
-	tag := r.URL.Query().Get("tag")
+	_ = r.URL.Query().Get("tag")
 	if repo == "" {
 		s.writeError(w, http.StatusBadRequest, "repo is required")
 		return
 	}
 	imageID := common.GenerateID(64)
 	s.writeJSON(w, http.StatusCreated, map[string]string{"Id": imageID})
-	_ = tag
 }
 
 // handlePodCreate creates a pod (group of containers with shared network).
@@ -2102,7 +2181,10 @@ func (s *Server) handlePodCreate(w http.ResponseWriter, r *http.Request) {
 		Name   string            `json:"Name"`
 		Labels map[string]string `json:"Labels"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
 	podID := common.GenerateID(64)
 	if req.Name == "" {
 		req.Name = podID[:12]
@@ -2162,7 +2244,7 @@ func (s *Server) handleKubePlay(w http.ResponseWriter, r *http.Request) {
 }
 
 type kubeSimple struct {
-	Kind     string `yaml:"kind"`
+	Kind     string                 `yaml:"kind"`
 	Metadata map[string]interface{} `yaml:"metadata"`
 	Spec     map[string]interface{} `yaml:"spec"`
 }
@@ -2239,7 +2321,7 @@ func parseYAMLBlock(line string, m map[string]interface{}, indent *string) {
 }
 
 func applyKubeResource(resource map[string]interface{}, s *Server) string {
-	kind, _ := resource["kind"].(string)
+	_, _ = resource["kind"].(string)
 	meta, _ := resource["metadata"].(map[string]interface{})
 	spec, _ := resource["spec"].(map[string]interface{})
 	name := ""
@@ -2258,7 +2340,6 @@ func applyKubeResource(resource map[string]interface{}, s *Server) string {
 			}
 		}
 	}
-	_ = kind
 	if image == "" {
 		return ""
 	}
@@ -2266,7 +2347,10 @@ func applyKubeResource(resource map[string]interface{}, s *Server) string {
 		name = image
 	}
 	containerID := common.GenerateID(64)
-	s.image.Pull(image)
+	if _, err := s.image.Pull(image); err != nil {
+		slog.Warn("apply kube: pull image", "image", image, "err", err)
+		return ""
+	}
 	cfg := &dokiruntime.Config{
 		ID:       containerID,
 		Args:     []string{"/bin/sh"},
@@ -2276,15 +2360,24 @@ func applyKubeResource(resource map[string]interface{}, s *Server) string {
 			"doki.kube": "true",
 		},
 	}
-	s.runtime.Create(cfg)
-	s.runtime.Start(containerID)
+	if _, err := s.runtime.Create(cfg); err != nil {
+		slog.Warn("apply kube: create container", "err", err)
+		return ""
+	}
+	if err := s.runtime.Start(containerID); err != nil {
+		slog.Warn("apply kube: start container", "id", containerID, "err", err)
+		return ""
+	}
 	return containerID[:12]
 }
 
 // handleGenerateKube generates a kube YAML from running containers.
 func (s *Server) handleGenerateKube(w http.ResponseWriter, r *http.Request) {
 	containerID := r.URL.Query().Get("container")
-	containers, _ := s.runtime.List()
+	containers, err := s.runtime.List()
+	if err != nil {
+		slog.Warn("generate kube: list containers", "err", err)
+	}
 	var yamlParts []string
 	for _, c := range containers {
 		if c.Status != common.StateRunning {
@@ -2335,7 +2428,10 @@ func (s *Server) handleGenerateDispatch(w http.ResponseWriter, r *http.Request) 
 
 // handleAutoUpdate checks for newer image versions and updates containers.
 func (s *Server) handleAutoUpdate(w http.ResponseWriter, r *http.Request) {
-	containers, _ := s.runtime.List()
+	containers, err := s.runtime.List()
+	if err != nil {
+		slog.Warn("auto-update: list containers", "err", err)
+	}
 	var updated []string
 	for _, c := range containers {
 		if c.Status != common.StateRunning || c.Config == nil || c.Config.ImageRef == "" {
@@ -2346,10 +2442,13 @@ func (s *Server) handleAutoUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		ref := c.Config.ImageRef
 		if record, err := s.image.Get(ref); err == nil {
-			tags, err := s.image.Search(ref, 1)
-			_ = tags
-			_ = err
-			_ = record
+			_, err = s.image.Search(ref, 1)
+			if err != nil {
+				slog.Warn("auto-update search", "ref", ref, "err", err)
+			}
+			if record != nil {
+				slog.Debug("auto-update check", "ref", ref, "current", record.ID)
+			}
 		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -2365,7 +2464,7 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
 	}
-	_ = data
+	slog.Debug("apply received", "data_len", len(data))
 	s.writeJSON(w, http.StatusOK, map[string]string{"message": "apply: configuration applied"})
 }
 
@@ -2395,12 +2494,12 @@ func (s *Server) handleScout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"image":        imageName,
-		"id":           common.ShortID(record.ID),
-		"scanned":      time.Now().Unix(),
-		"findings":     findings,
-		"note":         "CVE scanning is a stub. Full vulnerability scanning requires a local vulnerability database or Docker Scout API access.",
-		"totalCount":   len(findings),
+		"image":      imageName,
+		"id":         common.ShortID(record.ID),
+		"scanned":    time.Now().Unix(),
+		"findings":   findings,
+		"note":       "CVE scanning is a stub. Full vulnerability scanning requires a local vulnerability database or Docker Scout API access.",
+		"totalCount": len(findings),
 	})
 }
 
@@ -2428,7 +2527,10 @@ func (s *Server) handleImageVerify(w http.ResponseWriter, r *http.Request, image
 
 // handleKubeGenerate provides kubectl-like generate functionality.
 func (s *Server) handleKubeGenerate(w http.ResponseWriter, r *http.Request) {
-	containers, _ := s.runtime.List()
+	containers, err := s.runtime.List()
+	if err != nil {
+		slog.Warn("kube generate: list containers", "err", err)
+	}
 	var yamlParts []string
 	for _, c := range containers {
 		if c.Status != common.StateRunning || c.Config == nil {
@@ -2478,7 +2580,7 @@ func parseSignal(s string) syscall.Signal {
 	case "SIGUSR2":
 		return syscall.SIGUSR2
 	default:
-		return syscall.SIGKILL
+		return syscall.SIGTERM
 	}
 }
 

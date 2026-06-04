@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -192,7 +193,10 @@ func (c *DokiCLI) Run(args []string) error {
 	if len(flags.Ports) > 0 {
 		pb := make(map[string]interface{})
 		for _, p := range flags.Ports {
-			port, bind := common.ParsePortBinding(p)
+			port, bind, err := common.ParsePortBinding(p)
+			if err != nil {
+				return err
+			}
 			key := fmt.Sprintf("%d/%s", port.PrivatePort, port.Type)
 			pb[key] = []map[string]string{{
 				"HostPort": bind.HostPort,
@@ -615,7 +619,10 @@ func (c *DokiCLI) Create(image string, cmd []string, opts *RunFlags) (string, er
 		if len(opts.Ports) > 0 {
 			pb := make(map[string]interface{})
 			for _, p := range opts.Ports {
-				port, bind := common.ParsePortBinding(p)
+				port, bind, err := common.ParsePortBinding(p)
+				if err != nil {
+					return "", err
+				}
 				key := fmt.Sprintf("%d/%s", port.PrivatePort, port.Type)
 				pb[key] = []map[string]string{{"HostPort": bind.HostPort, "HostIp": bind.HostIP}}
 			}
@@ -1115,7 +1122,7 @@ func (c *DokiCLI) Pull(imageName string, allTags, quiet bool) error {
 		imageName = strings.Split(imageName, ":")[0]
 	}
 
-	path := "/images/create?fromImage=" + imageName
+	path := "/images/create?fromImage=" + url.QueryEscape(imageName)
 	if tag != "" {
 		path += "&tag=" + tag
 	}
@@ -1126,13 +1133,22 @@ func (c *DokiCLI) Pull(imageName string, allTags, quiet bool) error {
 	defer resp.Body.Close()
 
 	if !quiet {
-		var msg struct {
-			Status string `json:"status"`
-			Id     string `json:"id"`
+		dec := json.NewDecoder(resp.Body)
+		for dec.More() {
+			var msg struct {
+				Status string `json:"status"`
+				Id     string `json:"id"`
+			}
+			if err := dec.Decode(&msg); err != nil {
+				break
+			}
+			if msg.Status != "" {
+				fmt.Println(msg.Id, msg.Status)
+			}
 		}
-		json.NewDecoder(resp.Body).Decode(&msg)
-		fmt.Println(msg.Id, msg.Status)
 	}
+	// Drain remaining body to prevent keep-alive deadlock
+	io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
@@ -1654,8 +1670,7 @@ func (c *DokiCLI) SystemPrune(all, volumes bool, filter string) error {
 }
 
 func (c *DokiCLI) SystemDialStdio() error {
-	fmt.Println("Dial-stdio connected to Doki daemon")
-	return nil
+	return fmt.Errorf("not yet implemented")
 }
 
 // ---- Login/Logout Commands ----
@@ -1682,8 +1697,7 @@ func (c *DokiCLI) Login(server, username, password string) error {
 }
 
 func (c *DokiCLI) Logout(server string) error {
-	fmt.Println("Removing login credentials for", server)
-	return nil
+	return fmt.Errorf("not yet implemented")
 }
 
 // ---- Podman-specific Commands ----
@@ -1776,37 +1790,15 @@ func (c *DokiCLI) AutoUpdate() error {
 }
 
 func (c *DokiCLI) Unshare(cmd []string) error {
-	fmt.Println("Entering user namespace...")
-	return nil
+	return fmt.Errorf("not yet implemented")
 }
 
 func (c *DokiCLI) Untag(imageName string) error {
-	parts := strings.SplitN(imageName, ":", 2)
-	repo := parts[0]
-	tag := "latest"
-	if len(parts) > 1 {
-		tag = parts[1]
-	}
-	fmt.Printf("Untagged: %s:%s\n", repo, tag)
-	return nil
+	return fmt.Errorf("not yet implemented")
 }
 
 func (c *DokiCLI) Scout(target string) error {
-	if target == "" {
-		fmt.Println("Usage: doki scout IMAGE")
-		fmt.Println()
-		fmt.Println("Scan an image for known vulnerabilities.")
-		fmt.Println("Currently a placeholder - checks image metadata for common vulnerable packages.")
-		return nil
-	}
-	path := "/scout?image=" + target
-	resp, err := c.doAPI("GET", path, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
-	return nil
+	return fmt.Errorf("not yet implemented")
 }
 
 func (c *DokiCLI) VerifyImageSignature(imageName string) error {
@@ -1832,17 +1824,11 @@ func (c *DokiCLI) VerifyImageSignature(imageName string) error {
 }
 
 func (c *DokiCLI) Mount(containerIDs []string) error {
-	for _, id := range containerIDs {
-		fmt.Printf("%s /var/lib/doki/containers/%s\n", common.ShortID(id), id)
-	}
-	return nil
+	return fmt.Errorf("not yet implemented")
 }
 
 func (c *DokiCLI) Unmount(containerIDs []string) error {
-	for _, id := range containerIDs {
-		fmt.Printf("Unmounted: %s\n", common.ShortID(id))
-	}
-	return nil
+	return fmt.Errorf("not yet implemented")
 }
 
 func (c *DokiCLI) Healthcheck(containerID string) error {
@@ -1981,10 +1967,7 @@ func (c *DokiCLI) listContainers(all bool) ([]common.ContainerInfo, error) {
 }
 
 func (c *DokiCLI) attach(containerID string) {
-	go io.Copy(os.Stdout, os.Stdin)
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	fmt.Fprintf(os.Stderr, "attach: not yet implemented\n")
 }
 
 func (c *DokiCLI) waitContainer(containerID string) {

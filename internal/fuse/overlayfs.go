@@ -3,9 +3,11 @@ package fuse
 import (
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -93,7 +95,7 @@ func (o *OverlayFS) Unmount(target string) error {
 // UnmountForce force-unmounts a mount point.
 func (o *OverlayFS) UnmountForce(target string) error {
 	cmd := exec.Command("fusermount", "-uz", target)
-	cmd.Run()
+	_ = cmd.Run()
 
 	return syscall.Unmount(target, syscall.MNT_DETACH)
 }
@@ -111,7 +113,7 @@ func IsFusermountAvailable() bool {
 }
 
 // PrepareRootfs prepares a rootfs directory with proper permissions.
-func PrepareRootfs(rootfs string, files map[string]string) error {
+func PrepareRootfs(rootfs string, files map[string]string, user ...string) error {
 	for path, content := range files {
 		fullPath := filepath.Join(rootfs, path)
 
@@ -157,19 +159,100 @@ func PrepareRootfs(rootfs string, files map[string]string) error {
 
 		for link, target := range symlinks {
 			os.Remove(filepath.Join(rootfs, link))
-			os.Symlink(target, filepath.Join(rootfs, link))
+			if err := os.Symlink(target, filepath.Join(rootfs, link)); err != nil {
+				return fmt.Errorf("create symlink %s -> %s: %w", link, target, err)
+			}
 		}
+	}
+
+	// Inject configured user into /etc/passwd and /etc/group.
+	if len(user) > 0 {
+		injectUser(rootfs, user[0])
+	}
+
+	return nil
+}
+
+// injectUser writes a user entry into /etc/passwd and /etc/group inside rootfs.
+func injectUser(rootfsDir, user string) error {
+	if user == "" {
+		return nil
+	}
+
+	passwdPath := filepath.Join(rootfsDir, "etc", "passwd")
+	groupPath := filepath.Join(rootfsDir, "etc", "group")
+
+	os.MkdirAll(filepath.Dir(passwdPath), 0755)
+
+	parts := strings.SplitN(user, ":", 2)
+	name := parts[0]
+	uid := 1000
+	gid := 1000
+
+	if u, err := strconv.Atoi(name); err == nil {
+		uid = u
+		name = fmt.Sprintf("user%d", uid)
+	}
+	if len(parts) > 1 {
+		if g, err := strconv.Atoi(parts[1]); err == nil {
+			gid = g
+		}
+	}
+
+	// Only add if user doesn't already exist
+	if data, err := os.ReadFile(passwdPath); err == nil {
+		if strings.Contains(string(data), ":"+name+":") {
+			return nil
+		}
+	}
+
+	f, err := os.OpenFile(passwdPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open passwd: %w", err)
+	}
+	defer f.Close()
+
+	homeDir := "/home/" + name
+	os.MkdirAll(filepath.Join(rootfsDir, homeDir), 0755)
+
+	entry := fmt.Sprintf("%s:x:%d:%d:%s:%s:/bin/sh\n", name, uid, gid, name, homeDir)
+	if _, err := f.WriteString(entry); err != nil {
+		return fmt.Errorf("write passwd: %w", err)
+	}
+
+	gf, err := os.OpenFile(groupPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		defer gf.Close()
+		gf.WriteString(fmt.Sprintf("%s:x:%d:\n", name, gid))
 	}
 
 	return nil
 }
 
 // GenerateResolvConf generates a resolv.conf file.
-func GenerateResolvConf(dnsServers []string, searchDomains []string, options []string) string {
+// If internalDNS is provided, it is added as the first nameserver
+// (containers use the internal DNS server for container name resolution).
+// Port is stripped from nameserver addresses — resolv.conf does not support
+// port-qualified nameservers.
+func GenerateResolvConf(dnsServers []string, searchDomains []string, options []string, internalDNS ...string) string {
 	var sb strings.Builder
 
+	// Internal DNS server first (for container name resolution).
+	if len(internalDNS) > 0 && internalDNS[0] != "" {
+		host, _, err := net.SplitHostPort(internalDNS[0])
+		if err != nil {
+			// No port present, use as-is
+			host = internalDNS[0]
+		}
+		sb.WriteString(fmt.Sprintf("nameserver %s\n", host))
+	}
+
 	for _, dns := range dnsServers {
-		sb.WriteString(fmt.Sprintf("nameserver %s\n", dns))
+		host, _, err := net.SplitHostPort(dns)
+		if err != nil {
+			host = dns
+		}
+		sb.WriteString(fmt.Sprintf("nameserver %s\n", host))
 	}
 
 	if len(searchDomains) > 0 {
@@ -178,6 +261,9 @@ func GenerateResolvConf(dnsServers []string, searchDomains []string, options []s
 
 	if len(options) > 0 {
 		sb.WriteString(fmt.Sprintf("options %s\n", strings.Join(options, " ")))
+	} else if len(internalDNS) > 0 && internalDNS[0] != "" {
+		// Default ndots:0 so single-label container names resolve without dots.
+		sb.WriteString("options ndots:0\n")
 	}
 
 	return sb.String()

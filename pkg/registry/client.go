@@ -89,18 +89,22 @@ func ParseImageRef(ref string) (*ImageRef, error) {
 		ir.Digest = ref[idx+1:]
 		ref = ref[:idx]
 	}
-	if idx := strings.Index(ref, ":"); idx != -1 {
-		ir.Tag = ref[idx+1:]
-		ref = ref[:idx]
-	}
 
 	parts := strings.SplitN(ref, "/", 3)
 	switch len(parts) {
 	case 1:
+		if idx := strings.Index(parts[0], ":"); idx != -1 {
+			ir.Tag = parts[0][idx+1:]
+			parts[0] = parts[0][:idx]
+		}
 		ir.Registry = DefaultRegistry
 		ir.Name = "library/" + parts[0]
 	case 2:
-		if strings.Contains(parts[0], ".") || parts[0] == "localhost" {
+		if idx := strings.Index(parts[1], ":"); idx != -1 {
+			ir.Tag = parts[1][idx+1:]
+			parts[1] = parts[1][:idx]
+		}
+		if strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost" {
 			ir.Registry = parts[0]
 			ir.Name = parts[1]
 		} else {
@@ -108,6 +112,10 @@ func ParseImageRef(ref string) (*ImageRef, error) {
 			ir.Name = parts[0] + "/" + parts[1]
 		}
 	case 3:
+		if idx := strings.Index(parts[2], ":"); idx != -1 {
+			ir.Tag = parts[2][idx+1:]
+			parts[2] = parts[2][:idx]
+		}
 		ir.Registry = parts[0]
 		ir.Name = parts[1] + "/" + parts[2]
 	}
@@ -191,7 +199,10 @@ func (c *Client) getToken(realm, service, scope string) (string, error) {
 	q.Set("scope", scope)
 	tokenURL.RawQuery = q.Encode()
 
-	req, _ := http.NewRequest("GET", tokenURL.String(), nil)
+	req, err := http.NewRequest("GET", tokenURL.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("create token request: %w", err)
+	}
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "application/json")
 
@@ -268,13 +279,27 @@ func (c *Client) doAuthRequest(method, urlStr string, headers map[string]string,
 
 		if authHeader != "" {
 			resp.Body.Close()
+
+			// Buffer body for retry in case it was already consumed
+			var buf []byte
+			if body != nil {
+				buf, _ = io.ReadAll(body)
+			}
+
 			realm, service, scope := parseWwwAuthenticate(authHeader)
 			token, err := c.getToken(realm, service, scope)
 			if err != nil {
 				return nil, fmt.Errorf("get token: %w", err)
 			}
 
-			req2, _ := http.NewRequest(method, urlStr, body)
+			retryBody := io.Reader(nil)
+			if buf != nil {
+				retryBody = bytes.NewReader(buf)
+			}
+			req2, err := http.NewRequest(method, urlStr, retryBody)
+			if err != nil {
+				return nil, fmt.Errorf("create retry request: %w", err)
+			}
 			req2.Header.Set("User-Agent", c.userAgent)
 			req2.Header.Set("Authorization", "Bearer "+token)
 			for k, v := range headers {

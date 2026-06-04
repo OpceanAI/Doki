@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -528,7 +529,11 @@ func (s *Store) Prune() ([]string, error) {
 		for _, layer := range record.Layers {
 			os.Remove(s.layerPath(layer))
 		}
-		removed = append(removed, record.ID[:12])
+		shortID := record.ID
+		if len(shortID) > 12 {
+			shortID = shortID[:12]
+		}
+		removed = append(removed, shortID)
 	}
 
 	return removed, nil
@@ -588,7 +593,7 @@ func (s *Store) Inspect(idOrTag string) (*Config, error) {
 func (s *Store) Search(term string, limit int) ([]SearchResult, error) {
 	client := s.registry
 
-	url := fmt.Sprintf("https://hub.docker.com/v2/search/repositories/?query=%s&page_size=%d", term, limit)
+	url := fmt.Sprintf("https://hub.docker.com/v2/search/repositories/?query=%s&page_size=%d", url.QueryEscape(term), limit)
 	resp, err := client.DoRequest(nil, "GET", url, nil, nil)
 	if err != nil {
 		return nil, err
@@ -733,6 +738,9 @@ func (s *Store) Import(reader io.Reader) (*ImageRecord, error) {
 			}
 		case strings.HasSuffix(hdr.Name, "/layer.tar"):
 			hex := strings.TrimSuffix(hdr.Name, "/layer.tar")
+			if strings.Contains(hex, "..") || strings.Contains(hex, "/") || hex == "" {
+				return nil, fmt.Errorf("invalid layer path in tar: %s", hdr.Name)
+			}
 			layers[hex] = data
 		}
 	}
@@ -755,6 +763,9 @@ func (s *Store) Import(reader io.Reader) (*ImageRecord, error) {
 
 	mf := mfEntries[0]
 	cfgHex := strings.TrimSuffix(mf.Config, ".json")
+	if strings.Contains(cfgHex, "..") || strings.Contains(cfgHex, "/") || cfgHex == "" {
+		return nil, fmt.Errorf("invalid config path in manifest: %s", mf.Config)
+	}
 	configDigest := "sha256:" + cfgHex
 
 	var layerDigests []string
@@ -774,7 +785,9 @@ func (s *Store) Import(reader io.Reader) (*ImageRecord, error) {
 	}
 
 	var cfg Config
-	json.Unmarshal(configData, &cfg)
+	if err := json.Unmarshal(configData, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
 
 	var manifest registry.ManifestV2
 	manifest.SchemaVersion = 2
@@ -787,6 +800,9 @@ func (s *Store) Import(reader io.Reader) (*ImageRecord, error) {
 	// Write layer blobs and build manifest layers.
 	for _, hex := range mfEntries[0].Layers {
 		hexNoSuffix := strings.TrimSuffix(hex, "/layer.tar")
+		if strings.Contains(hexNoSuffix, "..") || strings.Contains(hexNoSuffix, "/") || hexNoSuffix == "" {
+			return nil, fmt.Errorf("invalid layer path in manifest: %s", hex)
+		}
 		digest := "sha256:" + hexNoSuffix
 		blobData, ok := layers[hexNoSuffix]
 		if !ok {
@@ -922,8 +938,8 @@ func (s *Store) Push(idOrTag string) error {
 		if err != nil {
 			return fmt.Errorf("open layer %s: %w", digest, err)
 		}
-		defer f.Close()
 		data, err := io.ReadAll(f)
+		f.Close()
 		if err != nil {
 			return fmt.Errorf("read layer %s: %w", digest, err)
 		}

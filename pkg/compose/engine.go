@@ -2,6 +2,7 @@ package compose
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -238,8 +239,14 @@ func (e *Engine) Load(path string) error {
 	e.file = &file
 
 	// Validate compose file version
-	if file.Version != "" && file.Version < "3.0" {
-		return fmt.Errorf("unsupported compose file version: %s (requires >= 3.0)", file.Version)
+	if file.Version != "" {
+		ver, err := strconv.ParseFloat(file.Version, 64)
+		if err != nil {
+			return fmt.Errorf("invalid compose file version: %s", file.Version)
+		}
+		if ver < 3.0 {
+			return fmt.Errorf("unsupported compose file version: %s (requires >= 3.0)", file.Version)
+		}
 	}
 
 	// Y24: Variable interpolation.
@@ -284,7 +291,6 @@ func (e *Engine) loadDotEnv() {
 				val = val[1 : len(val)-1]
 			}
 			e.envVars[key] = val
-			os.Setenv(key, val)
 		}
 	}
 }
@@ -369,25 +375,51 @@ func (e *Engine) interpolateService(name string, svc *Service) {
 	}
 }
 
-var varRegex = regexp.MustCompile(`\$\{?([a-zA-Z_][a-zA-Z0-9_]*)\}?`)
+var varRegex = regexp.MustCompile(`\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 
 func (e *Engine) interpolate(s string) string {
 	if s == "" {
 		return s
 	}
 	return varRegex.ReplaceAllStringFunc(s, func(match string) string {
-		// Extract variable name: ${VAR} or $VAR
-		varName := match
+		var varName, defaultVal, altVal string
+		isDefault, isAlt := false, false
+
 		if strings.HasPrefix(match, "${") && strings.HasSuffix(match, "}") {
-			varName = match[2 : len(match)-1]
+			inner := match[2 : len(match)-1]
+			if idx := strings.Index(inner, ":-"); idx >= 0 {
+				varName = inner[:idx]
+				defaultVal = inner[idx+2:]
+				isDefault = true
+			} else if idx := strings.Index(inner, ":+"); idx >= 0 {
+				varName = inner[:idx]
+				altVal = inner[idx+2:]
+				isAlt = true
+			} else {
+				varName = inner
+			}
 		} else if strings.HasPrefix(match, "$") {
 			varName = match[1:]
 		}
-		// Check custom env vars first, then OS env.
-		if val, ok := e.envVars[varName]; ok {
-			return val
+
+		val, ok := e.envVars[varName]
+		if !ok {
+			val, ok = os.LookupEnv(varName)
 		}
-		if val := os.Getenv(varName); val != "" {
+
+		if isAlt {
+			if ok && val != "" {
+				return altVal
+			}
+			return ""
+		}
+		if isDefault {
+			if ok && val != "" {
+				return val
+			}
+			return defaultVal
+		}
+		if ok {
 			return val
 		}
 		return match
@@ -688,7 +720,9 @@ func (e *Engine) Up() error {
 			}
 		}
 
-		e.network.CreateNetwork(cfg)
+		if _, err := e.network.CreateNetwork(cfg); err != nil {
+			return fmt.Errorf("create network %s: %w", name, err)
+		}
 		e.netCreated[name] = true
 	}
 
@@ -723,24 +757,39 @@ func (e *Engine) waitForDependencies(svc *Service) error {
 	if deps == nil {
 		return nil
 	}
+	var waitFor []string
 	switch d := deps.(type) {
 	case []interface{}:
 		for _, dep := range d {
 			if m, ok := dep.(map[string]interface{}); ok {
 				if cond, _ := m["condition"].(string); cond == "service_healthy" {
 					if name, _ := m["service"].(string); name != "" {
-						containerID := e.containerName(name)
-						// Poll health up to 60s
-						for i := 0; i < 60; i++ {
-							state, err := e.runtime.State(containerID)
-							if err == nil && state.HealthStatus != nil && state.HealthStatus.Status == "healthy" {
-								break
-							}
-							time.Sleep(time.Second)
-						}
+						waitFor = append(waitFor, name)
 					}
 				}
 			}
+		}
+	case map[string]interface{}:
+		for dep, cond := range d {
+			if s, ok := cond.(string); ok && s == "service_healthy" {
+				waitFor = append(waitFor, dep)
+			}
+		}
+	}
+	for _, name := range waitFor {
+		containerID := e.containerName(name)
+		timeout := 60
+		var healthy bool
+		for i := 0; i < timeout; i++ {
+			state, err := e.runtime.State(containerID)
+			if err == nil && state.HealthStatus != nil && state.HealthStatus.Status == "healthy" {
+				healthy = true
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if !healthy {
+			return fmt.Errorf("dependency %s not healthy after %ds", name, timeout)
 		}
 	}
 	return nil
@@ -779,8 +828,12 @@ func (e *Engine) Down() error {
 
 	for svcName := range e.file.Services {
 		containerName := e.containerName(svcName)
-		e.runtime.Stop(containerName, 10)
-		e.runtime.Delete(containerName, true)
+		if err := e.runtime.Stop(containerName, 10); err != nil {
+			slog.Warn("stop", "service", svcName, "err", err)
+		}
+		if err := e.runtime.Delete(containerName, true); err != nil {
+			slog.Warn("delete", "service", svcName, "err", err)
+		}
 	}
 
 	return nil
@@ -801,7 +854,9 @@ func (e *Engine) Stop() error {
 				timeout = int(d.Seconds())
 			}
 		}
-		e.runtime.Stop(containerName, timeout)
+		if err := e.runtime.Stop(containerName, timeout); err != nil {
+			slog.Warn("stop", "service", svcName, "err", err)
+		}
 	}
 
 	return nil
@@ -822,8 +877,12 @@ func (e *Engine) Restart() error {
 				timeout = int(d.Seconds())
 			}
 		}
-		e.runtime.Stop(containerName, timeout)
-		e.runtime.Delete(containerName, true)
+		if err := e.runtime.Stop(containerName, timeout); err != nil {
+			slog.Warn("stop", "service", svcName, "err", err)
+		}
+		if err := e.runtime.Delete(containerName, true); err != nil {
+			slog.Warn("delete", "service", svcName, "err", err)
+		}
 		if err := e.startService(svcName); err != nil {
 			return fmt.Errorf("restart %s: %w", svcName, err)
 		}
@@ -983,6 +1042,10 @@ func (e *Engine) startService(name string) error {
 
 	// Build container config.
 	cmd := toStringSlice(svc.Command)
+	// String-form command should be run through a shell (Docker compat)
+	if _, isStr := svc.Command.(string); isStr && len(cmd) == 1 {
+		cmd = []string{"/bin/sh", "-c", cmd[0]}
+	}
 	if len(cmd) == 0 {
 		if record, err := e.image.Get(imageName); err == nil && record.Config != nil {
 			cmd = record.Config.Config.Cmd
@@ -1138,7 +1201,10 @@ func (e *Engine) startService(name string) error {
 	// Parse ports (support short and long syntax).
 	portSpecs := toStringSlice(svc.Ports)
 	for _, ps := range portSpecs {
-		port, _ := common.ParsePortBinding(ps)
+		port, _, err := common.ParsePortBinding(ps)
+		if err != nil {
+			return fmt.Errorf("parse port %s: %w", ps, err)
+		}
 		cfg.Ports = append(cfg.Ports, port)
 	}
 
@@ -1223,7 +1289,9 @@ func (e *Engine) startService(name string) error {
 			if err != nil {
 				continue
 			}
-			e.network.Connect(nw.ID, containerID, "", nil, nil, 0)
+			if err := e.network.Connect(nw.ID, containerID, "", nil, nil, 0); err != nil {
+				slog.Warn("connect container to network", "network", nw.ID, "container", containerID, "err", err)
+			}
 		}
 	}
 

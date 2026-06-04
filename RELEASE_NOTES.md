@@ -1,0 +1,47 @@
+# Doki v0.9.2-alpha — DNS Overhaul, LD_PRELOAD Fix, Android Native Support
+
+## Breaking Changes
+
+- **DNS default port on Android**: Changed from `:53` to `127.0.0.11:8053` — port 53 is blocked on non-rooted Android. Set `DOKI_DNS_LISTEN` to override.
+
+## What's New
+
+### Android Native Mode
+- Android detection via `/system/bin/` and `ro.build.version.release` — proot is forced automatically
+- `LD_PRELOAD` and `LD_LIBRARY_PATH` stripped from proot environment via `common.StripHostEnv()` — fixes Termux's `libtermux-exec-ld-preload.so` hooking `execve` and breaking proot's ptrace
+- Android DNS auto-discovery via `getprop net.dns1` through `net.dns4`
+- proot forced when available (`detectMode()`), with `--link2symlink` for better compat
+- 16KB page size alignment for Android 15+ (`-Wl,-z,max-page-size=16384`)
+
+### DNS System Rewrite (18 Bugs Fixed)
+- **Port stripping**: `ParseResolvConf` now stores clean IPs (no port); `NameserverList()` appends `:53` for dialling; `GenerateResolvConf` strips port with `net.SplitHostPort()`
+- **DNS registration in SetupNetwork**: creates endpoint + registers DNS if missing (no prior `Connect()` call needed)
+- **DNS recovery on restart**: `recoverContainers` calls `netMgr.ReRegisterDNS(st.ID)` for each recovered container
+- **Dynamic DNS Well-Known Address**: generated per-container instead of hardcoded
+- **Default port 8053 on Android**: set via `init()` in `cmd/dokid/main.go`
+- **iptables DNAT for root mode**: redirects DNS traffic on privileged setups
+- **AAAA + PTR local resolution**: handles IPv6 and reverse DNS locally
+- **ndots:0**: `GenerateResolvConf` adds `options ndots:0` by default
+- **TCP retry upstream**: DNS queries that fail over UDP are retried over TCP
+- **No busy-wait polling**: fixed `resolv.conf` watching to use inotify instead
+
+### Cross-Platform Releases
+- Makefile rewritten: all targets output to `releases/` (not `bin/`)
+- Supported platforms: `android-arm64`, `android-armv7`, `linux-arm64`, `linux-armv7`, `darwin-arm64`
+- SHA256 checksums generated for all binaries
+- `make release` builds everything + checksums in one command
+
+### Other
+- Dead parameter removed: `NewServer()` no longer accepts unused `*network.DNSServer` variadic
+- Readme updated with v0.9.2 changelog and `DOKI_DNS_LISTEN` env var documentation
+- `.golangci.yml` linting configuration added
+
+## Installation
+
+Download the appropriate binary for your platform from the release assets, or build from source:
+
+```bash
+git clone https://github.com/OpceanAI/Doki
+cd Doki
+make release
+```
