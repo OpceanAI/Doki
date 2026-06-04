@@ -6,6 +6,11 @@
 
 ## What's New
 
+### 12 Isolation Levels
+- New runner registry with auto-selection from 12 modes: WASM, pKVM/Microdroid, MicroVM, Sysbox, Namespaces, gVisor, FEX-Emu, QEMU User, Proot, Legacy32, Chroot, and Native
+- Each mode has a specific use case: WASM for untrusted sandboxes, pKVM for Android protected VMs, FEX/QEMU for cross-architecture emulation, Sysbox for Docker-in-Docker, gVisor for defense-in-depth, Legacy32 for ARMv7 compat, Chroot for lightweight isolation
+- `doki run --runtime <mode>` for explicit selection; auto-detection picks the best available
+
 ### Android Native Mode
 - Android detection via `/system/bin/` and `ro.build.version.release` — proot is forced automatically
 - `LD_PRELOAD` and `LD_LIBRARY_PATH` stripped from proot environment via `common.StripHostEnv()` — fixes Termux's `libtermux-exec-ld-preload.so` hooking `execve` and breaking proot's ptrace

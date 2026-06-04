@@ -123,8 +123,8 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <h3>4 Isolation Levels</h3>
-      <p>MicroVM to Namespaces to Proot to Native. Auto-selected at runtime based on available hardware capabilities. Scales up automatically.</p>
+      <h3>12 Isolation Levels</h3>
+      <p>From WASM sandboxes to pKVM hardware isolation. Auto-selected at runtime based on available hardware. A mode for every device: phones without root, servers with KVM, Chromebooks with pKVM, or laptops needing x86 emulation on ARM.</p>
     </td>
     <td width="50%" valign="top">
       <h3>Compose Support</h3>
@@ -221,18 +221,28 @@ When Doki runs a container, it goes through this pipeline:
 
 1. **Image Resolution** -- Parse reference, contact registry, authenticate, resolve manifest for current architecture, download layers
 2. **Rootfs Construction** -- Extract layers in order, build complete container filesystem with path traversal protection
-3. **Execution Mode Selection** -- Probe system for available isolation: microVM, namespaces, proot, or native
+3. **Execution Mode Selection** -- Probe system and select best runner from 12 available modes: WASM, pKVM, microVM, sysbox, namespaces, gVisor, FEX, QEMU, proot, legacy32, chroot, or native
 4. **Process Execution** -- Execute container command within chosen isolation context with environment variables applied
 5. **Lifecycle Management** -- Monitor process, record exit codes, write logs, execute health checks, enforce restart policies
 
 ### Isolation Levels
 
-| Level | Mode | Isolation | Overhead | Requirements |
-|:-----:|:-----|:----------|:---------|:-------------|
-| **4** | MicroVM | Hardware-level | 5-20 MB RAM | KVM, Gunyah, GenieZone, Halla |
-| **3** | Namespaces | Kernel-level | Negligible | Root + Linux namespaces |
-| **2** | Proot | Userspace | ~10% CPU | proot binary |
-| **1** | Native | None | Zero | Always available |
+Doki selects the strongest isolation mode available on your hardware. Each mode exists for a specific use case:
+
+| Level | Mode | Isolation | Overhead | Why / When |
+|:-----:|:-----|:----------|:---------|:-----------|
+| **12** | WASM | Sandbox (user-space) | Minimal | Run WASI/Wasm containers for untrusted code. No syscalls leak to host. Use for plugins, serverless functions, or polyglot microservices |
+| **11** | pKVM/Microdroid | Hardware-level (vm) | 5-20 MB RAM | Android 15+ protected VM. Google's pKVM isolates workloads from the host OS and from each other. Use for sensitive compute on Chromebooks/phones |
+| **10** | MicroVM | Hardware-level (vm) | 5-20 MB RAM | KVM, Gunyah, GenieZone, Halla hypervisors. Full hardware isolation with micro-second boot. Use when you need VM-level security with container speed |
+| **9** | Sysbox | Kernel-level (DinD) | Moderate | Rootless Docker-in-Docker via sysbox-runc. Use when you need to run a full Docker daemon inside a container (CI runners, build farms) |
+| **8** | Namespaces | Kernel-level | Negligible | Standard Linux namespace isolation. Use on servers with root access. Best performance for trusted multi-tenant workloads |
+| **7** | gVisor | User-space kernel | ~20% CPU | Google's runsc intercepts syscalls at the user-space boundary. Use when you want defense-in-depth without a VM — 70% of syscalls never reach the host |
+| **6** | FEX-Emu | Emulation (x86 on ARM) | ~30% CPU | FEXInterpreter or Box64. Runs x86/x86_64 binaries on ARM64 without recompilation. Use for legacy x86 containers on Apple Silicon or ARM servers |
+| **5** | QEMU User | Emulation (cross-arch) | ~50% CPU | QEMU user-mode for any guest arch. Use when you need to run containers built for a different architecture (e.g., arm32 on arm64, or any arch on any arch) |
+| **4** | Proot | Userspace (ptrace) | ~10% CPU | Ptrace-based chroot without root. Default on Android/Termux. Use on devices where you lack root and namespaces — phones, tablets, ChromeOS Linux |
+| **3** | Legacy32 | Dual-arch compat | Negligible | Run ARMv7 containers on ARM64 kernels via binfmt_misc and multiarch support. Use when your workload ships only as 32-bit ARM |
+| **2** | Chroot | Filesystem-level | Minimal | Lightweight filesystem isolation via chroot. Use for quick testing, build stages, or when every other mode is unavailable |
+| **1** | Native | None | Zero | Direct host execution. Always available as fallback. Use when you trust the workload and want zero overhead |
 
 ### MicroVM Support
 
@@ -790,6 +800,8 @@ Doki/
 | `doki volume create/ls/rm` | Tested | Local driver, tmpfs support |
 | `doki-compose up/down` | Tested | Full compose spec: networks, volumes, secrets, healthcheck |
 | Port forwarding (`-p`) | Tested | FirewallManager wired |
+| Isolation auto-selection | Tested | Registry picks best available runner from 12 modes |
+| `--runtime` flag | Tested | Explicit mode via `doki run --runtime proot` |
 
 ### What Does NOT Work Yet
 
@@ -797,6 +809,14 @@ Doki/
 |:--------|:------:|:------|
 | `doki cp` | Stub | Copy files host/container not implemented |
 | MicroVM isolation | Untested | Code exists, not tested on compatible hardware |
+| gVisor isolation | Untested | runsc detection works, runtime not validated |
+| WASM containers | Untested | wasmedge/iwasm detection works, runtime not validated |
+| pKVM/Microdroid | Untested | pKVM detection works, no compatible hardware to test |
+| Sysbox | Untested | sysbox-runc detection works, runtime not validated |
+| FEX-Emu cross-arch | Untested | FEXInterpreter/box64 detection works, runtime not validated |
+| QEMU user-mode | Untested | qemu-*-static detection works, runtime not validated |
+| Chroot mode | Untested | Works in principle, not validated |
+| Legacy32 mode | Untested | binfmt_misc detection works, runtime not validated |
 | Kubernetes CRI | Stub | gRPC server not implemented |
 | CNI networking | Untested | Plugin manager exists, not wired |
 | Network bridge isolation | No | Containers share host network in proot/native mode |
@@ -811,6 +831,7 @@ Doki/
 
 ### v0.9.2-alpha (Current)
 
+- **12 isolation levels (8 new):** New runner registry with auto-selection. Added WASM, gVisor, pKVM/Microdroid, Sysbox, QEMU User, FEX-Emu, Chroot, and Legacy32 modes alongside the original MicroVM, Namespaces, Proot, and Native
 - **DNS server overhaul — 18 bugs fixed across 7 files + 1 new:**
   - `nameserver` port stripped from resolv.conf (port in `nameserver` line is invalid per resolv.conf format)
   - DNS entries auto-registered on container start (`SetupNetwork` now creates endpoint + calls `AddEntry`)
