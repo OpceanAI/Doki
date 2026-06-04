@@ -39,7 +39,7 @@ func main() {
 	netMgr, err := network.NewManager(
 		common.NetworkDir(),
 		network.NewFirewallManager(network.DetectFirewallBackend()),
-		network.NewDNSServer(),
+		network.NewDNSServer(nil),
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Network error: %v\n", err)

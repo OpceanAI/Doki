@@ -660,6 +660,11 @@ doki run --distro opensuse
 | `DOKI_TLS_KEY` | TLS key path | unset |
 | `DOKI_KERNEL` | MicroVM kernel path | Platform-specific |
 | `DOKI_NATIVE` | Force native mode | unset |
+| `DOKI_DNS_LISTEN` | DNS server listen address | `127.0.0.11:8053` (Android) / `127.0.0.11:53` (Linux) |
+| `DOKI_DEBUG` | Enable debug mode (pprof on `:6060`) | unset |
+| `DOKI_RATE_LIMIT` | Requests per second | `100` |
+| `DOKI_LOG_LEVEL` | Log level (debug/info/warn/error) | `info` |
+| `DOKI_LOG_FORMAT` | Log format (json/text) | auto-detect |
 
 <br>
 
@@ -799,7 +804,32 @@ Doki/
 
 ## What's New
 
-### v0.9.1 (Current)
+### v0.9.2 (Current)
+
+- **DNS server overhaul — 18 bugs fixed across 7 files + 1 new:**
+  - `nameserver` port stripped from resolv.conf (port in `nameserver` line is invalid per resolv.conf format)
+  - DNS entries auto-registered on container start (`SetupNetwork` now creates endpoint + calls `AddEntry`)
+  - DNS entries re-registered on daemon restart (`recoverContainers` → `ReRegisterDNS`)
+  - Android: default port `127.0.0.11:8053` (port 53 is blocked without root)
+  - Android: DNS discovery via `getprop net.dns1..4` instead of hardcoded Google DNS
+  - AAAA (IPv6) and PTR (reverse) local resolution in addition to A records
+  - `options ndots:0` for single-label container names (e.g. `forgejo` resolves without trailing dot)
+  - TCP retry upstream when UDP response has TC bit (RFC 5966)
+  - Blocking `ReadFromUDP` instead of busy-wait polling (`SetReadDeadline` removed)
+- **LD_PRELOAD fix:** `libtermux-exec-ld-preload.so` filtered from proot environment — Termux's exec hook breaks proot's ptrace. Before: `"execve: Function not implemented"`. After: containers start normally.
+- **Proot forced on Android:** `detectMode()` prefers proot over native mode (native cannot isolate or resolve DNS on Android)
+- **DNS dead param removed:** `NewServer()` no longer accepts unused `*network.DNSServer` variadic
+- **Android DNS auto-detection:** New `pkg/network/android_dns.go` — reads `getprop net.dns1..4` for upstream resolvers
+- **ParseResolvConf cleanup:** Nameservers stored without port (resolv.conf format). `NameserverList()` appends `:53` for dialling.
+- **Unified version:** Single source of truth via `common.DokiVersion` + `-ldflags` injection of `GitCommit`, `BuildDate`, `BuildUser`
+- **Structured logging:** `log/slog` (JSON in prod, text on TTY) replacing stdlib `log` in daemon, CLI, and middleware. Auto-detected from stderr
+- **Atomic state persistence:** `saveState` writes to `state.json.tmp.*` then `os.Rename` for crash-safety
+- **API bumped to v1.48:** aligned with Docker Engine 29.5.x (May 2026)
+- **16 KiB page size alignment:** Android 15+ requirement, `-Wl,-z,max-page-size=16384` in the Android build target
+- **Metrics + counter hardening:** `/health` and `/metrics` integrated with the slog pipeline
+- **Test coverage:** DNS LRU, atomic state, resolv.conf parsing, version invariants
+
+### v0.9.1
 
 - **OCI Push:** `doki push` -- blob upload, cross-repo mount, manifest PUT to any OCI registry
 - **Registry Auth:** `doki login` accepts credentials and propagates to registry client

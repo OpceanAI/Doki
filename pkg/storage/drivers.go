@@ -1,15 +1,27 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
 )
+
+var validLayerID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+func validateLayerID(id string) error {
+	if id == "" || !validLayerID.MatchString(id) || len(id) > 128 {
+		return fmt.Errorf("invalid layer id: %q", id)
+	}
+	return nil
+}
 
 // ─── Btrfs Driver ──────────────────────────────────────────────────
 
@@ -35,6 +47,9 @@ func isBtrfs(path string) bool {
 }
 
 func (d *BtrfsDriver) Get(id, _ string) (string, error) {
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	subvolPath := filepath.Join(d.root, id)
 	if !common.PathExists(subvolPath) {
 		return "", common.NewErrNotFound("layer", id)
@@ -48,16 +63,25 @@ func (d *BtrfsDriver) Get(id, _ string) (string, error) {
 }
 
 func (d *BtrfsDriver) Put(id, _ string) (string, error) {
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	mountPath := filepath.Join(d.root, "mnt", id)
 	unmount(mountPath)
 	return mountPath, nil
 }
 
 func (d *BtrfsDriver) Exists(id string) bool {
+	if err := validateLayerID(id); err != nil {
+		return false
+	}
 	return common.PathExists(filepath.Join(d.root, id))
 }
 
 func (d *BtrfsDriver) Remove(id string) error {
+	if err := validateLayerID(id); err != nil {
+		return err
+	}
 	subvolPath := filepath.Join(d.root, id)
 	return exec.Command("btrfs", "subvolume", "delete", subvolPath).Run()
 }
@@ -91,6 +115,9 @@ func isZFS() bool {
 func (d *ZFSDriver) Name() string { return "zfs" }
 
 func (d *ZFSDriver) Get(id, _ string) (string, error) {
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	fsName := d.fsPrefix + "/" + id
 	mountPath := filepath.Join(d.root, id)
 	common.EnsureDir(mountPath)
@@ -102,17 +129,28 @@ func (d *ZFSDriver) Get(id, _ string) (string, error) {
 }
 
 func (d *ZFSDriver) Put(id, _ string) (string, error) {
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	fsName := d.fsPrefix + "/" + id
-	exec.Command("zfs", "unmount", fsName).Run()
+	if err := exec.Command("zfs", "unmount", fsName).Run(); err != nil {
+		return filepath.Join(d.root, id), fmt.Errorf("zfs unmount %s: %w", fsName, err)
+	}
 	return filepath.Join(d.root, id), nil
 }
 
 func (d *ZFSDriver) Exists(id string) bool {
+	if err := validateLayerID(id); err != nil {
+		return false
+	}
 	fsName := d.fsPrefix + "/" + id
 	return exec.Command("zfs", "list", fsName).Run() == nil
 }
 
 func (d *ZFSDriver) Remove(id string) error {
+	if err := validateLayerID(id); err != nil {
+		return err
+	}
 	fsName := d.fsPrefix + "/" + id
 	return exec.Command("zfs", "destroy", "-r", fsName).Run()
 }
@@ -174,6 +212,7 @@ type GarbageCollector struct {
 	store *Manager
 	cfg   GCConfig
 	stop  chan struct{}
+	once  sync.Once
 }
 
 func NewGarbageCollector(store *Manager, cfg GCConfig) *GarbageCollector {
@@ -198,76 +237,89 @@ func (g *GarbageCollector) Start() {
 	}()
 }
 
-func (g *GarbageCollector) Stop() { close(g.stop) }
+func (g *GarbageCollector) Stop() {
+	g.once.Do(func() { close(g.stop) })
+}
 
 func (g *GarbageCollector) collect() {
-	unused, _ := g.findUnusedLayers()
+	unused, err := g.findUnusedLayers()
+	if err != nil {
+		slog.Warn("GC: findUnusedLayers failed", "err", err)
+		return
+	}
 	for _, id := range unused {
 		g.store.Remove(id)
 	}
 }
 
 func (g *GarbageCollector) findUnusedLayers() ([]string, error) {
-	return nil, nil
-}
+	root := g.store.Root()
+	layersDir := filepath.Join(root, "layers")
 
-// ─── Quota Support ──────────────────────────────────────────────────
-
-type QuotaManager struct {
-	root string
-}
-
-func NewQuotaManager(root string) *QuotaManager {
-	return &QuotaManager{root: root}
-}
-
-// SetSize sets a size quota for a container layer.
-func (q *QuotaManager) SetSize(id string, sizeBytes int64) error {
-	if !isXFSWithPquota(q.root) {
-		return fmt.Errorf("quota: backing filesystem does not support project quotas")
+	entries, err := os.ReadDir(layersDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read layers dir: %w", err)
 	}
-	return setXFSProjectQuota(filepath.Join(q.root, id), sizeBytes)
-}
 
-func isXFSWithPquota(path string) bool {
-	return false
-}
-
-func setXFSProjectQuota(path string, sizeBytes int64) error {
-	return fmt.Errorf("not implemented")
-}
-
-// ─── Snapshot Management ───────────────────────────────────────────
-
-type SnapshotManager struct {
-	driver Driver
-}
-
-func NewSnapshotManager(driver Driver) *SnapshotManager {
-	return &SnapshotManager{driver: driver}
-}
-
-func (s *SnapshotManager) CreateSnapshot(id, snapshotID string) error {
-	switch s.driver.Name() {
-	case "btrfs":
-		return exec.Command("btrfs", "subvolume", "snapshot",
-			filepath.Join(s.driver.(*BtrfsDriver).root, id),
-			filepath.Join(s.driver.(*BtrfsDriver).root, snapshotID)).Run()
-	case "zfs":
-		zfs := s.driver.(*ZFSDriver)
-		fsName := zfs.fsPrefix + "/" + id
-		return exec.Command("zfs", "snapshot", fsName+"@"+snapshotID).Run()
-	default:
-		return fmt.Errorf("snapshots not supported by %s driver", s.driver.Name())
+	allLayers := make(map[string]struct{})
+	for _, e := range entries {
+		if e.IsDir() {
+			allLayers[e.Name()] = struct{}{}
+		}
 	}
-}
+	if len(allLayers) == 0 {
+		return nil, nil
+	}
 
-func (s *SnapshotManager) ListSnapshots(id string) ([]string, error) {
-	return nil, fmt.Errorf("not implemented")
-}
+	containersDir := filepath.Join(root, "containers")
+	ce, err := os.ReadDir(containersDir)
+	if err == nil {
+		for _, entry := range ce {
+			if !entry.IsDir() {
+				continue
+			}
+			statePath := filepath.Join(containersDir, entry.Name(), "state.json")
+			data, err := os.ReadFile(statePath)
+			if err != nil {
+				continue
+			}
+			var s struct {
+				Config *struct {
+					ImageLayers []string `json:"ImageLayers"`
+				} `json:"config"`
+			}
+			if err := json.Unmarshal(data, &s); err != nil {
+				continue
+			}
+			if s.Config != nil {
+				for _, layer := range s.Config.ImageLayers {
+					delete(allLayers, filepath.Base(layer))
+					delete(allLayers, filepath.Base(filepath.Dir(layer)))
+				}
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read containers dir: %w", err)
+	}
 
-func (s *SnapshotManager) DeleteSnapshot(snapshotID string) error {
-	return fmt.Errorf("not implemented")
+	now := time.Now()
+	var unused []string
+	for id := range allLayers {
+		layerPath := filepath.Join(layersDir, id)
+		fi, err := os.Stat(layerPath)
+		if err != nil {
+			continue
+		}
+		if g.cfg.MaxAge > 0 && now.Sub(fi.ModTime()) < g.cfg.MaxAge {
+			continue
+		}
+		unused = append(unused, id)
+	}
+
+	return unused, nil
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -280,6 +332,9 @@ func mountSubvol(src, dst string) error {
 
 func unmount(target string) error {
 	cmd := exec.Command("umount", target)
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		slog.Warn("unmount failed", "target", target, "err", err)
+		return err
+	}
 	return nil
 }

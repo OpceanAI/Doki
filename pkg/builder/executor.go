@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -46,7 +47,7 @@ func (b *Builder) executeInstructionReal(stage *Stage, inst *Instruction, ctxDir
 	case "ENV":
 		return b.executeEnv(stage, inst)
 	case "WORKDIR":
-		return b.executeWorkdir(stage, inst, workDir)
+		return b.executeWorkdir(stage, inst, rootDir, workDir)
 	case "USER":
 		return b.executeUser(stage, inst)
 	case "EXPOSE":
@@ -120,8 +121,28 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 		env = append(env, k+"="+v)
 	}
 
-	cmd := exec.Command("/bin/sh", "-c", cmdStr)
-	cmd.Dir = workDir
+	var cmd *exec.Cmd
+	if prootBin := findProotBinary(); prootBin != "" {
+		// Replace host PATH with standard Linux paths for the guest rootfs
+		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		// Run inside rootfs via proot for proper isolation
+		prootArgs := []string{
+			"-r", rootDir,
+			"-i", "0:0",
+			"-b", "/proc",
+			"-b", "/sys",
+			"-b", "/dev",
+			"--kill-on-exit",
+			"--link2symlink",
+			"/bin/sh", "-c", cmdStr,
+		}
+		cmd = exec.Command(prootBin, prootArgs...)
+		cmd.Dir = "/"
+	} else {
+		// Fallback: run directly on host (works for native/namespace modes)
+		cmd = exec.Command("/bin/sh", "-c", cmdStr)
+		cmd.Dir = workDir
+	}
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -308,15 +329,29 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 
 	// If source is a URL, download it
 	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-		if err := b.downloadAdd(src, dstPath); err != nil {
+		tmpDir, err := os.MkdirTemp("", "doki-add-")
+		if err != nil {
+			return fmt.Errorf("create temp dir: %w", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		tmpFile := filepath.Join(tmpDir, filepath.Base(dstPath))
+		if err := b.downloadAdd(src, tmpFile); err != nil {
 			return fmt.Errorf("add URL %s: %w", src, err)
 		}
 		// Auto-extract tar archives
-		if isArchive(dstPath) {
-			if err := extractArchive(dstPath, filepath.Dir(dstPath)); err != nil {
-				return fmt.Errorf("extract archive %s: %w", dstPath, err)
+		if isArchive(tmpFile) {
+			if err := extractArchive(tmpFile, dstPath); err != nil {
+				return fmt.Errorf("extract archive %s: %w", tmpFile, err)
 			}
-			os.Remove(dstPath)
+		} else {
+			data, err := os.ReadFile(tmpFile)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+				return err
+			}
 		}
 	} else {
 		// Local file - handle glob
@@ -357,9 +392,13 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 	// Apply chown/chmod
 	if chown != "" || chmod != "" {
 		if fi, err := os.Stat(dstPath); err == nil && fi.IsDir() {
-			applyChowChmodRecursive(dstPath, chown, chmod)
+			if err := applyChowChmodRecursive(dstPath, chown, chmod); err != nil {
+				return fmt.Errorf("apply chown/chmod: %w", err)
+			}
 		} else {
-			applyChowChmod(dstPath, chown, chmod)
+			if err := applyChowChmod(dstPath, chown, chmod); err != nil {
+				return fmt.Errorf("apply chown/chmod: %w", err)
+			}
 		}
 	}
 
@@ -374,7 +413,15 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 }
 
 func (b *Builder) downloadAdd(url, destPath string) error {
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
 	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
@@ -426,23 +473,41 @@ func extractArchive(archivePath, destDir string) error {
 	} else if strings.HasSuffix(name, ".bz2") || strings.HasSuffix(name, ".tar.bz2") {
 		reader = bzip2.NewReader(f)
 	} else if strings.HasSuffix(name, ".xz") || strings.HasSuffix(name, ".txz") || strings.HasSuffix(name, ".tar.xz") {
+		if _, err := exec.LookPath("xz"); err != nil {
+			return fmt.Errorf("xz not found: %w", err)
+		}
 		cmd := exec.Command("xz", "-dc")
 		cmd.Stdin = f
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		if err := cmd.Run(); err != nil {
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return err
+		}
+		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("xz decompress: %w", err)
 		}
-		reader = &out
+		if err := ExtractTar(stdout, destDir); err != nil {
+			cmd.Wait()
+			return err
+		}
+		return cmd.Wait()
 	} else if strings.HasSuffix(name, ".zst") || strings.HasSuffix(name, ".tar.zst") {
+		if _, err := exec.LookPath("zstd"); err != nil {
+			return fmt.Errorf("zstd not found: %w", err)
+		}
 		cmd := exec.Command("zstd", "-dc")
 		cmd.Stdin = f
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		if err := cmd.Run(); err != nil {
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return err
+		}
+		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("zstd decompress: %w", err)
 		}
-		reader = &out
+		if err := ExtractTar(stdout, destDir); err != nil {
+			cmd.Wait()
+			return err
+		}
+		return cmd.Wait()
 	}
 
 	return ExtractTar(reader, destDir)
@@ -474,7 +539,7 @@ func (b *Builder) executeEnv(stage *Stage, inst *Instruction) error {
 	return nil
 }
 
-func (b *Builder) executeWorkdir(stage *Stage, inst *Instruction, workDir *string) error {
+func (b *Builder) executeWorkdir(stage *Stage, inst *Instruction, rootDir string, workDir *string) error {
 	if len(inst.Args) > 0 {
 		dir := inst.Args[0]
 		if filepath.IsAbs(dir) {
@@ -485,7 +550,7 @@ func (b *Builder) executeWorkdir(stage *Stage, inst *Instruction, workDir *strin
 		if stage.ImageConfig != nil {
 			stage.ImageConfig.WorkingDir = *workDir
 		}
-		common.EnsureDir(*workDir)
+		common.EnsureDir(filepath.Join(rootDir, *workDir))
 	}
 	return nil
 }
@@ -591,7 +656,9 @@ func (b *Builder) executeHealthcheck(stage *Stage, inst *Instruction) error {
 		case strings.HasPrefix(a, "--start-period="):
 			startPeriod = parseDurationNanos(strings.TrimPrefix(a, "--start-period="))
 		case strings.HasPrefix(a, "--retries="):
-			fmt.Sscanf(strings.TrimPrefix(a, "--retries="), "%d", &retries)
+			if _, err := fmt.Sscanf(strings.TrimPrefix(a, "--retries="), "%d", &retries); err != nil {
+				return fmt.Errorf("invalid --retries value: %s", strings.TrimPrefix(a, "--retries="))
+			}
 		case a == "CMD":
 			// CMD followed by the test command
 			test = inst.Args[i+1:]
@@ -620,36 +687,15 @@ func (b *Builder) executeHealthcheck(stage *Stage, inst *Instruction) error {
 }
 
 func parseDurationNanos(s string) int64 {
-	// Parse simple duration like "30s", "5m", "1h"
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0
 	}
-	var val int64
-	unit := "s"
-	for i, c := range s {
-		if c >= '0' && c <= '9' {
-			val = val*10 + int64(c-'0')
-		} else {
-			unit = strings.ToLower(s[i:])
-			break
-		}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0
 	}
-	switch unit {
-	case "ns":
-		return val
-	case "us", "µs":
-		return val * 1000
-	case "ms":
-		return val * 1000000
-	case "s":
-		return val * 1000000000
-	case "m":
-		return val * 60000000000
-	case "h":
-		return val * 3600000000000
-	}
-	return val * 1000000000
+	return d.Nanoseconds()
 }
 
 func (b *Builder) executeStopsignal(stage *Stage, inst *Instruction) error {
@@ -702,8 +748,37 @@ func (b *Builder) executeMaintainer(stage *Stage, inst *Instruction) error {
 	return nil
 }
 
-// ExtractTar extracts a tar archive to dest directory.
+// findProotBinary locates the proot binary (doki-proot preferred).
+func findProotBinary() string {
+	for _, name := range []string{"doki-proot", "proot"} {
+		p, err := exec.LookPath(name)
+		if err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// ExtractTar extracts a tar archive (optionally gzip-compressed) to dest directory.
 func ExtractTar(r io.Reader, dest string) error {
+	// Peek at the first bytes to detect gzip.
+	buf := make([]byte, 2)
+	_, err := r.Read(buf)
+	if err != nil {
+		return err
+	}
+	mr := io.MultiReader(bytes.NewReader(buf), r)
+	if buf[0] == 0x1f && buf[1] == 0x8b {
+		gzr, err := gzip.NewReader(mr)
+		if err != nil {
+			return err
+		}
+		defer gzr.Close()
+		r = gzr
+	} else {
+		r = mr
+	}
+
 	cleanDest := filepath.Clean(dest)
 	tr := tar.NewReader(r)
 	for {
@@ -721,11 +796,16 @@ func ExtractTar(r io.Reader, dest string) error {
 		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s", hdr.Name)
 		}
+		mode := os.FileMode(hdr.Mode & 07777)
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			os.MkdirAll(target, 0755)
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
 		case tar.TypeReg, tar.TypeRegA:
-			os.MkdirAll(filepath.Dir(target), 0755)
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
 			f, err := os.Create(target)
 			if err != nil {
 				return err
@@ -735,10 +815,41 @@ func ExtractTar(r io.Reader, dest string) error {
 				return err
 			}
 			f.Close()
+			if err := os.Chmod(target, mode); err != nil {
+				return err
+			}
 		case tar.TypeSymlink:
-			os.MkdirAll(filepath.Dir(target), 0755)
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			if filepath.IsAbs(hdr.Linkname) {
+				resolved := filepath.Clean(hdr.Linkname)
+				if !strings.HasPrefix(resolved, cleanDest+string(os.PathSeparator)) && resolved != cleanDest {
+					return fmt.Errorf("tar: symlink traversal (absolute): %s -> %s", hdr.Name, hdr.Linkname)
+				}
+			} else {
+				resolved := filepath.Clean(filepath.Join(filepath.Dir(target), hdr.Linkname))
+				if !strings.HasPrefix(resolved, cleanDest+string(os.PathSeparator)) && resolved != cleanDest {
+					return fmt.Errorf("tar: symlink traversal: %s -> %s", hdr.Name, hdr.Linkname)
+				}
+			}
 			os.Remove(target)
-			os.Symlink(hdr.Linkname, target)
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
+		case tar.TypeLink:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			linkTarget := filepath.Clean(filepath.Join(dest, hdr.Linkname))
+			if !strings.HasPrefix(linkTarget, cleanDest+string(os.PathSeparator)) && linkTarget != cleanDest {
+				return fmt.Errorf("tar: hardlink traversal: %s -> %s", hdr.Name, hdr.Linkname)
+			}
+			os.Remove(target)
+			if err := os.Link(linkTarget, target); err != nil {
+				return err
+			}
+		default:
 		}
 	}
 	return nil
@@ -757,23 +868,37 @@ func CreateTar(dir string, writer io.Writer) error {
 		if rel == "." {
 			return nil
 		}
-		hdr, err := tar.FileInfoHeader(info, "")
+
+		var link string
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
+		}
+		hdr, err := tar.FileInfoHeader(info, link)
 		if err != nil {
 			return err
 		}
 		hdr.Name = rel
+		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			if err := tw.WriteHeader(hdr); err != nil {
+				return err
+			}
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			slog.Debug("skipping unreadable file in tar", "path", path, "err", err)
+			return nil
+		}
+		hdr.Size = int64(len(data))
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		if info.IsDir() {
-			return nil
-		}
-		f, err := os.Open(path)
-		if err != nil {
+		if _, err := tw.Write(data); err != nil {
 			return err
 		}
-		io.Copy(tw, f)
-		f.Close()
 		return nil
 	})
 }

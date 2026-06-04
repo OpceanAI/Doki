@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -17,26 +18,28 @@ import (
 
 // Manager manages container networks.
 type Manager struct {
-	mu       sync.RWMutex
-	root     string
-	networks map[string]*Network
-	firewall *FirewallManager
-	dns      *DNSServer
+	mu               sync.RWMutex
+	root             string
+	networks         map[string]*Network
+	firewall         *FirewallManager
+	dns              *DNSServer
+	portForwardProcs map[string][]*exec.Cmd
+	pfMu             sync.Mutex
 }
 
 // Network represents a container network.
 type Network struct {
-	ID         string              `json:"Id"`
-	Name       string              `json:"Name"`
-	Driver     string              `json:"Driver"`
-	Subnet     string              `json:"Subnet"`
-	Gateway    string              `json:"Gateway"`
-	EnableIPv6 bool                `json:"EnableIPv6"`
-	Internal   bool                `json:"Internal"`
-	Options    map[string]string   `json:"Options"`
-	Labels     map[string]string   `json:"Labels"`
+	ID         string               `json:"Id"`
+	Name       string               `json:"Name"`
+	Driver     string               `json:"Driver"`
+	Subnet     string               `json:"Subnet"`
+	Gateway    string               `json:"Gateway"`
+	EnableIPv6 bool                 `json:"EnableIPv6"`
+	Internal   bool                 `json:"Internal"`
+	Options    map[string]string    `json:"Options"`
+	Labels     map[string]string    `json:"Labels"`
 	Containers map[string]*Endpoint `json:"Containers"`
-	Created    time.Time           `json:"Created"`
+	Created    time.Time            `json:"Created"`
 }
 
 // Endpoint represents a container endpoint in a network.
@@ -51,9 +54,9 @@ type Endpoint struct {
 
 // PortMap represents a port mapping for an endpoint.
 type PortMap struct {
-	HostPort  uint16 `json:"HostPort"`
-	HostIP    string `json:"HostIP"`
-	Proto     string `json:"Proto"`
+	HostPort      uint16 `json:"HostPort"`
+	HostIP        string `json:"HostIP"`
+	Proto         string `json:"Proto"`
 	ContainerPort uint16 `json:"ContainerPort"`
 }
 
@@ -74,10 +77,11 @@ func NewManager(root string, firewall *FirewallManager, dns *DNSServer) (*Manage
 	common.EnsureDir(root)
 
 	m := &Manager{
-		root:     root,
-		networks: make(map[string]*Network),
-		firewall: firewall,
-		dns:      dns,
+		root:             root,
+		networks:         make(map[string]*Network),
+		firewall:         firewall,
+		dns:              dns,
+		portForwardProcs: make(map[string][]*exec.Cmd),
 	}
 
 	// Create default networks.
@@ -214,6 +218,26 @@ func (m *Manager) toNetworkInfo(nw *Network) common.NetworkInfo {
 		Labels:     nw.Labels,
 		Containers: containers,
 		Created:    nw.Created,
+	}
+}
+
+// ReRegisterDNS re-registers DNS entries for a container across all networks.
+// Used after daemon restart to restore container name resolution.
+func (m *Manager) ReRegisterDNS(containerID string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.dns == nil {
+		return
+	}
+
+	for _, nw := range m.networks {
+		if ep, ok := nw.Containers[containerID]; ok && ep.IPv4Address != "" {
+			m.dns.AddEntry(containerID, ep.IPv4Address)
+			for _, alias := range ep.Aliases {
+				m.dns.AddEntry(alias, ep.IPv4Address)
+			}
+		}
 	}
 }
 
@@ -476,6 +500,8 @@ func (m *Manager) loadNetwork(idOrName string) (*Network, error) {
 }
 
 // SetupNetwork configures networking for a container.
+// If no endpoint exists yet (Connect was not called), creates one
+// with an IP allocation and registers DNS entries.
 func (m *Manager) SetupNetwork(containerID string, containerPid int, networkName string) error {
 	if networkName == "none" {
 		return nil
@@ -492,6 +518,27 @@ func (m *Manager) SetupNetwork(containerID string, containerPid int, networkName
 
 	if nw.Driver == "bridge" {
 		ep := nw.Containers[containerID]
+		if ep == nil {
+			// No endpoint yet — create one with IP allocation.
+			ep = &Endpoint{
+				EndpointID: common.GenerateID(64),
+				MacAddress: generateMacAddr(),
+				IPv4Address: m.allocateIP(nw),
+			}
+			nw.Containers[containerID] = ep
+			if err := m.saveNetwork(nw); err != nil {
+				return err
+			}
+		}
+
+		// Register DNS entries (idempotent — AddEntry overwrites).
+		if m.dns != nil && ep.IPv4Address != "" {
+			m.dns.AddEntry(containerID, ep.IPv4Address)
+			for _, alias := range ep.Aliases {
+				m.dns.AddEntry(alias, ep.IPv4Address)
+			}
+		}
+
 		return setupBridgeNetwork(containerPid, nw, ep, m.firewall)
 	}
 
@@ -625,6 +672,21 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 		}
 	}
 
+	// 7. DNAT DNS traffic from containers to the internal DNS server.
+	// Redirects port 53 traffic to the configured DNS listen port.
+	// Only runs as root (non-root Android cannot use iptables).
+	dnsListen := os.Getenv("DOKI_DNS_LISTEN")
+	if dnsListen == "" {
+		dnsListen = "127.0.0.11:53"
+	}
+	_, dnsPort, _ := net.SplitHostPort(dnsListen)
+	if dnsPort != "" && dnsPort != "53" {
+		dnatRule := fmt.Sprintf("OUTPUT -t nat -p udp --dport 53 -d 127.0.0.11 -j DNAT --to-destination 127.0.0.11:%s", dnsPort)
+		exec.Command("iptables", strings.Split(dnatRule, " ")...).Run()
+		dnatRuleTCP := fmt.Sprintf("OUTPUT -t nat -p tcp --dport 53 -d 127.0.0.11 -j DNAT --to-destination 127.0.0.11:%s", dnsPort)
+		exec.Command("iptables", strings.Split(dnatRuleTCP, " ")...).Run()
+	}
+
 	return nil
 }
 
@@ -661,13 +723,48 @@ func IsSlirp4netnsAvailable() bool {
 	return err == nil
 }
 
-// SetPortForwarding sets up a TCP proxy from hostPort to containerPort.
-func SetPortForwarding(hostPort, containerPort int) error {
+// StartPortForwarding starts a TCP proxy from hostPort to containerPort.
+func StartPortForwarding(hostPort, containerPort int) (*exec.Cmd, error) {
 	cmd := exec.Command("socat", fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", hostPort),
 		fmt.Sprintf("TCP:localhost:%d", containerPort))
-	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("port forward %d->%d: %w", hostPort, containerPort, err)
+	}
+	return cmd, nil
+}
+
+// ApplyPortForwardings creates TCP proxies from host ports to container ports.
+func (m *Manager) ApplyPortForwardings(containerID string, ports []common.Port, pid int) error {
+	m.pfMu.Lock()
+	defer m.pfMu.Unlock()
+
+	for _, port := range ports {
+		if port.PublicPort <= 0 {
+			continue
+		}
+		cmd, err := StartPortForwarding(int(port.PublicPort), int(port.PrivatePort))
+		if err != nil {
+			slog.Warn("port forward failed", "host", port.PublicPort, "container", port.PrivatePort, "err", err)
+			continue
+		}
+		m.portForwardProcs[containerID] = append(m.portForwardProcs[containerID], cmd)
+	}
+	return nil
+}
+
+// RemovePortForwardings kills all TCP proxy processes for a container.
+func (m *Manager) RemovePortForwardings(containerID string) {
+	m.pfMu.Lock()
+	defer m.pfMu.Unlock()
+
+	cmds := m.portForwardProcs[containerID]
+	for _, cmd := range cmds {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	}
+	delete(m.portForwardProcs, containerID)
 }
 
 // Inspect returns network details.

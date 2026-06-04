@@ -1,0 +1,86 @@
+run:
+  timeout: 5m
+  build-tags:
+    - android
+    - linux
+  skip-dirs:
+    - vendor
+    - releases
+    - distros
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - durationcheck
+    - errname
+    - errorlint
+    - exportloopref
+    - gofmt
+    - goimports
+    - gosec
+    - misspell
+    - nilerr
+    - prealloc
+    - unconvert
+    - unparam
+    - whitespace
+  disable:
+    - deadcode
+    - structcheck
+    - varcheck
+    - depguard
+    - gocognit
+    - cyclop
+    - funlen
+    - lll
+    - nestif
+    - wrapcheck
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+  gosec:
+    severity: medium
+    confidence: medium
+    excludes:
+      - G104 # Duplicate of errcheck
+      - G304 # File path inclusion is expected
+      - G404 # Use of math/rand is acceptable
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+  misspell:
+    locale: US
+  goimports:
+    local-prefixes: github.com/OpceanAI/Doki
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - unparam
+    - path: cmd/dokid/main.go
+      linters:
+        - errcheck
+    - path: pkg/api/server.go
+      linters:
+        - errcheck
+        - gosec
+    - text: "SA1019"
+      linters:
+        - staticcheck
+    - text: "G107"
+      linters:
+        - gosec

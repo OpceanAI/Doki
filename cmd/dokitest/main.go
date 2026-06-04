@@ -113,7 +113,7 @@ func main() {
 	fmt.Printf("  Version:    %s\n", v.Version)
 	fmt.Printf("  API:        %s\n", v.APIVersion)
 	fmt.Printf("  Go:         %s\n", v.GoVersion)
-	fmt.Printf("  OS/Arch:    %s/%s\n", v.OS, v.Arch)
+	fmt.Printf("  OS/Arch:    %s/%s\n", v.Os, v.Arch)
 
 	// 8. Supported Dokifile instructions.
 	fmt.Println()

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,17 +29,10 @@ import (
 	"github.com/OpceanAI/Doki/pkg/storage"
 )
 
-var bufPool = sync.Pool{New: func() interface{} { b := make([]byte, 4096); return &b }}
 
-// ExecutionMode defines how a container process is run.
-type ExecutionMode int
 
-const (
-	ModeNative     ExecutionMode = iota // Direct host execution (Android / rootless without namespaces)
-	ModeProot                           // proot-based isolation (Android fallback)
-	ModeNamespaces                      // Full Linux namespace isolation (requires root)
-	ModeMicroVM                         // Hardware-level isolation via microVM (crosvm/firecracker)
-)
+// ExecutionMode, ContainerRunner, RunnerCapabilities, and all Mode* constants
+// are defined in runner.go.
 
 // Runtime implements the OCI Runtime Specification.
 type Runtime struct {
@@ -50,6 +44,8 @@ type Runtime struct {
 	prootMgr *proot.Manager
 	rootless bool
 	mode     ExecutionMode
+	registry *Registry
+	dnsAddr  string // Internal DNS server address (e.g., "127.0.0.11:53")
 }
 
 type Config struct {
@@ -91,6 +87,7 @@ type Config struct {
 	ImageLayers   []string // paths to image layer tarballs
 	ImageConfig   *ImageOCIConfig
 	RootfsReady   string // path to extracted rootfs
+	Platform      string // "linux/arm64", "linux/amd64", "wasi/wasm", etc.
 }
 
 type HealthCheckConfig struct {
@@ -147,7 +144,24 @@ type ContainerState struct {
 	Cmd          *exec.Cmd             `json:"-"`
 }
 
-func NewRuntime(root string, store *storage.Manager) *Runtime {
+// RuntimeOption is a functional option for NewRuntime.
+type RuntimeOption func(*Runtime)
+
+// WithRegistry sets the runner registry for the runtime.
+func WithRegistry(reg *Registry) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.registry = reg
+	}
+}
+
+// WithDNSAddr sets the internal DNS server address for container resolv.conf.
+func WithDNSAddr(addr string) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.dnsAddr = addr
+	}
+}
+
+func NewRuntime(root string, store *storage.Manager, opts ...RuntimeOption) *Runtime {
 	rt := &Runtime{
 		root:     root,
 		store:    store,
@@ -155,6 +169,9 @@ func NewRuntime(root string, store *storage.Manager) *Runtime {
 		cgMgr:    cgroups.NewManager("/sys/fs/cgroup/doki"),
 		prootMgr: proot.NewManager(root),
 		rootless: namespaces.IsRootless(),
+	}
+	for _, opt := range opts {
+		opt(rt)
 	}
 	rt.detectMode()
 
@@ -166,6 +183,11 @@ func NewRuntime(root string, store *storage.Manager) *Runtime {
 	return rt
 }
 
+// Registry returns the runner registry, or nil if not set.
+func (rt *Runtime) Registry() *Registry {
+	return rt.registry
+}
+
 func (rt *Runtime) detectMode() {
 	switch {
 	case dokivm.IsAvailable():
@@ -173,7 +195,11 @@ func (rt *Runtime) detectMode() {
 	case proot.ShouldUseProot() && proot.IsAvailable():
 		rt.mode = ModeProot
 	case rt.isAndroid():
-		rt.mode = ModeNative
+		if proot.IsAvailable() {
+			rt.mode = ModeProot
+		} else {
+			rt.mode = ModeNative
+		}
 	case rt.rootless:
 		rt.mode = ModeNative
 	default:
@@ -235,9 +261,9 @@ func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 	rootfsFiles := map[string]string{
 		"etc/hostname":    fuse.GenerateHostname(hostname),
 		"etc/hosts":       fuse.GenerateHosts(hostname, parseExtraHosts(cfg.ExtraHosts)),
-		"etc/resolv.conf": fuse.GenerateResolvConf(cfg.DNS, cfg.DNSSearch, cfg.DNSOptions),
+		"etc/resolv.conf": fuse.GenerateResolvConf(cfg.DNS, cfg.DNSSearch, cfg.DNSOptions, rt.dnsAddr),
 	}
-	fuse.PrepareRootfs(rootfsDir, rootfsFiles)
+	fuse.PrepareRootfs(rootfsDir, rootfsFiles, cfg.User)
 
 	state := &ContainerState{
 		ID:      cfg.ID,
@@ -413,7 +439,9 @@ func extractTarGz(tarPath, dest string) error {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return err
 			}
-			os.Chown(target, hdr.Uid, hdr.Gid)
+			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("chown dir", "target", target, "err", err)
+			}
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
 		case tar.TypeReg, tar.TypeRegA:
@@ -421,6 +449,8 @@ func extractTarGz(tarPath, dest string) error {
 				return err
 			}
 			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+				os.Remove(target)
+			} else if err != nil {
 				os.Remove(target)
 			}
 			out, err := os.Create(target)
@@ -431,11 +461,17 @@ func extractTarGz(tarPath, dest string) error {
 				out.Close()
 				return err
 			}
-			out.Close()
-			if err := os.Chmod(target, os.FileMode(hdr.Mode)); err != nil {
+			if err := out.Chmod(os.FileMode(hdr.Mode)); err != nil {
+				out.Close()
 				return err
 			}
-			os.Chown(target, hdr.Uid, hdr.Gid)
+			if err := out.Chown(hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("chown file", "target", target, "err", err)
+			}
+			out.Close()
+			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("chown file", "target", target, "err", err)
+			}
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
 		case tar.TypeSymlink:
@@ -450,11 +486,18 @@ func extractTarGz(tarPath, dest string) error {
 					return fmt.Errorf("tar: symlink escape attempt: %s -> %s", hdr.Linkname, resolved)
 				}
 			}
-			os.Remove(target)
-			if err := os.Symlink(hdr.Linkname, target); err != nil {
-				return err
+			for attempts := 0; attempts < 5; attempts++ {
+				os.Remove(target)
+				if err := os.Symlink(hdr.Linkname, target); err == nil {
+					break
+				}
+				if attempts == 4 {
+					return fmt.Errorf("tar: symlink %s -> %s: %w", target, hdr.Linkname, err)
+				}
 			}
-			os.Lchown(target, hdr.Uid, hdr.Gid)
+			if err := os.Lchown(target, hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("lchown symlink", "target", target, "err", err)
+			}
 			extractXattrs(hdr, target)
 		case tar.TypeLink:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
@@ -476,6 +519,14 @@ func extractTarGz(tarPath, dest string) error {
 					return fmt.Errorf("tar: hardlink failed for %s: %w", hdr.Name, err)
 				}
 			}
+			if err := os.Chmod(target, os.FileMode(hdr.Mode & 07777)); err != nil {
+				return fmt.Errorf("tar: chmod hardlink %s: %w", hdr.Name, err)
+			}
+			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("chown hardlink", "target", target, "err", err)
+			}
+			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			extractXattrs(hdr, target)
 		case tar.TypeBlock:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
@@ -485,7 +536,9 @@ func extractTarGz(tarPath, dest string) error {
 			if err := syscall.Mknod(target, syscall.S_IFBLK|uint32(hdr.Mode&0777), dev); err != nil {
 				return fmt.Errorf("tar: mknod block device %s: %w", hdr.Name, err)
 			}
-			os.Chown(target, hdr.Uid, hdr.Gid)
+			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("chown block device", "target", target, "err", err)
+			}
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeChar:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
@@ -496,7 +549,9 @@ func extractTarGz(tarPath, dest string) error {
 			if err := syscall.Mknod(target, syscall.S_IFCHR|uint32(hdr.Mode&0777), dev); err != nil {
 				return fmt.Errorf("tar: mknod char device %s: %w", hdr.Name, err)
 			}
-			os.Chown(target, hdr.Uid, hdr.Gid)
+			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("chown char device", "target", target, "err", err)
+			}
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeFifo:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
@@ -506,7 +561,9 @@ func extractTarGz(tarPath, dest string) error {
 			if err := syscall.Mkfifo(target, uint32(hdr.Mode&0777)); err != nil {
 				return fmt.Errorf("tar: mkfifo %s: %w", hdr.Name, err)
 			}
-			os.Chown(target, hdr.Uid, hdr.Gid)
+			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("chown fifo", "target", target, "err", err)
+			}
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeGNUSparse:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
@@ -523,19 +580,23 @@ func extractTarGz(tarPath, dest string) error {
 				out.Close()
 				return err
 			}
-			out.Close()
-			if err := os.Chmod(target, os.FileMode(hdr.Mode)); err != nil {
+			if err := out.Chmod(os.FileMode(hdr.Mode)); err != nil {
+				out.Close()
 				return err
 			}
-			os.Chown(target, hdr.Uid, hdr.Gid)
+			if err := out.Chown(hdr.Uid, hdr.Gid); err != nil {
+				slog.Warn("chown file", "target", target, "err", err)
+			}
+			out.Close()
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
+		default:
 		}
 	}
 	return nil
 }
 
-// extractXattrs extracts extended attributes from PAXRecords (C6/C14).
+// extractXattrs extracts extended attributes from PAXRecords.
 func extractXattrs(hdr *tar.Header, target string) {
 	if hdr.PAXRecords == nil {
 		return
@@ -626,7 +687,9 @@ func (rt *Runtime) Start(id string) error {
 	state.Started = time.Now()
 	state.Cmd = proc
 	state.PidPath = filepath.Join(rt.root, "containers", id, "init.pid")
-	os.WriteFile(state.PidPath, []byte(fmt.Sprintf("%d", pid)), 0644)
+	if err := os.WriteFile(state.PidPath, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
+		return fmt.Errorf("write pid file: %w", err)
+	}
 
 	if err := rt.saveState(state); err != nil {
 		return err
@@ -642,7 +705,9 @@ func (rt *Runtime) Start(id string) error {
 			FailingStreak: 0,
 			Log:           []common.HealthCheckResult{},
 		}
-		rt.saveState(state)
+		if err := rt.saveState(state); err != nil {
+			_, _ = os.Stderr.Write([]byte(fmt.Sprintf("DOKI: failed to save healthcheck state for %s: %v\n", id, err)))
+		}
 		rt.StartHealthcheck(id, cfg.HealthCheck.Test, cfg.HealthCheck.Interval,
 			cfg.HealthCheck.Timeout, cfg.HealthCheck.Retries)
 	}
@@ -785,6 +850,18 @@ func (rt *Runtime) startNative(cfg *Config, rootfsDir string, logFile *os.File) 
 	cmd.Stdin = os.Stdin
 	cmd.Env = cfg.Env
 
+	if cfg.User != "" {
+		u, g := parseUser(cfg.User)
+		if u >= 0 && g >= 0 {
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				Credential: &syscall.Credential{
+					Uid: uint32(u),
+					Gid: uint32(g),
+				},
+			}
+		}
+	}
+
 	if err := cmd.Start(); err != nil {
 		return 0, nil, err
 	}
@@ -800,41 +877,11 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 
 	cleanRootfs := filepath.Clean(rootfsDir)
 
-	prootArgs := []string{
-		"-r", cleanRootfs,
-		"-b", "/proc",
-		"-b", "/proc/self/fd:/dev/fd",
-		"-b", "/sys",
-		"-b", "/dev",
-		"-b", "/dev/urandom:/dev/random",
-		"--kill-on-exit",
-		"--link2symlink",
-		"--kernel-release=6.17.0-PRoot-Distro",
-	}
-
-	selinuxTarget := filepath.Join(cleanRootfs, "sys", "fs", "selinux")
-	os.MkdirAll(selinuxTarget, 0755)
-	prootArgs = append(prootArgs, "-b", selinuxTarget+":/sys/fs/selinux")
+	uid, gid := parseUser(cfg.User)
+	prootArgs := proot.BuildProotBaseArgs(cleanRootfs, uid, gid)
 
 	if rt.isAndroid() {
-		for _, dir := range []string{
-			"/apex", "/system", "/vendor",
-			"/storage", "/sdcard",
-			"/data/data/com.termux/files",
-		} {
-			if _, err := os.Stat(dir); err == nil {
-				prootArgs = append(prootArgs, "-b", dir)
-			}
-		}
-		if _, err := os.Stat("/data/data/com.termux/files/usr"); err == nil {
-			prootArgs = append(prootArgs, "-b", "/data/data/com.termux/files/usr")
-		}
-		if _, err := os.Stat("/linkerconfig/ld.config.txt"); err == nil {
-			prootArgs = append(prootArgs, "-b", "/linkerconfig/ld.config.txt")
-		}
-		if home := os.Getenv("HOME"); home != "" {
-			prootArgs = append(prootArgs, "-b", home)
-		}
+		prootArgs = proot.AppendAndroidBinds(prootArgs)
 	}
 
 	if cfg.Cwd != "" {
@@ -856,7 +903,7 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
 
-	env := os.Environ()
+	env := common.StripHostEnv(os.Environ())
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
 	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
 	// Image config env takes precedence (contains PATH, etc.)
@@ -935,7 +982,7 @@ func (rt *Runtime) startWithNamespaces(cfg *Config, rootfsDir string, logFile *o
 
 	// Build a shell init script that does pivot_root then execs the user command.
 	pivotScript := fmt.Sprintf(
-		`mount --bind "%s" "%s" && pivot_root "%s" "%s/.pivot_root" && cd / && umount -l "/.pivot_root" && exec "$@"`,
+		`mount --bind %q %q && pivot_root %q %q/.pivot_root && cd / && umount -l "/.pivot_root" && exec "$@"`,
 		rootfsDir, rootfsDir, rootfsDir, rootfsDir)
 
 	allArgs := append([]string{"/bin/sh", "-c", pivotScript, "doki-init"}, args...)
@@ -1025,7 +1072,7 @@ func (rt *Runtime) setupMounts(rootfsDir string, cfg *Config) error {
 
 // ─── Container operations ──────────────────────────────────────────
 
-func (rt *Runtime) Exec(id string, args []string, env []string, tty bool) error {
+func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user string) error {
 	state, err := rt.State(id)
 	if err != nil {
 		return err
@@ -1043,23 +1090,66 @@ func (rt *Runtime) Exec(id string, args []string, env []string, tty bool) error 
 		rootfsDir = filepath.Join(state.Bundle, "rootfs")
 	}
 
-	cmd := exec.Command(args[0], args[1:]...)
-	if rootfsDir != "" && common.PathExists(rootfsDir) {
-		cmd.Dir = rootfsDir
-		// Prepend rootfs bin dirs to PATH so container binaries are found.
-		pathPrefix := rootfsDir + "/usr/local/sbin:" + rootfsDir + "/usr/local/bin:" +
-			rootfsDir + "/usr/sbin:" + rootfsDir + "/usr/bin:" +
-			rootfsDir + "/sbin:" + rootfsDir + "/bin"
-		if currentPath := os.Getenv("PATH"); currentPath != "" {
-			pathPrefix += ":" + currentPath
+	switch rt.mode {
+	case ModeProot:
+		if rootfsDir == "" || !common.PathExists(rootfsDir) {
+			return fmt.Errorf("rootfs not found for container %s", id)
 		}
-		env = append(env, "PATH="+pathPrefix)
+		uid, gid := parseUser(user)
+		prootArgs := proot.BuildProotBaseArgs(rootfsDir, uid, gid)
+		if workingDir != "" {
+			prootArgs = append(prootArgs, "-w", workingDir)
+		}
+		prootArgs = append(prootArgs, args...)
+		prootBin := "proot"
+		if p, err := exec.LookPath("doki-proot"); err == nil {
+			prootBin = p
+		}
+		cmd := exec.Command(prootBin, prootArgs...)
+		cmd.Env = env
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+
+	case ModeNamespaces:
+		if state.Pid == 0 {
+			return fmt.Errorf("container %s has no PID for nsenter", id)
+		}
+		nsenterArgs := []string{"-t", fmt.Sprintf("%d", state.Pid), "-m", "-p", "-a"}
+		if workingDir != "" {
+			nsenterArgs = append(nsenterArgs, "-w", workingDir)
+		}
+		nsenterArgs = append(append(nsenterArgs, "--"), args...)
+		cmd := exec.Command("nsenter", nsenterArgs...)
+		cmd.Env = env
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+
+	case ModeNative:
+		fallthrough
+	default:
+		cmd := exec.Command(args[0], args[1:]...)
+		if workingDir != "" {
+			cmd.Dir = workingDir
+		} else if rootfsDir != "" && common.PathExists(rootfsDir) {
+			cmd.Dir = rootfsDir
+			pathPrefix := rootfsDir + "/usr/local/sbin:" + rootfsDir + "/usr/local/bin:" +
+				rootfsDir + "/usr/sbin:" + rootfsDir + "/usr/bin:" +
+				rootfsDir + "/sbin:" + rootfsDir + "/bin"
+			if currentPath := os.Getenv("PATH"); currentPath != "" {
+				pathPrefix += ":" + currentPath
+			}
+			env = append(env, "PATH="+pathPrefix)
+		}
+		cmd.Env = env
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
 	}
-	cmd.Env = env
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }
 
 func (rt *Runtime) Stop(id string, timeout int) error {
@@ -1073,6 +1163,9 @@ func (rt *Runtime) stopUnlocked(id string, timeout int) error {
 	if err != nil {
 		return err
 	}
+	if state.ExitChan == nil {
+		state.ExitChan = make(chan struct{})
+	}
 	if state.Status != common.StateRunning {
 		return fmt.Errorf("container %s is not running", id)
 	}
@@ -1081,8 +1174,13 @@ func (rt *Runtime) stopUnlocked(id string, timeout int) error {
 	if state.Config != nil && state.Config.StopSignal != "" {
 		sig = parseSignal(state.Config.StopSignal)
 	}
-	process, _ := os.FindProcess(state.Pid)
-	process.Signal(sig)
+	process, err := os.FindProcess(state.Pid)
+	if err != nil {
+		return fmt.Errorf("process %d not found: %w", state.Pid, err)
+	}
+	if err := process.Signal(sig); err != nil {
+		return fmt.Errorf("signal %s to process %d: %w", sig, state.Pid, err)
+	}
 
 	if timeout <= 0 {
 		timeout = 10
@@ -1109,7 +1207,10 @@ func (rt *Runtime) Kill(id string, signal syscall.Signal) error {
 	if state.Status != common.StateRunning {
 		return nil
 	}
-	process, _ := os.FindProcess(state.Pid)
+	process, err := os.FindProcess(state.Pid)
+	if err != nil {
+		return fmt.Errorf("process %d not found: %w", state.Pid, err)
+	}
 	return process.Signal(signal)
 }
 
@@ -1178,7 +1279,10 @@ func (rt *Runtime) List() ([]*ContainerState, error) {
 	defer rt.mu.RUnlock()
 	var states []*ContainerState
 	dir := filepath.Join(rt.root, "containers")
-	entries, _ := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read containers dir: %w", err)
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -1197,7 +1301,10 @@ func (rt *Runtime) Stats(id string) (map[string]interface{}, error) {
 	defer rt.mu.RUnlock()
 	stats := make(map[string]interface{})
 	if rt.cgMgr.IsAvailable() {
-		cgStats, _ := rt.cgMgr.GetStats(id)
+		cgStats, err := rt.cgMgr.GetStats(id)
+		if err != nil {
+			slog.Warn("get cgroup stats", "id", id, "err", err)
+		}
 		if cgStats != nil {
 			for k, v := range cgStats {
 				stats[k] = v
@@ -1222,8 +1329,14 @@ func getNetworkStats() map[string]uint64 {
 			continue
 		}
 		iface := strings.TrimSuffix(parts[0], ":")
-		rx, _ := strconv.ParseUint(parts[1], 10, 64)
-		tx, _ := strconv.ParseUint(parts[9], 10, 64)
+		rx, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			slog.Warn("parse rx bytes", "iface", iface, "val", parts[1], "err", err)
+		}
+		tx, err := strconv.ParseUint(parts[9], 10, 64)
+		if err != nil {
+			slog.Warn("parse tx bytes", "iface", iface, "val", parts[9], "err", err)
+		}
 		result[iface+"_rx"] = rx
 		result[iface+"_tx"] = tx
 	}
@@ -1342,7 +1455,36 @@ func (rt *Runtime) saveState(state *ContainerState) error {
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
-	return os.WriteFile(filepath.Join(dir, "state.json"), data, 0644)
+	finalPath := filepath.Join(dir, "state.json")
+	// Phase 0: atomic write via tmp+rename to avoid corruption on crash
+	// mid-write (a partial JSON file would fail to load on restart and
+	// orphan the container's data dir).
+	tmp, err := os.CreateTemp(dir, "state.json.tmp.*")
+	if err != nil {
+		return fmt.Errorf("create tmp state: %w", err)
+	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup of the temp file on any failure below.
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("write tmp state: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("fsync tmp state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close tmp state: %w", err)
+	}
+	if err := os.Rename(tmpName, finalPath); err != nil {
+		cleanup()
+		return fmt.Errorf("rename state: %w", err)
+	}
+	return nil
 }
 
 func (rt *Runtime) buildCgroupConfig(cfg *Config) *cgroups.Config {
@@ -1385,6 +1527,26 @@ func parseSignal(s string) syscall.Signal {
 	default:
 		return syscall.SIGTERM
 	}
+}
+
+// parseUser parses a user string ("uid" or "uid:gid") and returns uid, gid.
+// Returns (-1, -1) if the string is empty or non-numeric.
+func parseUser(user string) (int, int) {
+	if user == "" {
+		return -1, -1
+	}
+	parts := strings.SplitN(user, ":", 2)
+	uid, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return -1, -1
+	}
+	gid := uid
+	if len(parts) >= 2 {
+		if g, err := strconv.Atoi(parts[1]); err == nil {
+			gid = g
+		}
+	}
+	return uid, gid
 }
 
 func parseExtraHosts(hosts []string) map[string]string {
@@ -1462,8 +1624,7 @@ func (rt *Runtime) StartHealthcheck(id string, cmd []string, interval, timeout t
 					rt.saveState(state)
 					rt.mu.Unlock()
 					if failures >= retries {
-						// G4: Actually kill the container process, not just set state.
-						rt.Stop(id, 10)
+						go rt.Stop(id, 10)
 						return
 					}
 				} else {
@@ -1647,42 +1808,12 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 	args := cfg.Args
 	cleanRootfs := filepath.Clean(rootfsDir)
 
-	prootArgs := []string{
-		"-q", qemuPaths[0],
-		"-r", cleanRootfs,
-		"-b", "/proc",
-		"-b", "/proc/self/fd:/dev/fd",
-		"-b", "/sys",
-		"-b", "/dev",
-		"-b", "/dev/urandom:/dev/random",
-		"--kill-on-exit",
-		"--link2symlink",
-		"--kernel-release=6.17.0-PRoot-Distro",
-	}
-
-	selinuxTarget := filepath.Join(cleanRootfs, "sys", "fs", "selinux")
-	os.MkdirAll(selinuxTarget, 0755)
-	prootArgs = append(prootArgs, "-b", selinuxTarget+":/sys/fs/selinux")
+	uid, gid := parseUser(cfg.User)
+	prootArgs := []string{"-q", qemuPaths[0]}
+	prootArgs = append(prootArgs, proot.BuildProotBaseArgs(cleanRootfs, uid, gid)...)
 
 	if rt.isAndroid() {
-		for _, dir := range []string{
-			"/apex", "/system", "/vendor",
-			"/storage", "/sdcard",
-			"/data/data/com.termux/files",
-		} {
-			if _, err := os.Stat(dir); err == nil {
-				prootArgs = append(prootArgs, "-b", dir)
-			}
-		}
-		if _, err := os.Stat("/linkerconfig/ld.config.txt"); err == nil {
-			prootArgs = append(prootArgs, "-b", "/linkerconfig/ld.config.txt")
-		}
-		if _, err := os.Stat("/data/data/com.termux/files/usr"); err == nil {
-			prootArgs = append(prootArgs, "-b", "/data/data/com.termux/files/usr")
-		}
-		if home := os.Getenv("HOME"); home != "" {
-			prootArgs = append(prootArgs, "-b", home)
-		}
+		prootArgs = proot.AppendAndroidBinds(prootArgs)
 	}
 
 	// Container-specific mounts.
@@ -1711,7 +1842,7 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 	cmd.Stdin = os.Stdin
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	env := os.Environ()
+	env := common.StripHostEnv(os.Environ())
 	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
 	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
 	validEnv := common.ValidateEnv(cfg.Env)

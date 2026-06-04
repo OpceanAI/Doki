@@ -3,6 +3,7 @@ package common
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -18,16 +19,11 @@ import (
 func GenerateID(length int) string {
 	b := make([]byte, length/2)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		// Fallback: use time-based random if crypto/rand fails.
-		return fallbackID(length)
-	}
-	return hex.EncodeToString(b)
-}
-
-func fallbackID(length int) string {
-	b := make([]byte, length/2)
-	for i := range b {
-		b[i] = byte(time.Now().UnixNano()>>(i*4)) ^ byte(i)
+		// Fallback to weak random if crypto/rand fails
+		for i := range b {
+			b[i] = byte(time.Now().UnixNano() & 0xff)
+			time.Sleep(1) // ensure nanosecond changes
+		}
 	}
 	return hex.EncodeToString(b)
 }
@@ -94,6 +90,20 @@ func ValidateEnvVar(name string) bool {
 		}
 	}
 	return true
+}
+
+// StripHostEnv removes host-specific environment variables that interfere with
+// proot (ptrace-based container runtime). Notably LD_PRELOAD from Termux
+// hooks execve and breaks proot's ptrace mechanism.
+func StripHostEnv(env []string) []string {
+	result := make([]string, 0, len(env))
+	for _, e := range env {
+		if strings.HasPrefix(e, "LD_PRELOAD=") || strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
+			continue
+		}
+		result = append(result, e)
+	}
+	return result
 }
 
 // ValidateEnv validates env vars and applies size limits.
@@ -176,7 +186,9 @@ func CommandExists(cmd string) bool {
 
 // CopyDir recursively copies a directory.
 func CopyDir(src, dst string) error {
-	EnsureDir(dst)
+	if err := EnsureDir(dst); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
@@ -235,42 +247,80 @@ func MergeEnv(base, overrides []string) []string {
 }
 
 // ParsePortBinding parses a Docker port binding string like "8080:80/tcp".
-func ParsePortBinding(binding string) (Port, PortBinding) {
+func ParsePortBinding(binding string) (Port, PortBinding, error) {
 	port := Port{Type: ProtocolTCP}
 	bind := PortBinding{HostIP: "0.0.0.0"}
+
+	if strings.Contains(binding, "..") {
+		return port, bind, fmt.Errorf("invalid port binding: %s", binding)
+	}
+
 	parts := strings.Split(binding, ":")
+	if len(parts) > 3 {
+		return port, bind, fmt.Errorf("invalid port binding format: %s", binding)
+	}
+
 	switch len(parts) {
 	case 1:
 		pp := strings.Split(parts[0], "/")
-		p, _ := parsePort(pp[0])
+		p, err := parsePort(pp[0])
+		if err != nil {
+			return port, bind, fmt.Errorf("invalid port: %s", pp[0])
+		}
+		if p == 0 {
+			return port, bind, fmt.Errorf("invalid port: %s", pp[0])
+		}
 		port.PrivatePort = p
+		port.PublicPort = p
 		if len(pp) > 1 {
 			if strings.ToLower(pp[1]) == "udp" {
 				port.Type = ProtocolUDP
 			}
 		}
-		port.PublicPort = p
 	case 2:
 		cport := strings.Split(parts[1], "/")
-		cp, _ := parsePort(cport[0])
+		cp, err := parsePort(cport[0])
+		if err != nil {
+			return port, bind, fmt.Errorf("invalid container port: %s", cport[0])
+		}
+		if cp == 0 {
+			return port, bind, fmt.Errorf("invalid container port: %s", cport[0])
+		}
 		port.PrivatePort = cp
-		hp, _ := parsePort(parts[0])
+
+		hp, err := parsePort(parts[0])
+		if err != nil {
+			return port, bind, fmt.Errorf("invalid host port: %s", parts[0])
+		}
 		port.PublicPort = hp
+		bind.HostPort = fmt.Sprintf("%d", hp)
 		if len(cport) > 1 && strings.ToLower(cport[1]) == "udp" {
 			port.Type = ProtocolUDP
 		}
 	case 3:
-		hp, _ := parsePort(parts[1])
-		port.PublicPort = hp
-		cport := strings.Split(parts[2], "/")
-		cp, _ := parsePort(cport[0])
-		port.PrivatePort = cp
 		bind.HostIP = parts[0]
+
+		hp, err := parsePort(parts[1])
+		if err != nil {
+			return port, bind, fmt.Errorf("invalid host port: %s", parts[1])
+		}
+		port.PublicPort = hp
+		bind.HostPort = fmt.Sprintf("%d", hp)
+
+		cport := strings.Split(parts[2], "/")
+		cp, err := parsePort(cport[0])
+		if err != nil {
+			return port, bind, fmt.Errorf("invalid container port: %s", cport[0])
+		}
+		if cp == 0 {
+			return port, bind, fmt.Errorf("invalid container port: %s", cport[0])
+		}
+		port.PrivatePort = cp
 		if len(cport) > 1 && strings.ToLower(cport[1]) == "udp" {
 			port.Type = ProtocolUDP
 		}
 	}
-	return port, bind
+	return port, bind, nil
 }
 
 func parsePort(s string) (uint16, error) {

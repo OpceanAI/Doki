@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -15,23 +17,34 @@ import (
 
 // Middleware provides HTTP middleware for the API server.
 type Middleware struct {
-	logger *log.Logger
+	logger *slog.Logger
 }
 
 // NewMiddleware creates a new middleware chain.
 func NewMiddleware() *Middleware {
-	return &Middleware{
-		logger: log.New(os.Stderr, "[doki-api] ", log.LstdFlags),
+	if apiLogger == nil {
+		apiLogger = slog.Default().With("component", "api")
 	}
+	return &Middleware{logger: apiLogger}
 }
 
 // Logging logs each request.
 func (m *Middleware) Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		m.logger.Printf("→ %s %s", r.Method, r.URL.Path)
+		rid := w.Header().Get("X-Request-ID")
+		m.logger.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"remote", r.RemoteAddr,
+			"request_id", rid,
+		)
 		next.ServeHTTP(w, r)
-		m.logger.Printf("← %s %s (%s)", r.Method, r.URL.Path, time.Since(start))
+		m.logger.Info("response",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
 	})
 }
 
@@ -40,7 +53,10 @@ func (m *Middleware) Recovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
-				m.logger.Printf("PANIC: %v", err)
+				m.logger.Error("panic recovered",
+					"err", err,
+					"path", r.URL.Path,
+				)
 				http.Error(w, `{"message":"internal server error"}`, http.StatusInternalServerError)
 			}
 		}()
@@ -54,7 +70,7 @@ func (m *Middleware) CORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,HEAD,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Registry-Auth")
-		w.Header().Set("Api-Version", "1.44")
+		w.Header().Set("Api-Version", common.DokiAPIVersion)
 		w.Header().Set("Server", "Doki/"+common.Version)
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -90,10 +106,14 @@ type RateLimit struct {
 	ratePerSec float64
 	tokens     chan struct{}
 	stop       chan struct{}
+	stopOnce   sync.Once
 }
 
 // NewRateLimit creates a rate limiter.
 func NewRateLimit(requestsPerSec float64, burst int) *RateLimit {
+	if requestsPerSec < 1 {
+		requestsPerSec = 1
+	}
 	rl := &RateLimit{
 		burst:      burst,
 		ratePerSec: requestsPerSec,
@@ -124,7 +144,7 @@ func (rl *RateLimit) refill() {
 	}
 }
 
-func (rl *RateLimit) Stop() { close(rl.stop) }
+func (rl *RateLimit) Stop() { rl.stopOnce.Do(func() { close(rl.stop) }) }
 
 // Allow checks if a request is allowed.
 func (rl *RateLimit) Allow() bool {
@@ -151,6 +171,7 @@ func (rl *RateLimit) RateLimitMiddleware(next http.Handler) http.Handler {
 func GracefulShutdown(ctx context.Context, server *http.Server, timeout time.Duration) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sig)
 
 	for {
 		select {
@@ -163,11 +184,49 @@ func GracefulShutdown(ctx context.Context, server *http.Server, timeout time.Dur
 				log.Println("[doki] shutting down gracefully...")
 				shutdownCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
-				server.Shutdown(shutdownCtx)
+				if err := server.Shutdown(shutdownCtx); err != nil {
+					slog.Warn("shutdown error", "err", err)
+				}
 				return
 			}
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// SetLogger replaces the API package's logger. Subsequent log lines
+// emitted by Middleware and handlers go through slog.
+func SetLogger(l *slog.Logger) {
+	apiLogger = l
+}
+
+var apiLogger *slog.Logger
+
+func slogFromContext(ctx context.Context) *slog.Logger {
+	if l, ok := ctx.Value(slogKey{}).(*slog.Logger); ok && l != nil {
+		return l
+	}
+	if apiLogger != nil {
+		return apiLogger
+	}
+	return slog.Default()
+}
+
+type slogKey struct{}
+
+// WithLogger attaches a per-request logger.
+func WithLogger(ctx context.Context, l *slog.Logger) context.Context {
+	return context.WithValue(ctx, slogKey{}, l)
+}
+
+// WaitForSignal blocks until SIGINT, SIGTERM, or SIGHUP is received,
+// then calls the cancel function. Used by main to bridge os/signal to
+// a context cancel.
+func WaitForSignal(cancel context.CancelFunc) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	s := <-ch
+	slogFromContext(context.Background()).Info("signal received", "signal", s.String())
+	cancel()
 }

@@ -43,6 +43,21 @@ func LoadConfig() (*DokiConfig, error) {
 	return cfg, nil
 }
 
+// LoadConfigFrom loads the configuration from an explicit file path.
+// Returns a default config with the error wrapped if the file is missing
+// (callers can decide whether to fall back).
+func LoadConfigFrom(path string) (*DokiConfig, error) {
+	cfg := DefaultConfig()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	if err := json.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
 // SaveConfig saves the Doki configuration to disk.
 func SaveConfig(cfg *DokiConfig) error {
 	home, err := os.UserHomeDir()

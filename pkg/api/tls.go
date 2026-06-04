@@ -61,6 +61,8 @@ func NewTLSConfig(cfg *TLSConfig) (*tls.Config, error) {
 			if !caPool.AppendCertsFromPEM(caCert) {
 				return nil, fmt.Errorf("failed to parse CA certificate")
 			}
+		} else if cfg.Verify {
+			return nil, fmt.Errorf("client verification requires CAFile to be specified")
 		}
 		tlsCfg.ClientCAs = caPool
 	}
