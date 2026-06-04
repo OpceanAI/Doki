@@ -48,6 +48,8 @@ type Endpoint struct {
 	MacAddress  string    `json:"MacAddress"`
 	IPv4Address string    `json:"IPv4Address"`
 	IPv6Address string    `json:"IPv6Address"`
+	VethHost    string    `json:"VethHost,omitempty"`
+	VethPeer    string    `json:"VethPeer,omitempty"`
 	Aliases     []string  `json:"Aliases,omitempty"`
 	PortMapping []PortMap `json:"PortMapping,omitempty"`
 }
@@ -628,6 +630,11 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 	if out, err := exec.Command("ip", "link", "set", vethHost, "up").CombinedOutput(); err != nil {
 		return fmt.Errorf("set veth up: %s %w", string(out), err)
 	}
+	// Record the host-side veth name so teardown can clean it up.
+	if ep != nil {
+		ep.VethHost = vethHost
+		ep.VethPeer = vethContainer
+	}
 
 	// 5. Inside container netns: rename to eth0, assign IP, bring up, add route.
 	netnsFlag := fmt.Sprintf("%d", pid)
@@ -681,10 +688,12 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 	}
 	_, dnsPort, _ := net.SplitHostPort(dnsListen)
 	if dnsPort != "" && dnsPort != "53" {
-		dnatRule := fmt.Sprintf("OUTPUT -t nat -p udp --dport 53 -d 127.0.0.11 -j DNAT --to-destination 127.0.0.11:%s", dnsPort)
-		exec.Command("iptables", strings.Split(dnatRule, " ")...).Run()
-		dnatRuleTCP := fmt.Sprintf("OUTPUT -t nat -p tcp --dport 53 -d 127.0.0.11 -j DNAT --to-destination 127.0.0.11:%s", dnsPort)
-		exec.Command("iptables", strings.Split(dnatRuleTCP, " ")...).Run()
+		dnatArgs := []string{"-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53",
+			"-d", "127.0.0.11", "-j", "DNAT", "--to-destination", "127.0.0.11:" + dnsPort}
+		_ = exec.Command("iptables", dnatArgs...).Run()
+		dnatArgsTCP := []string{"-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--dport", "53",
+			"-d", "127.0.0.11", "-j", "DNAT", "--to-destination", "127.0.0.11:" + dnsPort}
+		_ = exec.Command("iptables", dnatArgsTCP...).Run()
 	}
 
 	return nil
@@ -695,6 +704,10 @@ func teardownBridgeNetwork(nw *Network, ep *Endpoint, firewall *FirewallManager)
 		for _, pm := range ep.PortMapping {
 			firewall.RemovePortMapping(ep.IPv4Address, int(pm.HostPort), int(pm.ContainerPort), pm.Proto)
 		}
+	}
+	// Clean up the container-side veth interface so it does not leak across container restarts.
+	if ep != nil && ep.VethHost != "" {
+		_ = exec.Command("ip", "link", "del", ep.VethHost).Run()
 	}
 	return nil
 }
@@ -723,27 +736,60 @@ func IsSlirp4netnsAvailable() bool {
 	return err == nil
 }
 
-// StartPortForwarding starts a TCP proxy from hostPort to containerPort.
-func StartPortForwarding(hostPort, containerPort int) (*exec.Cmd, error) {
+// StartPortForwarding starts a TCP proxy from hostPort to the container's IP+containerPort.
+func StartPortForwarding(hostPort int, containerIP string, containerPort int, proto string) (*exec.Cmd, error) {
+	if proto == "udp" {
+		cmd := exec.Command("socat", fmt.Sprintf("UDP-LISTEN:%d,fork,reuseaddr", hostPort),
+			fmt.Sprintf("UDP:%s:%d", containerIP, containerPort))
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			return nil, fmt.Errorf("udp port forward %d->%s:%d: %w", hostPort, containerIP, containerPort, err)
+		}
+		return cmd, nil
+	}
 	cmd := exec.Command("socat", fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", hostPort),
-		fmt.Sprintf("TCP:localhost:%d", containerPort))
+		fmt.Sprintf("TCP:%s:%d", containerIP, containerPort))
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("port forward %d->%d: %w", hostPort, containerPort, err)
+		return nil, fmt.Errorf("tcp port forward %d->%s:%d: %w", hostPort, containerIP, containerPort, err)
 	}
 	return cmd, nil
 }
 
-// ApplyPortForwardings creates TCP proxies from host ports to container ports.
+// ApplyPortForwardings creates TCP/UDP proxies from host ports to container ports.
 func (m *Manager) ApplyPortForwardings(containerID string, ports []common.Port, pid int) error {
 	m.pfMu.Lock()
 	defer m.pfMu.Unlock()
+
+	// Find the container's bridge IP from the endpoint attached to this container.
+	containerIP := ""
+	for _, nw := range m.networks {
+		for _, ep := range nw.Containers {
+			if ep != nil && ep.IPv4Address != "" {
+				ip, _, _ := net.ParseCIDR(ep.IPv4Address)
+				if ip != nil {
+					containerIP = ip.String()
+				}
+				break
+			}
+		}
+		if containerIP != "" {
+			break
+		}
+	}
+	if containerIP == "" {
+		return fmt.Errorf("no bridge endpoint for container %s; cannot forward ports", containerID)
+	}
 
 	for _, port := range ports {
 		if port.PublicPort <= 0 {
 			continue
 		}
-		cmd, err := StartPortForwarding(int(port.PublicPort), int(port.PrivatePort))
+		proto := string(port.Type)
+		if proto == "" {
+			proto = "tcp"
+		}
+		cmd, err := StartPortForwarding(int(port.PublicPort), containerIP, int(port.PrivatePort), proto)
 		if err != nil {
 			slog.Warn("port forward failed", "host", port.PublicPort, "container", port.PrivatePort, "err", err)
 			continue

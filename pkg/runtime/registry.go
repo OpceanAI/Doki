@@ -199,7 +199,7 @@ func (r *Registry) AllRunners() []RunnerInfo {
 // ─── Helpers ───────────────────────────────────────────────────────
 
 func hostPlatform() string {
-	return "linux/" + runtime.GOARCH
+	return runtime.GOOS + "/" + runtime.GOARCH
 }
 
 func isWASMImage(cfg *Config) bool {

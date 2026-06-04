@@ -21,8 +21,10 @@ func NewManager(rootfsDir string) *Manager {
 	return &Manager{rootfsDir: rootfsDir}
 }
 
-// FindProotBinary locates the best available proot binary.
-// Searches for doki-proot first, falls back to system proot.
+// FindProotBinary locates the best available proot binary and verifies it exists.
+// Searches for doki-proot first, then falls back to system proot. Returns the empty
+// string when no usable proot binary is found, so callers can surface a clear error
+// instead of "executable not found" at exec.Cmd time.
 func FindProotBinary() string {
 	exe, _ := os.Executable()
 	candidates := []string{
@@ -34,7 +36,10 @@ func FindProotBinary() string {
 			return c
 		}
 	}
-	return "proot"
+	if p, err := exec.LookPath("proot"); err == nil {
+		return p
+	}
+	return ""
 }
 
 // IsAvailable checks if proot (or doki-proot) is available on the system.

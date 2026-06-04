@@ -379,7 +379,7 @@ func (d *Overlay2Driver) Get(id, mountLabel string) (string, error) {
 	}
 
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
-	if err := syscall.Mount("overlay", mergeDir, "overlay", 0, opts); err != nil {
+	if err := mountOverlay("overlay", mergeDir, "overlay", 0, opts); err != nil {
 		return "", fmt.Errorf("overlay mount: %w", err)
 	}
 	return mergeDir, nil
