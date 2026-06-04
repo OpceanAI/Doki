@@ -1,3 +1,10 @@
+//go:build linux
+// +build linux
+
+// doki-init is a PID 1 process for microVM guests and is only meaningful on
+// Linux, where it can call syscall.Mount, Mknod, and chroot. macOS does not
+// need this binary because ModeNative runs containers without isolation.
+
 package main
 
 import (

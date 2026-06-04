@@ -186,10 +186,29 @@ func DetectFirewallBackend() FirewallBackend {
 
 // AddPortMapping adds a port mapping rule.
 func (f *FirewallManager) AddPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
+	if err := f.ensureChains(); err != nil {
+		return err
+	}
 	if f.backend == FirewallNftables {
 		return f.addNftablesPortMapping(containerIP, hostPort, containerPort, proto)
 	}
 	return f.addIptablesPortMapping(containerIP, hostPort, containerPort, proto)
+}
+
+// ensureChains creates the DOKI chain in the nat table and wires PREROUTING/OUTPUT into it.
+// Idempotent: a chain that already exists returns an error from the binary but we ignore it.
+func (f *FirewallManager) ensureChains() error {
+	if f.backend == FirewallIptables {
+		_ = exec.Command("iptables", "-t", "nat", "-N", "DOKI").Run()
+		_ = exec.Command("iptables", "-t", "nat", "-C", "PREROUTING", "-j", "DOKI").Run() // best-effort check
+		_ = exec.Command("iptables", "-t", "nat", "-A", "PREROUTING", "-j", "DOKI").Run()
+		_ = exec.Command("iptables", "-t", "nat", "-A", "OUTPUT", "-j", "DOKI").Run()
+		return nil
+	}
+	_ = exec.Command("nft", "add", "table", "ip", "nat").Run()
+	_ = exec.Command("nft", "add", "chain", "ip", "nat", "DOKI",
+		"{", "type", "nat", "hook", "output", "priority", "0", ";", "}").Run()
+	return nil
 }
 
 func (f *FirewallManager) addNftablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {

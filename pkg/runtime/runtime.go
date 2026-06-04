@@ -1835,7 +1835,7 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 	}
 	prootArgs = append(prootArgs, args...)
 
-	cmd := exec.Command("proot", prootArgs...)
+	cmd := exec.Command(proot.FindProotBinary(), prootArgs...)
 	cmd.Dir = cleanRootfs
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
