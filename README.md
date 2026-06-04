@@ -118,7 +118,7 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
     </td>
     <td width="50%" valign="top">
       <h3>Ultra Lightweight</h3>
-      <p>13MB binary, 12MB RAM idle. 4x smaller than Docker, 7x less memory. doki-init rewritten in Rust: 412K vs 2.9MB Go, -86%.</p>
+      <p>13MB binary, 12MB RAM idle. 4x smaller than Docker, 7x less memory.</p>
     </td>
   </tr>
   <tr>
@@ -202,11 +202,10 @@ docker.listContainers().then(console.log);
 
 | Binary | Size | Description |
 |:-------|:----:|:------------|
-| **doki** | 9.2 MB | CLI with ~108 commands. Connects to daemon via Unix socket |
-| **dokid** | 13 MB | Daemon. Docker Engine API v1.44 over Unix socket |
-| **doki-compose** | 11 MB | Compose engine. Full spec support with health conditions |
-| **doki-init-rust** | 412 KB | PID 1 for microVM guests. Rust, -86% vs Go |
-| **doki-proot** | 14 KB | Forked proot with JSON IPC daemon mode |
+| **doki** | 6.7 MB | CLI with ~108 commands. Connects to daemon via Unix socket |
+| **dokid** | 9.2 MB | Daemon. Docker Engine API v1.48 over Unix socket. Proot integrated |
+| **doki-compose** | 7.6 MB | Compose engine. Full spec support with health conditions |
+| **doki-init** | 2.9 MB | PID 1 for microVM guests (Go). Rust variant available in source |
 
 <br>
 
@@ -684,36 +683,42 @@ doki run --distro opensuse
 
 ```bash
 # Android / Termux (ARM64)
-make build-android
+make build-android-arm64
 make install
 
 # Android / Termux (ARMv7)
-make build-armv7
-
-# Linux (x86_64)
-make build-linux
-make install
+make build-android-armv7
 
 # Linux (ARM64)
 make build-linux-arm64
 
-# macOS (ARM64)
+# Linux (ARMv7)
+make build-linux-armv7
+
+# macOS (Apple Silicon)
 make build-darwin-arm64
+
+# All platforms at once
+make release
+
+# SHA256 checksums
+make sha256
 
 # Testing & linting
 make test      # go test ./...
 make vet       # go vet ./...
-make lint      # golangci-lint run ./...
-make clean     # rm -rf bin/
+make clean     # rm -rf releases/
 ```
 
 ### Manual Build
 
 ```bash
-go build -trimpath -ldflags="-s -w" -o bin/doki ./cmd/doki
-go build -trimpath -ldflags="-s -w" -o bin/dokid ./cmd/dokid
-go build -trimpath -ldflags="-s -w" -o bin/doki-compose ./cmd/doki-compose
-GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-init ./cmd/doki-init
+make release
+# Or equivalently:
+go build -trimpath -ldflags="-s -w" -o releases/doki ./cmd/doki
+go build -trimpath -ldflags="-s -w" -o releases/dokid ./cmd/dokid
+go build -trimpath -ldflags="-s -w" -o releases/doki-compose ./cmd/doki-compose
+go build -trimpath -ldflags="-s -w" -o releases/doki-init ./cmd/doki-init
 ```
 
 <br>
@@ -754,7 +759,7 @@ Doki/
   kernels/                Pre-compiled VM kernels (ARM64 + x86_64)
 ```
 
-**40 Go source files. 14,500+ lines of code. 5 compiled binaries. Zero external dependencies.**
+**40 Go source files. 14,500+ lines of code. 4 compiled binaries. Zero external dependencies.**
 
 <br>
 
@@ -804,7 +809,7 @@ Doki/
 
 ## What's New
 
-### v0.9.2 (Current)
+### v0.9.2-alpha (Current)
 
 - **DNS server overhaul — 18 bugs fixed across 7 files + 1 new:**
   - `nameserver` port stripped from resolv.conf (port in `nameserver` line is invalid per resolv.conf format)
