@@ -159,17 +159,19 @@ Doki corre un servidor DNS interno que maneja:
 
 ### Arquitectura
 
-```
-Container /etc/resolv.conf
-    │ nameserver 127.0.0.11
-    ▼
-DNS interno de Doki (127.0.0.11:53 Linux / 127.0.0.11:8053 Android)
-    │ consultas A, AAAA, PTR
-    ├─→ Local: container-name → container bridge IP
-    └─→ Upstream: /etc/resolv.conf, getprop net.dns*, 8.8.8.8
-                       │
-                       ▼
-                   Internet
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart TD
+    Resolv["Container /etc/resolv.conf<br/>nameserver 127.0.0.11"]
+    Doki["DNS interno de Doki<br/>:53 Linux · :8053 Android"]
+    Local["Local<br/>container-name → bridge IP"]
+    Upstream["Upstream<br/>/etc/resolv.conf · getprop net.dns* · 8.8.8.8"]
+    Internet(("Internet"))
+
+    Resolv -->|"A · AAAA · PTR"| Doki
+    Doki --> Local
+    Doki --> Upstream
+    Upstream --> Internet
 ```
 
 ### Defaults (v0.9.2)

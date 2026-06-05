@@ -36,23 +36,41 @@ En Linux con root: `overlay2`. En Termux: `fuse-overlayfs`. En macOS: `vfs`. En 
 
 Todas las capas se almacenan por hash SHA256 en un store content-addressable:
 
-```
-~/.doki/
-├── data/
-│   ├── layers/         # un dir por SHA de capa
-│   │   ├── sha256:abc.../
-│   │   ├── sha256:def.../
-│   │   └── sha256:ghi.../
-│   ├── merged/         # puntos de mount (overlay2)
-│   ├── diff/           # dirs upper (overlay2)
-│   ├── work/           # dirs de work (overlay2)
-│   ├── images/         # metadata de imágenes
-│   ├── containers/     # estado de contenedores
-│   │   └── <id>/
-│   │       ├── state.json
-│   │       ├── rootfs/         # rootfs extraído
-│   │       └── logs/
-│   └── volumes/        # volúmenes con nombre
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart TD
+    Root["~/.doki/"]
+    Data["data/"]
+    Layers["layers/<br/><i>un dir por SHA de capa</i>"]
+    L1["sha256:abc..."]
+    L2["sha256:def..."]
+    L3["sha256:ghi..."]
+    Merged["merged/<br/><i>puntos de mount (overlay2)</i>"]
+    Diff["diff/<br/><i>dirs upper (overlay2)</i>"]
+    Work["work/<br/><i>dirs de work (overlay2)</i>"]
+    Images["images/<br/><i>metadata de imágenes</i>"]
+    Containers["containers/<br/><i>estado de contenedores</i>"]
+    CID["&lt;id&gt;/"]
+    State["state.json"]
+    Rootfs["rootfs/<br/><i>rootfs extraído</i>"]
+    Logs["logs/"]
+    Volumes["volumes/<br/><i>volúmenes con nombre</i>"]
+
+    Root --> Data
+    Data --> Layers
+    Layers --> L1
+    Layers --> L2
+    Layers --> L3
+    Data --> Merged
+    Data --> Diff
+    Data --> Work
+    Data --> Images
+    Data --> Containers
+    Containers --> CID
+    CID --> State
+    CID --> Rootfs
+    CID --> Logs
+    Data --> Volumes
 ```
 
 Las capas pulleadas se deduplican automáticamente — si dos imágenes comparten una capa base, se almacena una vez.

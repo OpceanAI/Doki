@@ -52,7 +52,7 @@ La fuente de la wiki se almacena en `.wiki/` en la raíz del repo. Para añadir 
 4. Commit + push a `main`
 5. El workflow de CI `.github/workflows/wiki-sync.yml` empuja la página a la Wiki de GitHub, la rama Wiki de GitLab y la Wiki de Codeberg
 
-Las páginas de la wiki usan [GitHub Flavored Markdown](https://github.github.com/gfm/) con anchors en kebab-case (`#niveles-de-aislamiento`). Los bloques de código deben tener tag (` ```bash `, ` ```yaml `, ` ```dockerfile `). Tablas para contenido comparativo; ASCII art para diagramas.
+Las páginas de la wiki usan [GitHub Flavored Markdown](https://github.github.com/gfm/) con anchors en kebab-case (`#niveles-de-aislamiento`). Los bloques de código deben tener tag (` ```bash `, ` ```yaml `, ` ```dockerfile `). Tablas para contenido comparativo; bloques [Mermaid](https://mermaid.js.org/) para diagramas (renderizado nativo en GitHub, GitLab y Codeberg).
 
 ## Mirrors
 

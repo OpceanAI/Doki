@@ -28,30 +28,27 @@ Doki está diseñado para estos escenarios de amenaza:
 
 ## Capas
 
-```
-┌────────────────────────────────────────────────┐
-│  Contenedor                                    │
-│  ┌────────────┐                                │
-│  │ App        │ ← código de usuario            │
-│  └─────┬──────┘                                │
-│  ┌─────▼──────┐                                │
-│  │ Syscalls   │ ← filtro seccomp               │
-│  └─────┬──────┘                                │
-│  ┌─────▼──────┐                                │
-│  │ Filesystem │ ← perfil AppArmor              │
-│  └─────┬──────┘                                │
-│  ┌─────▼──────┐                                │
-│  │ Recursos   │ ← límites cgroups v2           │
-│  └─────┬──────┘                                │
-│  ┌─────▼──────┐                                │
-│  │ Red        │ ← aislamiento bridge           │
-│  └─────┬──────┘                                │
-│  ┌─────▼──────┐                                │
-│  │ Usuario    │ ← user namespaces              │
-│  └─────┬──────┘                                │
-└─────┬──┴───────────────────────────────────────┘
-      │
-      ▼  Kernel host
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart TB
+    subgraph Container ["Contenedor"]
+        direction TB
+        App["<b>App</b><br/>código de usuario"]
+        Syscalls["<b>Syscalls</b><br/>filtro seccomp"]
+        FS["<b>Filesystem</b><br/>perfil AppArmor"]
+        Res["<b>Recursos</b><br/>límites cgroups v2"]
+        Net["<b>Red</b><br/>aislamiento bridge"]
+        User["<b>Usuario</b><br/>user namespaces"]
+    end
+
+    Host(("Kernel host"))
+
+    App --> Syscalls
+    Syscalls --> FS
+    FS --> Res
+    Res --> Net
+    Net --> User
+    User --> Host
 ```
 
 ## Seccomp
