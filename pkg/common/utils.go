@@ -92,18 +92,81 @@ func ValidateEnvVar(name string) bool {
 	return true
 }
 
+// termuxAndroidDenyList is the set of environment variable names that must be
+// stripped from the guest environment when running on Termux / Android.
+//
+// These variables either:
+//   - break proot's ptrace-based execve translation (LD_PRELOAD, LD_LIBRARY_PATH, …)
+//   - leak Termux-specific paths that do not exist inside the guest (PREFIX, HOME, …)
+//   - conflict with the guest distro's own conventions (TERMUX__PREFIX, ANDROID_DATA, …)
+//
+// See OpceanAI/Doki#4 for the post-mortem that produced this list.
+var termuxAndroidDenyList = []string{
+	// proot / ptrace killers — Termux-injected libtermux-exec.so LD_PRELOAD
+	// intercepts execve and races with proot, producing ENOSYS on Android 15+.
+	"LD_PRELOAD", "LD_PRELOAD32", "LD_PRELOAD64",
+	"LD_LIBRARY_PATH", "LD_SHOW_AUXV",
+
+	// Termux-specific vars that point to paths the guest can't see
+	"TERMUX_VERSION",
+	"TERMUX__PREFIX", "TERMUX__ROOTFS", "TERMUX__HOME",
+	"PREFIX",
+
+	// Android system vars that leak host metadata into the guest
+	"ANDROID_ROOT", "ANDROID_DATA", "ANDROID_STORAGE",
+	"ANDROID_PROPERTY_WORKSPACE",
+
+	// Temp paths that point to Termux/Android locations
+	"TMPDIR", "TMP", "TEMP",
+
+	// HOME points at /data/data/com.termux/files/home in Termux; the guest
+	// should default to /root. The AndroidEnv() helper sets the correct one.
+	"HOME",
+}
+
+func isHostEnvDenied(name string) bool {
+	for _, deny := range termuxAndroidDenyList {
+		if name == deny {
+			return true
+		}
+	}
+	return false
+}
+
 // StripHostEnv removes host-specific environment variables that interfere with
 // proot (ptrace-based container runtime). Notably LD_PRELOAD from Termux
-// hooks execve and breaks proot's ptrace mechanism.
+// hooks execve and breaks proot's ptrace mechanism, and several other
+// Termux/Android variables leak host paths into the guest.
+//
+// The full deny-list lives in termuxAndroidDenyList. On non-Android hosts the
+// deny-list is harmless because none of the variable names are typically set.
 func StripHostEnv(env []string) []string {
 	result := make([]string, 0, len(env))
 	for _, e := range env {
-		if strings.HasPrefix(e, "LD_PRELOAD=") || strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
+		eq := strings.IndexByte(e, '=')
+		var name string
+		if eq > 0 {
+			name = e[:eq]
+		} else {
+			name = e
+		}
+		if isHostEnvDenied(name) {
 			continue
 		}
 		result = append(result, e)
 	}
 	return result
+}
+
+// StripHostEnvFromOS is a convenience that calls StripHostEnv on the current
+// process environment. It also unsets the denied variables in the process
+// itself so that any child process spawned via exec.Command inherits a clean
+// environment unless cmd.Env is explicitly set.
+func StripHostEnvFromOS() []string {
+	for _, deny := range termuxAndroidDenyList {
+		_ = os.Unsetenv(deny)
+	}
+	return StripHostEnv(os.Environ())
 }
 
 // ValidateEnv validates env vars and applies size limits.
