@@ -1,0 +1,103 @@
+name: Wiki Sync
+
+# This workflow mirrors the .wiki/ directory in the main repository to the
+# three wiki targets:
+#   - GitHub wiki: OpceanAI/doki-wiki (separate repo, default branch: main)
+#   - GitLab wiki: aguitauwu/doki 'wiki' branch (in the main repo)
+#   - Codeberg wiki: aguitauwu/Doki.wiki (separate repo, default branch: main)
+#
+# Triggers:
+#   - push to main when .wiki/** or scripts/sync-wiki.sh change
+#   - workflow_dispatch for manual runs
+#   - schedule (weekly) to catch external drift in case a mirror is repaired
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - '.wiki/**'
+      - 'scripts/sync-wiki.sh'
+      - '.github/workflows/wiki-sync.yml'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which wiki to sync'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - github
+          - gitlab
+          - codeberg
+  schedule:
+    # Weekly on Monday at 03:00 UTC
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync wiki to ${{ github.event.inputs.target || 'all' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate wiki directory
+        run: |
+          if [ ! -d .wiki ]; then
+            echo "ERROR: .wiki/ directory not found" >&2
+            exit 1
+          fi
+          pages=$(find .wiki -maxdepth 1 -name '*.md' | wc -l)
+          echo "Found $pages wiki pages in .wiki/"
+          if [ "$pages" -lt 10 ]; then
+            echo "ERROR: expected at least 10 pages, found $pages" >&2
+            exit 1
+          fi
+
+      - name: Set up git
+        run: |
+          git config --global user.name 'OpceanAI Bot'
+          git config --global user.email 'bot@opceanai.com'
+          git config --global advice.detachedHead false
+
+      - name: Sync to GitHub
+        if: ${{ github.event.inputs.target == 'github' || github.event.inputs.target == '' || github.event.inputs.target == 'all' || github.event_name != 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: bash scripts/sync-wiki.sh github
+
+      - name: Sync to GitLab
+        if: ${{ github.event.inputs.target == 'gitlab' || github.event.inputs.target == '' || github.event.inputs.target == 'all' || github.event_name != 'workflow_dispatch' }}
+        env:
+          GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
+        run: bash scripts/sync-wiki.sh gitlab
+
+      - name: Sync to Codeberg
+        if: ${{ github.event.inputs.target == 'codeberg' || github.event.inputs.target == '' || github.event.inputs.target == 'all' || github.event_name != 'workflow_dispatch' }}
+        env:
+          CODEBERG_TOKEN: ${{ secrets.CB_TOKEN }}
+        run: bash scripts/sync-wiki.sh codeberg || echo "Codeberg sync failed (no token or repo missing) - see docs/sync.md"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Wiki Sync" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Trigger: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "Target:  ${{ github.event.inputs.target || 'all' }}" >> $GITHUB_STEP_SUMMARY
+          echo "Commit:  ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Wiki targets:" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub:  https://github.com/OpceanAI/doki-wiki" >> $GITHUB_STEP_SUMMARY
+          echo "- GitLab:  https://gitlab.com/aguitauwu/doki/-/wikis/home" >> $GITHUB_STEP_SUMMARY
+          echo "- Codeberg: https://codeberg.org/aguitauwu/Doki.wiki" >> $GITHUB_STEP_SUMMARY
