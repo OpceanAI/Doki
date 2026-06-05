@@ -1,4 +1,4 @@
-# Doki v0.9.2-alpha — DNS Overhaul, LD_PRELOAD Fix, Android Native Support
+# Doki v0.9.2 — DNS Overhaul, LD_PRELOAD Fix, Android Native Support, 12 Isolation Levels
 
 ## Breaking Changes
 
