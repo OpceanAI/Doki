@@ -59,6 +59,17 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 | **Architectures** | ARM64, ARMv7, x86_64 |
 | **Runtime deps** | Zero |
 
+### Binary Availability by Platform (v0.9.2)
+
+| Platform | doki | dokid | doki-compose | doki-init |
+|:---------|:----:|:-----:|:------------:|:---------:|
+| Linux ARM64 | Yes | Yes | Yes | Yes |
+| Linux ARMv7 | Yes | Yes | Yes | Yes |
+| Android ARM64 (Termux) | Yes | Yes | Yes | Yes |
+| macOS ARM64 (Apple Silicon) | Yes | — | — | — |
+
+`dokid`, `doki-compose`, and `doki-init` are Linux/Android only — they depend on Linux namespaces, cgroups v2, and overlayfs syscalls. On macOS, `doki` runs in `ModeNative` only and connects to a remote daemon over the network if needed.
+
 <br>
 
 ## Comparison
@@ -256,6 +267,40 @@ DokiVM provides hardware-level isolation via lightweight virtual machines.
 | Google | Tensor G1/G2/G3/G4 | KVM | crosvm | 2021+ |
 | Intel | Core / Xeon | KVM | Firecracker | All KVM-capable |
 | AMD | Ryzen / EPYC | KVM | Firecracker | All KVM-capable |
+
+### Isolation Level Decision Tree
+
+The runner registry in `pkg/runtime/registry.go` probes the host and selects the strongest mode that works. Override with `doki run --runtime <mode>`:
+
+```
+                         ┌─ pKVM / Microdroid   (Android 15+ protected VM)
+         ┌─ Hardware VM ─┤
+         │               └─ MicroVM              (KVM / Gunyah / GenieZone / Halla)
+         │
+         ├─ Kernel ──────┬─ Sysbox               (rootless DinD)
+         │               ├─ Namespaces           (default, rootful)
+         │               └─ gVisor               (defense-in-depth)
+ Host ───┤
+         ├─ Emulation ──┬─ FEX-Emu               (x86 on ARM)
+         │               └─ QEMU User            (cross-arch)
+         │
+         ├─ Userspace ─── Proot                  (Android default, no root)
+         │
+         ├─ Compat ──────┬─ Legacy32             (ARMv7 on ARM64)
+         │               └─ Chroot               (filesystem only)
+         │
+         ├─ Sandbox ───── WASM                   (untrusted code)
+         │
+         └─ None ──────── Native                 (zero overhead fallback)
+```
+
+The decision logic in `runtime.go:detectMode()` walks top-down and returns the first mode that passes its probe. To force a specific mode regardless of detection:
+
+```bash
+doki run --runtime proot alpine echo "always proot"
+doki run --runtime native alpine echo "no isolation"
+doki run --runtime wasm wasi-example.wasm
+```
 
 <br>
 
@@ -509,6 +554,89 @@ doki run -p 8080:80/tcp -p 8080:80/udp              # TCP and UDP
 doki run -P nginx:alpine                            # Publish all EXPOSEd ports
 doki run -p 8080-8090:80 nginx:alpine               # Port range
 ```
+
+### DNS Architecture (v0.9.2 rewrite)
+
+Doki runs an internal DNS server that handles inter-container name resolution and forwards external queries to upstream resolvers. The architecture:
+
+```
+Container /etc/resolv.conf
+    │ nameserver 127.0.0.11
+    ▼
+Doki internal DNS (127.0.0.11:8053 Android / :53 Linux)
+    │ A, AAAA, PTR queries
+    ├─→ Local: container-name → container bridge IP
+    └─→ Upstream: Android getprop net.dns* | Linux /etc/resolv.conf | 8.8.8.8
+                       │
+                       ▼
+                   Internet
+```
+
+#### Defaults (v0.9.2)
+
+| Platform | Default listen | Why |
+|:---------|:----------------|:----|
+| Linux | `127.0.0.11:53` | Standard unprivileged port |
+| Android (Termux) | `127.0.0.11:8053` | Port 53 is blocked by SELinux (EACCES) on non-root |
+| macOS | not used (ModeNative) | No bridge network |
+
+Override with `DOKI_DNS_LISTEN=IP:PORT` env var or `dns_listen` in `config.json`.
+
+#### Container name resolution
+
+```bash
+$ doki network create backend
+$ doki run -d --name db --network backend postgres:alpine
+$ doki run -d --name api --network backend my-api:latest
+$ doki exec api sh -c 'getent hosts db'
+172.20.0.2      db.backend
+```
+
+The DNS server stores entries in an LRU cache (1024 entries, 5 min TTL) and registers them on container start via `SetupNetwork` in `pkg/network/manager.go`. After daemon restart, `recoverContainers` calls `ReRegisterDNS` so names keep resolving.
+
+#### Key behaviors
+
+- **AAAA + PTR**: IPv6 forward and reverse lookups work alongside A records
+- **ndots:0**: container names like `forgejo` resolve directly, no `forgejo.local` retry loop
+- **TCP retry**: when upstream UDP returns TC bit, the query is retried over TCP per RFC 5966
+- **no busy-wait**: `ReadFromUDP` blocks on the socket, no polling loop
+
+### Port Forwarding Internals (v0.9.2 fix)
+
+Port mapping uses iptables DNAT in root mode and `socat` in rootless mode. The v0.9.2 fix targets the DNAT rule construction:
+
+```go
+// pkg/network/manager.go: ensurePortForward
+args := []string{
+    "-A", "OUTPUT",                  // ← added in v0.9.2 (was missing)
+    "-p", "tcp",
+    "--dport", strconv.Itoa(hostPort),
+    "-j", "DNAT",
+    "--to-destination", containerIP + ":" + strconv.Itoa(containerPort),
+}
+exec.Command("iptables", args...).CombinedOutput()  // ← error was discarded in v0.9.1
+```
+
+**v0.9.1 bug**: `-A OUTPUT` was missing, so iptables saw `OUTPUT` as a target name → "Unknown option" → silently swallowed. Result: container outbound to host port worked, but inbound from host to container didn't.
+
+**v0.9.1 bug**: `socat` connected to `localhost:containerPort` instead of `containerIP:containerPort`. From the host, `localhost:8080` couldn't reach the container's bridge IP.
+
+**v0.9.2 fix**: DNAT now uses `[]string` (no shell parsing), targets the container bridge IP (`Endpoint.VethPeer`), and also handles UDP via `socat -u` for protocols other than TCP.
+
+### Veth Teardown (v0.9.2 fix)
+
+The `Endpoint` struct gained two fields in v0.9.2 to make teardown idempotent:
+
+```go
+// pkg/network/manager.go
+type Endpoint struct {
+    // ...existing fields...
+    VethHost string  // host-side interface name (e.g. "vethabc123")
+    VethPeer string  // container-side interface name (e.g. "eth0")
+}
+```
+
+`teardownBridgeNetwork()` now deletes both veth ends via `ip link del vethHost` before removing the bridge. Before: orphaned veth pairs accumulated on the host (`ip link` would show dozens of `veth*` interfaces after running a few containers).
 
 <br>
 
@@ -819,7 +947,15 @@ Doki/
 | Legacy32 mode | Untested | binfmt_misc detection works, runtime not validated |
 | Kubernetes CRI | Stub | gRPC server not implemented |
 | CNI networking | Untested | Plugin manager exists, not wired |
-| Network bridge isolation | No | Containers share host network in proot/native mode |
+| Network bridge isolation | Partial | Works rootful (iptables DNAT); in proot/native, containers share host network |
+
+### Fixed in v0.9.2 (moved from this list)
+
+- ~~iptables DNAT~~ — fixed in v0.9.2, see "Port Forwarding Internals" above
+- ~~Port forwarding to localhost~~ — fixed in v0.9.2, targets container bridge IP
+- ~~Orphaned veth pairs on teardown~~ — fixed in v0.9.2, `ip link del` in teardown
+- ~~proot failing on hosts without `proot` binary~~ — fixed, `FindProotBinary()` falls back to system PATH
+- ~~Android DNS using Google 8.8.8.8~~ — fixed, reads `getprop net.dns*`
 
 <br>
 
@@ -829,31 +965,123 @@ Doki/
 
 ## What's New
 
-### v0.9.2-alpha (Current)
+### v0.9.2 (Current)
 
-- **12 isolation levels (8 new):** New runner registry with auto-selection. Added WASM, gVisor, pKVM/Microdroid, Sysbox, QEMU User, FEX-Emu, Chroot, and Legacy32 modes alongside the original MicroVM, Namespaces, Proot, and Native
-- **DNS server overhaul — 18 bugs fixed across 7 files + 1 new:**
-  - `nameserver` port stripped from resolv.conf (port in `nameserver` line is invalid per resolv.conf format)
-  - DNS entries auto-registered on container start (`SetupNetwork` now creates endpoint + calls `AddEntry`)
-  - DNS entries re-registered on daemon restart (`recoverContainers` → `ReRegisterDNS`)
-  - Android: default port `127.0.0.11:8053` (port 53 is blocked without root)
-  - Android: DNS discovery via `getprop net.dns1..4` instead of hardcoded Google DNS
-  - AAAA (IPv6) and PTR (reverse) local resolution in addition to A records
-  - `options ndots:0` for single-label container names (e.g. `forgejo` resolves without trailing dot)
-  - TCP retry upstream when UDP response has TC bit (RFC 5966)
-  - Blocking `ReadFromUDP` instead of busy-wait polling (`SetReadDeadline` removed)
-- **LD_PRELOAD fix:** `libtermux-exec-ld-preload.so` filtered from proot environment — Termux's exec hook breaks proot's ptrace. Before: `"execve: Function not implemented"`. After: containers start normally.
-- **Proot forced on Android:** `detectMode()` prefers proot over native mode (native cannot isolate or resolve DNS on Android)
-- **DNS dead param removed:** `NewServer()` no longer accepts unused `*network.DNSServer` variadic
-- **Android DNS auto-detection:** New `pkg/network/android_dns.go` — reads `getprop net.dns1..4` for upstream resolvers
-- **ParseResolvConf cleanup:** Nameservers stored without port (resolv.conf format). `NameserverList()` appends `:53` for dialling.
-- **Unified version:** Single source of truth via `common.DokiVersion` + `-ldflags` injection of `GitCommit`, `BuildDate`, `BuildUser`
-- **Structured logging:** `log/slog` (JSON in prod, text on TTY) replacing stdlib `log` in daemon, CLI, and middleware. Auto-detected from stderr
-- **Atomic state persistence:** `saveState` writes to `state.json.tmp.*` then `os.Rename` for crash-safety
-- **API bumped to v1.48:** aligned with Docker Engine 29.5.x (May 2026)
-- **16 KiB page size alignment:** Android 15+ requirement, `-Wl,-z,max-page-size=16384` in the Android build target
-- **Metrics + counter hardening:** `/health` and `/metrics` integrated with the slog pipeline
-- **Test coverage:** DNS LRU, atomic state, resolv.conf parsing, version invariants
+This release is a **stability + correctness** pass over v0.9.1. No new user-facing commands, but a long list of bugs that were breaking real workflows are now fixed.
+
+#### Critical networking fixes (the headline of v0.9.2)
+
+These four bugs were silently breaking container networking. All fixed and tested:
+
+1. **iptables DNAT missing `-A` flag** — `pkg/network/manager.go:684`
+   - Before: `iptables OUTPUT -p tcp --dport 80 -j DNAT ...` → "Unknown option", error swallowed
+   - After: `iptables -A OUTPUT -p tcp --dport 80 -j DNAT ...` using `[]string` (no shell parsing)
+   - Impact: every host→container port mapping was broken on rootful mode
+
+2. **Port forwarding to localhost instead of container IP** — `pkg/network/manager.go:732`
+   - Before: `socat TCP-LISTEN:8080,fork TCP:localhost:80`
+   - After: `socat TCP-LISTEN:8080,fork TCP:10.0.0.2:80` (container bridge IP)
+   - Impact: `localhost:8080` from host never reached the container
+
+3. **Orphaned veth pairs** — `pkg/network/manager.go` `Endpoint` struct
+   - Before: `teardownBridgeNetwork()` deleted the bridge but left veth interfaces behind
+   - After: `Endpoint` tracks `VethHost`/`VethPeer`, teardown does `ip link del vethHost`
+   - Impact: `ip link` showed dozens of `veth*` interfaces after running a few containers
+
+4. **proot missing on fresh hosts** — `internal/proot/manager.go:FindProotBinary`
+   - Before: hardcoded `exec.Command("proot", ...)` → ENOENT on hosts without `/usr/bin/proot`
+   - After: `FindProotBinary()` checks shipped binary, then `$PATH`; returns empty if neither
+   - Impact: proot-based mode was broken on any host that didn't `apt install proot`
+
+See the "Port Forwarding Internals" and "Veth Teardown" sections above for code-level details.
+
+#### DNS server rewrite (18 bugs)
+
+The internal DNS server was rewritten end-to-end:
+
+| File | Change |
+|:-----|:-------|
+| `pkg/network/dns.go` | LRU cache (1024 entries, 5 min TTL), AAAA + PTR support, ndots:0, blocking `ReadFromUDP` |
+| `pkg/network/android_dns.go` (new) | `getprop net.dns1..net.dns4` for upstream resolvers on Android |
+| `pkg/network/manager.go` | `SetupNetwork` registers DNS entries on container start; `recoverContainers` re-registers on restart |
+| `pkg/network/manager.go` | `ReRegisterDNS(state.ID)` API for the daemon's recovery loop |
+| `cmd/dokid/main.go` | Default `DOKI_DNS_LISTEN=127.0.0.11:8053` on Android (was `:53`, blocked by SELinux) |
+| `pkg/common/resolv.go` | `ParseResolvConf` strips `:port`; `GenerateResolvConf` adds `options ndots:0` |
+| `pkg/network/dns.go` | TCP retry on TC bit (RFC 5966) |
+
+Top fixes:
+
+- Port stripping: `nameserver 8.8.8.8:53` (invalid) → `nameserver 8.8.8.8`
+- Auto-registration: containers register their name on first `start`/`run`, no manual `network connect` needed
+- Recovery: daemon restart re-registers all running containers via `ReRegisterDNS`
+- AAAA + PTR: IPv6 forward and reverse lookups work alongside A records
+- ndots:0: `forgejo` resolves without `forgejo.local.` retry
+- TCP retry: TC-bit responses trigger a TCP query (some upstreams refuse UDP)
+- Blocking socket: `ReadFromUDP` waits, no busy-wait loop on `SetReadDeadline`
+
+#### LD_PRELOAD fix for Termux
+
+`libtermux-exec-ld-preload.so` is Termux's preloaded library that hooks `execve`. It breaks proot's ptrace-based syscall forwarding. v0.9.2 strips it via `common.StripHostEnv()`:
+
+```go
+// pkg/common/env.go
+func StripHostEnv(env []string) []string {
+    keep := []string{}
+    for _, e := range env {
+        if strings.HasPrefix(e, "LD_PRELOAD=") || strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
+            continue
+        }
+        keep = append(keep, e)
+    }
+    return keep
+}
+```
+
+Symptom before fix: `"execve: Function not implemented"` when running any proot container. After: works normally.
+
+#### 12 isolation levels (runner registry)
+
+`pkg/runtime/registry.go` now exposes 12 modes. The auto-detection in `runtime.go:detectMode()` walks top-down and returns the first that passes its probe:
+
+| Level | Mode | Detection probe |
+|:-----:|:-----|:----------------|
+| 12 | WASM | `which wasmedge` or `which iwasm` |
+| 11 | pKVM/Microdroid | `/dev/kvm` readable + Android 15+ |
+| 10 | MicroVM | `/dev/kvm` readable + `crosvm`/`firecracker` in `$PATH` |
+| 9 | Sysbox | `sysbox-runc` in `$PATH` |
+| 8 | Namespaces | `unshare --user --map-root-user true` exits 0 |
+| 7 | gVisor | `runsc` in `$PATH` |
+| 6 | FEX-Emu | `FEXInterpreter` or `box64` in `$PATH` |
+| 5 | QEMU User | `qemu-aarch64-static` / `qemu-x86_64-static` etc. in `$PATH` |
+| 4 | Proot | `proot` in `$PATH` (or shipped) |
+| 3 | Legacy32 | `binfmt_misc` registered + multiarch qemu |
+| 2 | Chroot | always (uses `chroot(2)`) |
+| 1 | Native | always (no isolation) |
+
+Force a mode with `doki run --runtime <mode>`.
+
+#### Cross-platform build matrix (13 binaries)
+
+v0.9.2 ships 13 binaries (was 14 in v0.9.1 — dropped `doki-proot` and `doki-init-rust`, they're either auto-detected or source-only now):
+
+| OS / Arch | doki | dokid | doki-compose | doki-init |
+|:----------|:----:|:-----:|:------------:|:---------:|
+| android-arm64 | Yes | Yes | Yes | Yes |
+| linux-arm64 | Yes | Yes | Yes | Yes |
+| linux-armv7 | Yes | Yes | Yes | Yes |
+| darwin-arm64 | Yes | — | — | — |
+
+`darwin-arm64` is **CLI-only** — `dokid`, `doki-compose`, and `doki-init` are linux-only because they depend on `internal/namespaces` (linux-only syscalls) and overlayfs mounts. The darwin CLI runs in `ModeNative` only.
+
+#### Other improvements
+
+- **Unified version string**: `common.DokiVersion=0.9.2` injected via `-ldflags` along with `GitCommit`, `BuildDate`, `BuildUser`. Single source of truth, `doki version` shows the build provenance.
+- **Structured logging**: `log/slog` replaces stdlib `log` in daemon, CLI, and middleware. JSON in production, text on TTY (auto-detected from stderr).
+- **Atomic state persistence**: `saveState` writes to `state.json.tmp.*` then `os.Rename` for crash-safety. No more corrupt `state.json` after a power loss.
+- **API bumped to v1.48**: aligned with Docker Engine 29.5.x (May 2026).
+- **16 KiB page size alignment**: Android 15+ requires `-Wl,-z,max-page-size=16384`; the Makefile's `build-android-arm64` target passes it via LDFLAGS.
+- **Metrics + counter hardening**: `/health` and `/metrics` integrated with the slog pipeline; counters survive process restarts.
+- **Test coverage**: DNS LRU, atomic state, resolv.conf parsing, version invariants all have unit tests.
 
 ### v0.9.1
 
@@ -945,12 +1173,23 @@ limitations under the License.
 
 ## Links
 
-| Platform | Repository |
-|:---------|:-----------|
-| Website | [doki.opceanai.com](https://doki.opceanai.com) |
-| GitHub | [OpceanAI/Doki](https://github.com/OpceanAI/Doki) |
-| GitLab | [aguitauwu/doki](https://gitlab.com/aguitauwu/doki) |
-| Codeberg | [aguitauwu/Doki](https://codeberg.org/aguitauwu/Doki) |
+| Platform | Repository | Source of truth |
+|:---------|:-----------|:----------------|
+| GitHub | [OpceanAI/Doki](https://github.com/OpceanAI/Doki) | Yes (primary) |
+| GitLab | [aguitauwu/doki](https://gitlab.com/aguitauwu/doki) | mirror |
+| Codeberg | [aguitauwu/Doki](https://codeberg.org/aguitauwu/Doki) | mirror |
+| Website | [doki.opceanai.com](https://doki.opceanai.com) | docs / install script |
+| Spanish README | [README.es.md](README.es.md) | translation |
+
+> Main is the only source of truth. Mirrors are force-synced from `main` after each release. If you find a divergence, open an issue on GitHub.
+
+### Wikis
+
+| Platform | Wiki |
+|:---------|:-----|
+| GitHub | [OpceanAI/Doki/wiki](https://github.com/OpceanAI/Doki/wiki) |
+| GitLab | [aguitauwu/doki/-/wikis](https://gitlab.com/aguitauwu/doki/-/wikis/home) |
+| Codeberg | [aguitauwu/Doki/wiki](https://codeberg.org/aguitauwu/Doki/wiki) |
 
 ### Related
 
