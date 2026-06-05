@@ -869,6 +869,26 @@ func (rt *Runtime) startNative(cfg *Config, rootfsDir string, logFile *os.File) 
 }
 
 // startWithProot runs the container via proot (userspace chroot).
+//
+// This implementation includes the v0.9.2.1 fixes for the Android 16 / Termux
+// ENOSYS-on-execve bug (OpceanAI/Doki#4):
+//
+//  1. proot.UnsetProotKillers() clears LD_PRELOAD{,_32,_64} and LD_LIBRARY_PATH
+//     in the *parent* process before the exec, so proot itself does not
+//     inherit libtermux-exec.so. Without this, libtermux-exec.so races with
+//     proot's ptrace translation of execve and the kernel returns ENOSYS.
+//
+//  2. The guest env is built via proot.BuildEnv, which runs StripHostEnv
+//     (the full 17-var deny-list from pkg/common) and then layers
+//     common.AndroidEnv() defaults.
+//
+//  3. The proot binary is resolved via proot.FindProotBinary, which prefers
+//     the bundled doki-proot and falls back to PATH.
+//
+//  4. Stderr is captured; if proot fails with the ENOSYS / "Function not
+//     implemented" signature and the host looks like Termux, an actionable
+//     diagnostic block is appended to the log with version info and the
+//     four remediation steps.
 func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.File) (int, *exec.Cmd, error) {
 	args := cfg.Args
 	if len(args) == 0 {
@@ -876,6 +896,14 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	}
 
 	cleanRootfs := filepath.Clean(rootfsDir)
+
+	// Pre-flight: the rootfs must exist and be a directory. proot will fail
+	// with a confusing "can't chdir" message otherwise; surface a clean error.
+	if fi, err := os.Stat(cleanRootfs); err != nil {
+		return 0, nil, fmt.Errorf("proot: rootfs not accessible: %w", err)
+	} else if !fi.IsDir() {
+		return 0, nil, fmt.Errorf("proot: rootfs path is not a directory: %s", cleanRootfs)
+	}
 
 	uid, gid := parseUser(cfg.User)
 	prootArgs := proot.BuildProotBaseArgs(cleanRootfs, uid, gid)
@@ -889,10 +917,15 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	}
 	prootArgs = append(prootArgs, args...)
 
-	prootBin := "proot"
-	if _, err := os.Stat("doki-proot"); err == nil {
-		prootBin = "doki-proot"
+	prootBin := proot.FindProotBinary()
+	if prootBin == "" {
+		return 0, nil, fmt.Errorf("proot: no usable proot binary found in PATH or alongside dokid; install with 'pkg install proot' (Termux) or 'apt install proot' (Debian/Ubuntu)")
 	}
+
+	// 1) Clear LD_PRELOAD family in the parent process so exec.Command does
+	//    not propagate libtermux-exec.so to the proot child. This is the
+	//    primary fix for the Android 15/16 ENOSYS regression.
+	proot.UnsetProotKillers()
 
 	cmd := exec.Command(prootBin, prootArgs...)
 	cmd.Dir = cleanRootfs
@@ -903,21 +936,14 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
 
-	env := common.StripHostEnv(os.Environ())
-	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
-	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
-	// Image config env takes precedence (contains PATH, etc.)
+	// 2) Build a clean guest env: StripHostEnv (17-var deny-list) + AndroidEnv
+	//    defaults + image env + user env.
+	var imageEnv []string
 	if cfg.ImageConfig != nil {
-		for _, e := range cfg.ImageConfig.Env {
-			env = append(env, e)
-		}
+		imageEnv = cfg.ImageConfig.Env
 	}
-	// Validate env vars (filter invalid names, enforce size limits)
 	validEnv := common.ValidateEnv(cfg.Env)
-	for _, e := range validEnv {
-		env = append(env, e)
-	}
-	cmd.Env = env
+	cmd.Env = proot.BuildEnv(validEnv, imageEnv)
 
 	if err := cmd.Start(); err != nil {
 		return 0, nil, fmt.Errorf("proot start: %w", err)
@@ -955,6 +981,7 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 			}
 			if hasENOSYS {
 				logFile.Write([]byte("DOKI: proot failed with ENOSYS, retrying with QEMU...\n"))
+				rt.writeProotENOSYSDiagnostic(logFile)
 				if pid, qemuCmd, qemuErr := rt.retryWithQemu(cfg, rootfsDir, logFile); qemuErr == nil {
 					return pid, qemuCmd, nil
 				}
@@ -966,6 +993,44 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	}
 
 	return cmd.Process.Pid, cmd, nil
+}
+
+// writeProotENOSYSDiagnostic writes a human-readable remediation block to
+// logFile. It is invoked from startWithProot when proot fails with the
+// signature ENOSYS / "Function not implemented" and the host looks like
+// Termux / Android 15+. The block is also printed to stderr in the CLI.
+func (rt *Runtime) writeProotENOSYSDiagnostic(logFile *os.File) {
+	prootVer := proot.Version(proot.FindProotBinary())
+	termuxVer := common.TermuxVersion()
+	hasLib := common.HasLibTermuxExec()
+
+	var buf bytes.Buffer
+	buf.WriteString("\n")
+	buf.WriteString("DOKI: proot failed with ENOSYS — actionable diagnostics\n")
+	fmt.Fprintf(&buf, "  proot binary:    %s\n", prootVer.Binary)
+	fmt.Fprintf(&buf, "  proot version:   %s\n", prootVer.Version)
+	fmt.Fprintf(&buf, "  Termux version:  %s\n", termuxVer)
+	fmt.Fprintf(&buf, "  libtermux-exec:  %s\n", boolStr(hasLib))
+	buf.WriteString("\n")
+	buf.WriteString("  Cause: libtermux-exec.so (injected by Termux via LD_PRELOAD)\n")
+	buf.WriteString("  intercepts execve and races with proot's ptrace translation.\n")
+	buf.WriteString("  On Android 15/16 a zygote seccomp filter makes the race fatal.\n")
+	buf.WriteString("\n")
+	buf.WriteString("  Steps:\n")
+	buf.WriteString("  1) Reinstall the latest proot:    pkg install proot\n")
+	buf.WriteString("  2) Verify version >= 5.1.107:    proot --version\n")
+	buf.WriteString("  3) Update Termux:                pkg update && pkg upgrade\n")
+	buf.WriteString("  4) Re-run with --doki-trace proot for verbose output\n")
+	buf.WriteString("  5) Report: https://github.com/OpceanAI/Doki/issues/4\n")
+	logFile.Write(buf.Bytes())
+	fmt.Fprint(os.Stderr, buf.String())
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "present"
+	}
+	return "absent"
 }
 
 // startWithNamespaces runs the container with full Linux namespace isolation

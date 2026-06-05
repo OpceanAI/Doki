@@ -133,15 +133,51 @@ func AppendAndroidBinds(args []string) []string {
 	return args
 }
 
-// buildProotEnv builds the environment slice for proot execution.
-func buildProotEnv(userEnv []string) []string {
+// BuildEnv builds the environment slice that the proot child process and its
+// descendants will receive. It always runs StripHostEnv on the host environment
+// and then layers the AndroidEnv() defaults, the image-defined env, and the
+// user-supplied env, in that order (later wins for duplicates).
+//
+// Callers should also have invoked os.Unsetenv on the LD_PRELOAD family in
+// the current process, because exec.Command inherits the parent env unless
+// cmd.Env is set; this function sets cmd.Env explicitly so the LD_PRELOAD
+// unset is the only required step in the caller.
+func BuildEnv(userEnv []string, imageEnv []string) []string {
 	env := common.StripHostEnv(os.Environ())
-	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
-	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
+	env = append(env, common.AndroidEnv()...)
+	for _, e := range imageEnv {
+		env = append(env, e)
+	}
 	for _, e := range userEnv {
 		env = append(env, e)
 	}
 	return env
+}
+
+// buildProotEnv is the legacy alias kept for callers that don't separate
+// image env from user env. It delegates to BuildEnv with the legacy merge.
+func buildProotEnv(userEnv []string) []string {
+	return BuildEnv(userEnv, nil)
+}
+
+// UnsetProotKillers clears the LD_PRELOAD family and the Termux/Android
+// vars from the *current* process env so that exec.Command(proot) does not
+// inherit them. The guest env is sanitised separately by BuildEnv.
+//
+// This must be called once per process before the first proot invocation.
+// It is safe to call multiple times.
+func UnsetProotKillers() {
+	for _, k := range []string{
+		"LD_PRELOAD", "LD_PRELOAD32", "LD_PRELOAD64",
+		"LD_LIBRARY_PATH", "LD_SHOW_AUXV",
+		"TERMUX_VERSION", "TERMUX__PREFIX", "TERMUX__ROOTFS", "TERMUX__HOME",
+		"PREFIX",
+		"ANDROID_ROOT", "ANDROID_DATA", "ANDROID_STORAGE", "ANDROID_PROPERTY_WORKSPACE",
+		"TMPDIR", "TMP", "TEMP",
+		"HOME",
+	} {
+		_ = os.Unsetenv(k)
+	}
 }
 
 // Exec executes a command in a proot-based environment.
@@ -153,8 +189,9 @@ func (m *Manager) Exec(rootfs string, args []string, env []string, workDir strin
 	prootArgs = append(prootArgs, args...)
 
 	prootBin := FindProotBinary()
+	UnsetProotKillers()
 	cmd := exec.Command(prootBin, prootArgs...)
-	cmd.Env = buildProotEnv(env)
+	cmd.Env = BuildEnv(env, nil)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("proot command failed: %w\n%s", err, string(output))
