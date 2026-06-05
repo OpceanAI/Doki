@@ -4,26 +4,42 @@ Doki v0.9.2 soporta **12 niveles de aislamiento** — desde un sandbox WASM sin 
 
 ## Árbol de decisión
 
-```
-                         ┌─ pKVM / Microdroid   (Android 15+ VM protegida)
-         ┌─ Hardware VM ─┤
-         │               └─ MicroVM              (KVM / Gunyah / GenieZone / Halla)
-         │
-         ├─ Kernel ──────┬─ Sysbox               (DinD rootless)
-         │               ├─ Namespaces           (default rootful)
-         │               └─ gVisor               (defense-in-depth)
- Host ───┤
-         ├─ Emulación ──┬─ FEX-Emu               (x86 en ARM)
-         │               └─ QEMU User            (cross-arch)
-         │
-         ├─ Userspace ─── Proot                  (default en Android)
-         │
-         ├─ Compat ──────┬─ Legacy32             (ARMv7 en ARM64)
-         │               └─ Chroot               (solo filesystem)
-         │
-         ├─ Sandbox ───── WASM                   (código no confiable)
-         │
-         └─ Ninguno ────── Native                (cero overhead)
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart TD
+    Host(("Host"))
+    Host --- HW
+    Host --- Kernel
+    Host --- Emu
+    Host --- Userspace
+    Host --- Compat
+    Host --- Sandbox
+    Host --- None
+
+    subgraph HW ["Hardware VM"]
+        PKVM["pKVM / Microdroid<br/>Android 15+ VM protegida"]
+        MicroVM["MicroVM<br/>KVM · Gunyah · GenieZone · Halla"]
+    end
+
+    subgraph Kernel ["Kernel"]
+        Sysbox["Sysbox<br/>DinD rootless"]
+        Namespaces["Namespaces<br/>default rootful"]
+        GVisor["gVisor<br/>defense-in-depth"]
+    end
+
+    subgraph Emu ["Emulación"]
+        FEX["FEX-Emu<br/>x86 en ARM"]
+        QEMU["QEMU User<br/>cross-arch"]
+    end
+
+    Userspace["Proot<br/>default en Android"]
+    subgraph Compat ["Compat"]
+        Legacy32["Legacy32<br/>ARMv7 en ARM64"]
+        Chroot["Chroot<br/>solo filesystem"]
+    end
+
+    Sandbox["WASM<br/>código no confiable"]
+    None["Native<br/>cero overhead"]
 ```
 
 ## Tabla resumen

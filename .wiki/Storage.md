@@ -36,23 +36,41 @@ On Linux with root: `overlay2`. On Termux: `fuse-overlayfs`. On macOS: `vfs`. On
 
 All layers are stored by SHA256 hash in a content-addressable store:
 
-```
-~/.doki/
-├── data/
-│   ├── layers/         # one dir per layer SHA
-│   │   ├── sha256:abc.../
-│   │   ├── sha256:def.../
-│   │   └── sha256:ghi.../
-│   ├── merged/         # mount points (overlay2)
-│   ├── diff/           # upper dirs (overlay2)
-│   ├── work/           # work dirs (overlay2)
-│   ├── images/         # image metadata
-│   ├── containers/     # container state
-│   │   └── <id>/
-│   │       ├── state.json
-│   │       ├── rootfs/         # extracted rootfs
-│   │       └── logs/
-│   └── volumes/        # named volumes
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart TD
+    Root["~/.doki/"]
+    Data["data/"]
+    Layers["layers/<br/><i>one dir per layer SHA</i>"]
+    L1["sha256:abc..."]
+    L2["sha256:def..."]
+    L3["sha256:ghi..."]
+    Merged["merged/<br/><i>mount points (overlay2)</i>"]
+    Diff["diff/<br/><i>upper dirs (overlay2)</i>"]
+    Work["work/<br/><i>work dirs (overlay2)</i>"]
+    Images["images/<br/><i>image metadata</i>"]
+    Containers["containers/<br/><i>container state</i>"]
+    CID["&lt;id&gt;/"]
+    State["state.json"]
+    Rootfs["rootfs/<br/><i>extracted rootfs</i>"]
+    Logs["logs/"]
+    Volumes["volumes/<br/><i>named volumes</i>"]
+
+    Root --> Data
+    Data --> Layers
+    Layers --> L1
+    Layers --> L2
+    Layers --> L3
+    Data --> Merged
+    Data --> Diff
+    Data --> Work
+    Data --> Images
+    Data --> Containers
+    Containers --> CID
+    CID --> State
+    CID --> Rootfs
+    CID --> Logs
+    Data --> Volumes
 ```
 
 Pulled layers are deduplicated automatically — if two images share a base layer, it's stored once.

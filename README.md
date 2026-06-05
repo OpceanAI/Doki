@@ -272,26 +272,42 @@ DokiVM provides hardware-level isolation via lightweight virtual machines.
 
 The runner registry in `pkg/runtime/registry.go` probes the host and selects the strongest mode that works. Override with `doki run --runtime <mode>`:
 
-```
-                         ┌─ pKVM / Microdroid   (Android 15+ protected VM)
-         ┌─ Hardware VM ─┤
-         │               └─ MicroVM              (KVM / Gunyah / GenieZone / Halla)
-         │
-         ├─ Kernel ──────┬─ Sysbox               (rootless DinD)
-         │               ├─ Namespaces           (default, rootful)
-         │               └─ gVisor               (defense-in-depth)
- Host ───┤
-         ├─ Emulation ──┬─ FEX-Emu               (x86 on ARM)
-         │               └─ QEMU User            (cross-arch)
-         │
-         ├─ Userspace ─── Proot                  (Android default, no root)
-         │
-         ├─ Compat ──────┬─ Legacy32             (ARMv7 on ARM64)
-         │               └─ Chroot               (filesystem only)
-         │
-         ├─ Sandbox ───── WASM                   (untrusted code)
-         │
-         └─ None ──────── Native                 (zero overhead fallback)
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart TD
+    Host(("Host"))
+    Host --- HW
+    Host --- Kernel
+    Host --- Emu
+    Host --- Userspace
+    Host --- Compat
+    Host --- Sandbox
+    Host --- None
+
+    subgraph HW ["Hardware VM"]
+        PKVM["pKVM / Microdroid<br/>Android 15+ protected VM"]
+        MicroVM["MicroVM<br/>KVM · Gunyah · GenieZone · Halla"]
+    end
+
+    subgraph Kernel ["Kernel"]
+        Sysbox["Sysbox<br/>rootless DinD"]
+        Namespaces["Namespaces<br/>default, rootful"]
+        GVisor["gVisor<br/>defense-in-depth"]
+    end
+
+    subgraph Emu ["Emulation"]
+        FEX["FEX-Emu<br/>x86 on ARM"]
+        QEMU["QEMU User<br/>cross-arch"]
+    end
+
+    Userspace["Proot<br/>Android default, no root"]
+    subgraph Compat ["Compat"]
+        Legacy32["Legacy32<br/>ARMv7 on ARM64"]
+        Chroot["Chroot<br/>filesystem only"]
+    end
+
+    Sandbox["WASM<br/>untrusted code"]
+    None["Native<br/>zero overhead fallback"]
 ```
 
 The decision logic in `runtime.go:detectMode()` walks top-down and returns the first mode that passes its probe. To force a specific mode regardless of detection:
@@ -559,17 +575,19 @@ doki run -p 8080-8090:80 nginx:alpine               # Port range
 
 Doki runs an internal DNS server that handles inter-container name resolution and forwards external queries to upstream resolvers. The architecture:
 
-```
-Container /etc/resolv.conf
-    │ nameserver 127.0.0.11
-    ▼
-Doki internal DNS (127.0.0.11:8053 Android / :53 Linux)
-    │ A, AAAA, PTR queries
-    ├─→ Local: container-name → container bridge IP
-    └─→ Upstream: Android getprop net.dns* | Linux /etc/resolv.conf | 8.8.8.8
-                       │
-                       ▼
-                   Internet
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart TD
+    Resolv["Container /etc/resolv.conf<br/>nameserver 127.0.0.11"]
+    Doki["Doki internal DNS<br/>:8053 Android · :53 Linux"]
+    Local["Local<br/>container-name → bridge IP"]
+    Upstream["Upstream<br/>getprop net.dns* · /etc/resolv.conf · 8.8.8.8"]
+    Internet(("Internet"))
+
+    Resolv -->|"A · AAAA · PTR"| Doki
+    Doki --> Local
+    Doki --> Upstream
+    Upstream --> Internet
 ```
 
 #### Defaults (v0.9.2)

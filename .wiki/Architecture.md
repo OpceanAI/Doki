@@ -4,60 +4,58 @@ This page explains how Doki is structured internally. It complements the [README
 
 ## High-Level Diagram
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                          doki (CLI)                                │
-│   cmd/doki/main.go  —  cobra-based, 108 commands, ~2200 lines      │
-│   Talks to daemon via Unix socket (or TCP)                         │
-└──────────────────┬─────────────────────────────────────────────────┘
-                   │ /var/run/doki.sock  (Docker API v1.48)
-                   ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                          dokid (Daemon)                            │
-│                                                                    │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
-│  │  pkg/api │  │ pkg/     │  │  pkg/    │  │  pkg/            │  │
-│  │  REST    │  │ runtime  │  │  network │  │  storage         │  │
-│  │  +TLS    │  │  OCI     │  │  bridge  │  │  overlay2/vfs    │  │
-│  │  53 ep   │  │ 12 modes │  │  CNI     │  │  fuse/btrfs/zfs  │  │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────────────┘  │
-│       │             │             │              │                │
-│       │       ┌─────▼──────┐      │              │                │
-│       │       │  internal/ │      │              │                │
-│       │       │  doki-vm   │      │              │                │
-│       │       │  crosvm    │      │              │                │
-│       │       │  firecrack │      │              │                │
-│       │       └────────────┘      │              │                │
-│       │             │             │              │                │
-│       │       ┌─────▼──────┐ ┌────▼─────┐  ┌─────▼──────────┐    │
-│       │       │  internal/ │ │  pkg/    │  │  pkg/          │    │
-│       │       │  fuse      │ │  network │  │  common        │    │
-│       │       │  overlay   │ │  DNS     │  │  config        │    │
-│       │       └────────────┘ └──────────┘  │  version       │    │
-│       │                                     └────────────────┘    │
-│       │                                                          │
-│       │  ┌──────────┐  ┌──────────┐  ┌──────────┐                │
-│       │  │ pkg/     │  │ pkg/     │  │ pkg/     │                │
-│       │  │ image    │  │ registry │  │ compose  │                │
-│       │  │ pull/push│  │ OCI Dist │  │ spec v3  │                │
-│       │  │ build    │  │ Spec v2  │  │          │                │
-│       │  └──────────┘  └──────────┘  └──────────┘                │
-│       │                                                          │
-│       │  ┌──────────┐  ┌──────────┐                              │
-│       └─▶│ pkg/     │  │ internal/│                              │
-│          │ builder  │  │ cgroups  │                              │
-│          │ Dokifile │  │ v2       │                              │
-│          └──────────┘  └──────────┘                              │
-└────────────────────────────────────────────────────────────────────┘
-                   │
-                   │  HTTP / Unix socket
-                   ▼
-        ┌─────────────────────┐
-        │  External clients   │
-        │  docker CLI, SDKs,  │
-        │  docker-compose,    │
-        │  CI/CD pipelines    │
-        └─────────────────────┘
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart TB
+    CLI["<b>doki (CLI)</b><br/>cmd/doki/main.go<br/>cobra, 108 commands, ~2200 lines<br/>Unix socket / TCP"]
+    Client[("External clients<br/>docker CLI · SDKs<br/>docker-compose · CI/CD")]
+
+    subgraph Daemon ["dokid (Daemon)"]
+        direction TB
+
+        subgraph Edge ["Edge layer"]
+            API["pkg/api<br/>REST + TLS · 53 endpoints"]
+        end
+
+        subgraph Core ["Core subsystems"]
+            Runtime["pkg/runtime<br/>OCI · 12 isolation modes"]
+            Network["pkg/network<br/>bridge · CNI · DNS"]
+            Storage["pkg/storage<br/>overlay2 / vfs<br/>fuse · btrfs · zfs"]
+        end
+
+        subgraph Internal ["Internal helpers"]
+            DokiVM["internal/dokivm<br/>crosvm · firecracker"]
+            Fuse["internal/fuse<br/>overlayfs"]
+            Cgroups["internal/cgroups<br/>v2 limits"]
+        end
+
+        subgraph Shared ["Shared"]
+            Common["pkg/common<br/>config · version"]
+            Image["pkg/image<br/>pull · push · build"]
+            Registry["pkg/registry<br/>OCI Distribution Spec v2"]
+            Compose["pkg/compose<br/>spec v3"]
+            Builder["pkg/builder<br/>Dokifile"]
+        end
+    end
+
+    Client -->|"/var/run/doki.sock<br/>Docker API v1.48"| CLI
+    CLI -->|HTTP / Unix socket| API
+
+    API --> Runtime
+    API --> Network
+    API --> Storage
+    API --> Image
+    API --> Compose
+
+    Runtime --> DokiVM
+    Storage --> Fuse
+    Runtime --> Cgroups
+    Network --> Common
+    Storage --> Common
+
+    Image --> Registry
+    Image --> Builder
+    Compose --> Builder
 ```
 
 ## Subsystem Walkthrough
@@ -79,8 +77,15 @@ The daemon's public face. Implements 53 endpoints that match the Docker Engine A
 
 Built on top of `gorilla/mux` for routing and `net/http` stdlib. Middleware chain:
 
-```
-request → recover → logging → rate-limit → auth (optional) → handler
+```mermaid
+%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
+flowchart LR
+    Req(["request"]) --> Rec[recover]
+    Rec --> Log[logging]
+    Log --> RL[rate-limit]
+    RL --> Auth{auth<br/>optional}
+    Auth -->|no| H[handler]
+    Auth -->|yes| H
 ```
 
 TLS is supported via `DOKI_TLS`/`DOKI_TLS_CERT`/`DOKI_TLS_KEY` env vars or `config.json` `tls` block. mTLS is supported with `tls.client_ca`.

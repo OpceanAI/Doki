@@ -41,6 +41,13 @@
 - Readme updated with v0.9.2 changelog and `DOKI_DNS_LISTEN` env var documentation
 - `.golangci.yml` linting configuration added
 
+## Documentation
+
+- Replaced all ASCII-art diagrams in `README.md`, `README.es.md`, and the 10-page wiki (EN+ES) with native Mermaid blocks. Renders on GitHub, GitLab, and Codeberg without plugins
+- Added Spanish translation of the full README (1:1 structure, 1212 lines)
+- Wiki source lives in `.wiki/` at the repo root and is auto-synced to `OpceanAI/doki-wiki` (GitHub) and the `wiki` branch of `aguitauwu/doki` (GitLab) by `.github/workflows/wiki-sync.yml`
+- 6 distinct diagrams refreshed: isolation decision tree, DNS architecture, daemon subsystem map, defense-in-depth stack, storage directory tree, middleware pipeline
+
 ## Installation
 
 Download the appropriate binary for your platform from the release assets, or build from source:

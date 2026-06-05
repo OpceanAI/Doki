@@ -52,7 +52,7 @@ The wiki source is stored in `.wiki/` at the repo root. To add a page:
 4. Commit + push to `main`
 5. The CI workflow `.github/workflows/wiki-sync.yml` pushes the page to GitHub Wiki, GitLab Wiki branch, and Codeberg Wiki
 
-Wiki pages use [GitHub Flavored Markdown](https://github.github.com/gfm/) with anchors in kebab-case (`#isolation-levels`). Code blocks should be tagged (` ```bash `, ` ```yaml `, ` ```dockerfile `). Tables for comparative content; ASCII art for diagrams.
+Wiki pages use [GitHub Flavored Markdown](https://github.github.com/gfm/) with anchors in kebab-case (`#isolation-levels`). Code blocks should be tagged (` ```bash `, ` ```yaml `, ` ```dockerfile `). Tables for comparative content; [Mermaid](https://mermaid.js.org/) blocks for diagrams (rendered natively on GitHub, GitLab, and Codeberg).
 
 ## Mirrors
 
