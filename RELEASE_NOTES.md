@@ -48,6 +48,13 @@
 ### Bug Fixes (190+ total across Rounds 1-4)
 
 #### Critical Fixes
+- **android/armv7 build failure**: Go 1.22+ requires external linker
+  for `android/arm` (32-bit), causing "requires external cgo linking"
+  error with `CGO_ENABLED=0`. Fixed by building armv7 with
+  `GOOS=linux` instead of `GOOS=android`. All 4 binaries (doki,
+  dokid, doki-compose, doki-init) now compile for armv7. The binary
+  runs identically via proot; Android detection uses filesystem
+  probes (`/data/data/com.termux`), not `runtime.GOOS`.
 - **kill not updating state**: After killing a container, the state was
   never updated to "exited" — it stayed "running" forever. Now polls
   with `signal(0)` after sending the signal, then saves exited state.

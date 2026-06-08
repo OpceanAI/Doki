@@ -68,6 +68,8 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 | Android ARM64 (Termux) | Yes | Yes | Yes | Yes |
 | macOS ARM64 (Apple Silicon) | Yes | — | — | — |
 
+**Note:** Android ARMv7 binaries are built with `GOOS=linux` (Go 1.22+ requires external linker for `GOOS=android` on 32-bit ARM). The binaries run via proot; Android detection uses filesystem probes.
+
 `dokid`, `doki-compose`, and `doki-init` are Linux/Android only — they depend on Linux namespaces, cgroups v2, and overlayfs syscalls. On macOS, `doki` runs in `ModeNative` only and connects to a remote daemon over the network if needed.
 
 <br>
