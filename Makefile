@@ -5,7 +5,6 @@ GO = go
 PREFIX ?= /data/data/com.termux/files/usr
 RELEASES = releases
 
-# ─── Versioning ────────────────────────────────────────────────────
 # Set GIT_TAG, GIT_COMMIT, BUILD_DATE, BUILD_USER at build time.
 # Example:  make build-release GIT_TAG=v0.9.2
 
@@ -40,7 +39,6 @@ build: build-android build-linux build-darwin
 $(RELEASES):
 	mkdir -p $(RELEASES)
 
-# ─── Android ─────────────────────────────────────────────────────
 
 build-android: build-android-arm64 build-android-armv7
 
@@ -56,7 +54,6 @@ build-android-armv7: | $(RELEASES)
 	GOOS=android GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-android-armv7 ./cmd/doki-compose
 	GOOS=android GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-init-android-armv7 ./cmd/doki-init
 
-# ─── Linux ───────────────────────────────────────────────────────
 
 build-linux: build-linux-arm64 build-linux-armv7
 
@@ -72,14 +69,12 @@ build-linux-armv7: | $(RELEASES)
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-linux-armv7 ./cmd/doki-compose
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-init-linux-armv7 ./cmd/doki-init
 
-# ─── macOS ────────────────────────────────────────────────────────
 
 build-darwin: build-darwin-arm64
 
 build-darwin-arm64: | $(RELEASES)
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-darwin-arm64 ./cmd/doki
 
-# ─── Release ──────────────────────────────────────────────────────
 
 build-release: build-android build-linux build-darwin
 
@@ -94,7 +89,6 @@ release: build-release sha256
 	@echo "\n=== Release v$(DOKI_VER) ready ==="
 	@ls -lh $(RELEASES)/
 
-# ─── Utils ────────────────────────────────────────────────────────
 
 version-info:
 	@echo "Version:     $(DOKI_VER)"
