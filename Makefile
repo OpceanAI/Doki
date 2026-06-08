@@ -122,3 +122,4 @@ install: build-android-arm64
 	install $(RELEASES)/doki-android-arm64 $(PREFIX)/bin/doki
 	install $(RELEASES)/dokid-android-arm64 $(PREFIX)/bin/dokid
 	install $(RELEASES)/doki-compose-android-arm64 $(PREFIX)/bin/doki-compose
+	install $(RELEASES)/doki-init-android-arm64 $(PREFIX)/bin/doki-init
