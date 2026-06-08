@@ -7,7 +7,7 @@ This page explains how Doki is structured internally. It complements the [README
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
 flowchart TB
-    CLI["<b>doki (CLI)</b><br/>cmd/doki/main.go<br/>cobra, 108 commands, ~2200 lines<br/>Unix socket / TCP"]
+    CLI["<b>doki (CLI)</b><br/>cmd/doki/main.go<br/>cobra, 244 commands, ~3000 lines<br/>Unix socket / TCP"]
     Client[("External clients<br/>docker CLI · SDKs<br/>docker-compose · CI/CD")]
 
     subgraph Daemon ["dokid (Daemon)"]
@@ -168,6 +168,21 @@ Implements bridge networking, CNI plugins, port mapping, and internal DNS.
 
 For users without root, the [pasta](https://passt.top/) utility provides TCP/UDP connectivity without TAP devices. Doki's `pkg/network/rootless.go` shells out to `pasta` for port forwarding.
 
+#### DokiLink-Lite (Mesh Networking)
+
+v0.9.3 introduces DokiLink-Lite, a peer-to-peer mesh network with three encryption layers:
+
+- **L1 (TLS 1.3)**: Default. ECDSA P-256 CA per install, link certificates with SAN DNS names.
+- **L2 (NaCl secretbox)**: Opt-in via `DOKI_LINK_PAYLOAD_ENC=1`. Derives 32-byte key from both peers' Ed25519 public keys.
+- **L3 (Noise protocol)**: Future.
+
+Key components:
+- `pkg/netlink/proxy.go` — TCP/UDP proxy (replaces socat)
+- `pkg/netlink/crypto.go` — TLS wrapper + secretbox
+- `pkg/netlink/keys.go` — Ed25519 keypair + CA generation
+- `pkg/netlink/peer.go` — TOFU trust model
+- `pkg/netlink/mesh.go` — Gossip protocol for peer discovery
+
 ### 4. `pkg/storage` — Storage Drivers
 
 Five drivers, auto-detected by `DetectBestDriver()`:
@@ -283,12 +298,13 @@ Three principles drove the design:
 
 3. **Resource constraints first** — Termux, Android, Raspberry Pi are the primary targets. Memory is precious, so the daemon idles at 12 MB and the CLI at 6.7 MB. This is why we use `log/slog` instead of zap/zerolog (slog is stdlib, no dependency), why we bundle proot detection, and why `fuse-overlayfs` is the default storage driver.
 
-## Source Code Stats (v0.9.2)
+## Source Code Stats (v0.9.3)
 
-- 40 Go source files (only counting `*.go` outside tests and generated files)
-- 14,500+ lines of Go code
+- 126 Go source files (only counting `*.go` outside tests and generated files)
+- 46,578 lines of Go code (37,564 production + 9,014 tests)
 - 4 compiled binaries (`doki`, `dokid`, `doki-compose`, `doki-init`)
-- 13 release binaries (4 binaries × 3 OS/arch + 1 darwin)
+- 244 CLI commands
+- 5 release archives (android-arm64, android-armv7, linux-arm64, linux-armv7, darwin-arm64)
 - 0 runtime CGo dependencies
 
 ## Next Steps

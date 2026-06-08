@@ -6,11 +6,11 @@ Welcome to the Doki (Universal Container Engine) documentation wiki. This wiki i
 
 ## Latest Release
 
-**v0.9.2** (June 2026) — DNS Overhaul, 12 Isolation Levels, Critical Bug Fixes
+**v0.9.3** (June 2026) — DokiLink-Lite Mesh, 190+ Bug Fixes, armv7 Support
 
 - [Release notes](../RELEASE_NOTES.md)
-- [Download binaries](https://github.com/OpceanAI/Doki/releases/tag/v0.9.2)
-- [What's new in v0.9.2](../README.md#whats-new)
+- [Download binaries](https://github.com/OpceanAI/Doki/releases/tag/v0.9.3)
+- [What's new in v0.9.3](../README.md#whats-new)
 
 ## Table of Contents
 
@@ -33,9 +33,9 @@ Welcome to the Doki (Universal Container Engine) documentation wiki. This wiki i
 
 | Page | What it covers |
 |:-----|:---------------|
-| [CLI Reference](CLI-Reference) | All 108 commands with flag tables, examples, output samples |
+| [CLI Reference](CLI-Reference) | All 244 commands with flag tables, examples, output samples |
 | [Configuration](Configuration) | `config.json` schema, env vars, socket paths per OS, DNS, registries, log levels |
-| [Networking](Networking) | Bridge, CNI plugins, port mapping, DNS, iptables (DNAT/SNAT), rootless (pasta), IPv6 |
+| [Networking](Networking) | Bridge, CNI plugins, port mapping, DNS, iptables (DNAT/SNAT), rootless (pasta), IPv6, DokiLink mesh |
 | [Storage](Storage) | 5 drivers, VFS, overlay2 kernel requirements, btrfs/zfs, rootless FUSE, content-addressable store |
 
 ## Repository Layout

@@ -42,10 +42,10 @@ chmod +x $PREFIX/bin/doki*
 ```bash
 $ doki version
 Client: Doki
- Version:    0.9.2
+ Version:    0.9.3
  API version: 1.48
- GitCommit:  907ae45
- Built:      2026-06-04
+ GitCommit:  faab400
+ Built:      2026-06-08
 
 $ doki run --rm alpine echo "hello from doki"
 hello from doki
@@ -57,6 +57,7 @@ hello from doki
 - DNS listens on `127.0.0.11:8053` (port 53 is blocked by SELinux without root)
 - The default runtime is proot; override with `doki run --runtime native`
 - Storage driver: `fuse-overlayfs` (no root needed)
+- ARMv7 (32-bit) devices: use the `android-armv7` binaries (built with `GOOS=linux`, runs via proot)
 
 ## Linux
 
@@ -106,7 +107,7 @@ sudo tar -xzf /tmp/doki.tar.gz -C /usr/local/bin/
 - Root mode requires `iptables` and `kmod` (for `modprobe overlay`)
 - Rootless mode uses `fuse-overlayfs` (install from your package manager) and `pasta` (download from [passt](https://passt.top/) or use Doki's bundled binary)
 - The `doki-init` binary is the PID 1 for microVM guests; you don't need it for normal containers
-- For ARMv7 (32-bit ARM) devices, use the `linux-armv7` binaries
+- For ARMv7 (32-bit ARM) devices, use the `android-armv7` binaries (Termux) or `linux-armv7` binaries (Raspberry Pi, postmarketOS)
 
 ## macOS
 
@@ -203,6 +204,7 @@ doki-linux-arm64: OK
 | `command not found: doki` | Add `$PREFIX/bin` (Termux) or `/usr/local/bin` (Linux) to `$PATH` |
 | `execve: Function not implemented` (Termux) | Fixed in v0.9.2+; update to latest release |
 | `port 53: permission denied` (Termux) | This is expected; Doki uses port 8053 by default on Android |
+| `requires external cgo linking` (armv7) | Fixed in v0.9.3; armv7 builds use `GOOS=linux` workaround |
 | `iptables: Unknown option` | Update to v0.9.2+; the DNAT bug was fixed |
 | `cannot find proot` | `apt install proot` (Debian/Ubuntu) or `pkg install proot` (Termux) |
 

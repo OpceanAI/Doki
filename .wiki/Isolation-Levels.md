@@ -1,6 +1,6 @@
 # Isolation Levels
 
-Doki v0.9.2 supports **12 isolation levels** — from a WASM sandbox with no syscalls to hardware-level microVMs. The runner registry in `pkg/runtime/registry.go` probes the host and picks the strongest mode that works. You can also force a specific mode with `doki run --runtime <mode>`.
+Doki v0.9.3 supports **12 isolation levels** — from a WASM sandbox with no syscalls to hardware-level microVMs. The runner registry in `pkg/runtime/registry.go` probes the host and picks the strongest mode that works. You can also force a specific mode with `doki run --runtime <mode>`.
 
 ## Decision Tree
 

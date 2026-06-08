@@ -1,6 +1,6 @@
 # Networking
 
-El stack de networking de Doki proporciona redes bridge, soporte para plugins CNI, port mapping y un servidor DNS interno. La versión v0.9.2 arregló varios bugs de larga data en la construcción de iptables DNAT y el teardown de veth.
+El stack de networking de Doki proporciona redes bridge, soporte para plugins CNI, port mapping, un servidor DNS interno, y networking mesh peer-to-peer DokiLink-Lite (v0.9.3).
 
 ## Tipos de red
 

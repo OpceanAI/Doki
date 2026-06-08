@@ -6,11 +6,11 @@ Bienvenido a la wiki de documentación de Doki (Motor de Contenedores Universal)
 
 ## Última versión
 
-**v0.9.2** (junio 2026) — Reescritura de DNS, 12 niveles de aislamiento, fixes críticos de bugs
+**v0.9.3** (junio 2026) — DokiLink-Lite Mesh, 190+ fixes de bugs, soporte armv7
 
 - [Release notes](../RELEASE_NOTES.md)
-- [Descargar binarios](https://github.com/OpceanAI/Doki/releases/tag/v0.9.2)
-- [Qué hay de nuevo en v0.9.2](../README.md#qu%C3%A9-hay-de-nuevo)
+- [Descargar binarios](https://github.com/OpceanAI/Doki/releases/tag/v0.9.3)
+- [Qué hay de nuevo en v0.9.3](../README.md#qu%C3%A9-hay-de-nuevo)
 
 ## Tabla de contenidos
 
@@ -33,9 +33,9 @@ Bienvenido a la wiki de documentación de Doki (Motor de Contenedores Universal)
 
 | Página | Qué cubre |
 |:-------|:----------|
-| [Referencia de CLI](CLI-Reference.es) | Los 108 comandos con tablas de flags, ejemplos, muestras de salida |
+| [Referencia de CLI](CLI-Reference.es) | Los 244 comandos con tablas de flags, ejemplos, muestras de salida |
 | [Configuración](Configuration.es) | Esquema de `config.json`, variables de entorno, paths de socket por SO, DNS, registries, niveles de log |
-| [Networking](Networking.es) | Bridge, plugins CNI, port mapping, DNS, iptables (DNAT/SNAT), rootless (pasta), IPv6 |
+| [Networking](Networking.es) | Bridge, plugins CNI, port mapping, DNS, iptables (DNAT/SNAT), rootless (pasta), IPv6, DokiLink mesh |
 | [Storage](Storage.es) | 5 drivers, VFS, requisitos de kernel para overlay2, btrfs/zfs, FUSE rootless, store content-addressable |
 
 ## Layout del repositorio

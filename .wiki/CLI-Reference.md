@@ -1,6 +1,6 @@
 # CLI Reference
 
-Doki v0.9.2 ships **108 commands** across 8 categories. This page is the canonical reference; the [Quick Start](Quick-Start) walks through the common ones.
+Doki v0.9.3 ships **244 commands** across 9 categories. This page is the canonical reference; the [Quick Start](Quick-Start) walks through the common ones.
 
 ## Global Flags
 
@@ -593,6 +593,43 @@ For users migrating from Podman:
 | `doki kube down` | Stop and remove pod |
 | `doki kube generate` | Generate K8s YAML from compose |
 | `doki apply -f` | Apply Kubernetes YAML (alias of `kube play`) |
+
+## DokiLink Mesh (6 commands)
+
+DokiLink-Lite provides peer-to-peer mesh networking with TLS 1.3 and optional NaCl secretbox encryption.
+
+| Command | Description |
+|:--------|:------------|
+| `doki mesh ls` | List connected mesh peers |
+| `doki mesh status` | Show mesh status and public key |
+| `doki link add NAME ADDRESS` | Add a trusted peer (TOFU) |
+| `doki link rm NAME` | Remove a peer |
+| `doki link show NAME` | Show peer details |
+
+**Examples**:
+
+```bash
+# Show your public key
+doki mesh status
+
+# Add a peer
+doki link add mybuddy 192.168.1.42:7432 --pub "$(doki mesh status | awk '/public key/ {print $3}')"
+
+# List peers
+doki mesh ls
+
+# Remove a peer
+doki link rm mybuddy
+```
+
+### Global DokiLink flags
+
+| Flag | Description |
+|:-----|:------------|
+| `--doki-link-addr string` | Gossip listen address (default `:7432`) |
+| `--doki-link-payload-enc` | Enable NaCl secretbox payload encryption (L2) |
+| `--doki-link-mesh 0` | Disable mesh entirely |
+| `--doki-use-socat 1` | Force socat fallback for port forwarding |
 
 ## Compose (`doki-compose`, ~30 subcommands)
 
