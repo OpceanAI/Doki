@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -270,16 +271,19 @@ func (d *FuseOverlayFSDriver) Exists(id string) bool {
 }
 
 func (d *FuseOverlayFSDriver) Remove(id string) error {
+	var errs []error
 	for _, dir := range []string{
 		filepath.Join(d.layerDir, id),
 		filepath.Join(d.mergeDir, id),
 		filepath.Join(d.upperDir, id),
 		filepath.Join(d.workDir, id),
 	} {
-		os.RemoveAll(dir)
+		if err := os.RemoveAll(dir); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 func (d *FuseOverlayFSDriver) Cleanup() error {
@@ -368,6 +372,11 @@ func (d *Overlay2Driver) Name() string {
 
 func (d *Overlay2Driver) Get(id, mountLabel string) (string, error) {
 	lowerDir := filepath.Join(d.layerDir, id)
+	// BUG fix: check that the layer exists before attempting to mount.
+	// Without this check, the mount fails with a confusing kernel error.
+	if !common.PathExists(lowerDir) {
+		return "", common.NewErrNotFound("layer", id)
+	}
 	upperDir := filepath.Join(d.upperDir, id)
 	workDir := filepath.Join(d.workDir, id)
 	mergeDir := filepath.Join(d.mergeDir, id)
@@ -399,15 +408,18 @@ func (d *Overlay2Driver) Exists(id string) bool {
 }
 
 func (d *Overlay2Driver) Remove(id string) error {
+	var errs []error
 	for _, dir := range []string{
 		filepath.Join(d.layerDir, id),
 		filepath.Join(d.mergeDir, id),
 		filepath.Join(d.upperDir, id),
 		filepath.Join(d.workDir, id),
 	} {
-		os.RemoveAll(dir)
+		if err := os.RemoveAll(dir); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (d *Overlay2Driver) Cleanup() error {

@@ -120,7 +120,10 @@ func allowedSyscalls() []string {
 		"mremap", "remap_file_pages",
 		"mlock", "mlock2", "mlockall", "munlock", "munlockall",
 		"mincore", "msync",
-		"memfd_create", "memfd_secret",
+		"memfd_create",
+		// BUG-28 fix: memfd_secret creates memory regions invisible to the
+		// kernel, used to hide malicious payloads from security scanning.
+		// "memfd_secret",
 
 		// IPC.
 		"pipe", "pipe2",
@@ -129,7 +132,10 @@ func allowedSyscalls() []string {
 		"semget", "semop", "semctl",
 		"msgget", "msgsnd", "msgrcv", "msgctl",
 		"futex", "futex_waitv", "futex_wake", "futex_wait",
-		"setns", "unshare",
+		// BUG-03 fix: setns and unshare are container escape vectors.
+		// setns allows joining another namespace, unshare allows creating
+		// new namespaces. Both are blocked in the default profile.
+		// "setns", "unshare",
 
 		// Networking.
 		"socket", "bind", "listen", "accept", "accept4",
@@ -138,7 +144,10 @@ func allowedSyscalls() []string {
 		"shutdown", "setsockopt", "getsockopt",
 		"socketpair",
 		"getifaddrs", "if_indextoname", "if_nametoindex",
-		"socketcall", // allowed for legacy socket operations, blocked only as standalone in denied list
+		// BUG-02 fix: socketcall is already in the deny list above.
+		// Allowing it here creates contradictory behavior. Use
+		// individual socket syscalls instead.
+		// "socketcall",
 		"epoll_create", "epoll_create1", "epoll_ctl", "epoll_wait", "epoll_pwait",
 		"poll", "ppoll", "select",
 
@@ -159,10 +168,16 @@ func allowedSyscalls() []string {
 		"getrandom",
 		"rseq",
 		"pidfd_open", "pidfd_getfd", "pidfd_send_signal",
-		"name_to_handle_at", "open_by_handle_at",
-		"userfaultfd", "membarrier",
-		"copy_file_range",
-		"io_uring_setup", "io_uring_enter", "io_uring_register",
+		// BUG-04 fix: open_by_handle_at is the Shocker CVE-2014-3499
+		// container escape syscall. name_to_handle_at is its companion.
+		// "name_to_handle_at", "open_by_handle_at",
+		// BUG-08 fix: userfaultfd is used in kernel exploit chains
+		// (CVE-2016-8655, CVE-2019-18683) to win race conditions.
+		// "userfaultfd",
+		"membarrier",
+		// BUG-09 fix: io_uring has been the source of dozens of critical
+		// kernel vulnerabilities and container escapes.
+		// "io_uring_setup", "io_uring_enter", "io_uring_register",
 	}
 }
 

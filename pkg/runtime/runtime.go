@@ -228,6 +228,10 @@ func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
+	if cfg.ID == "" {
+		return nil, fmt.Errorf("container ID cannot be empty")
+	}
+
 	if _, err := rt.loadState(cfg.ID); err == nil {
 		return nil, common.NewErrConflict("container", cfg.ID)
 	}
@@ -287,55 +291,18 @@ func (rt *Runtime) extractLayers(rootfsDir string, layers []string) error {
 		return nil
 	}
 
-	// Parallel extraction: max 3 concurrent goroutines
-	sem := make(chan struct{}, 3)
-	errCh := make(chan error, len(layers))
-	var wg sync.WaitGroup
-
-	// Track extracted layers for rollback
-	extracted := make([]string, 0, len(layers))
-	var mu sync.Mutex
-
+	// Sequential extraction: OCI image layers must be applied in order.
+	// Later layers override earlier ones, so parallel extraction would
+	// produce non-deterministic rootfs contents.
 	for i, layerPath := range layers {
 		if !common.PathExists(layerPath) {
 			continue
 		}
-		wg.Add(1)
-		go func(idx int, path string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			if err := extractTarGz(path, rootfsDir); err != nil {
-				errCh <- fmt.Errorf("layer %d (%s): %w", idx, filepath.Base(path), err)
-				return
-			}
-			mu.Lock()
-			extracted = append(extracted, path)
-			mu.Unlock()
-		}(i, layerPath)
-	}
-	wg.Wait()
-	close(errCh)
-
-	// Collect first error
-	var firstErr error
-	for err := range errCh {
-		if firstErr == nil {
-			firstErr = err
+		if err := extractTarGz(layerPath, rootfsDir); err != nil {
+			// Rollback: clean up partial rootfs
+			os.RemoveAll(rootfsDir)
+			return fmt.Errorf("layer %d (%s): %w", i, filepath.Base(layerPath), err)
 		}
-	}
-
-	// C13: Rollback on partial extraction failure
-	if firstErr != nil {
-		for _, lp := range extracted {
-			// Remove files that were successfully extracted
-			// from this layer by re-extracting with --diff or simple cleanup
-			_ = lp // In-place rollback not fully implemented yet
-		}
-		// Clean up partial rootfs
-		os.RemoveAll(rootfsDir)
-		return firstErr
 	}
 
 	return nil
@@ -465,11 +432,11 @@ func extractTarGz(tarPath, dest string) error {
 				out.Close()
 				return err
 			}
-			if err := out.Chown(hdr.Uid, hdr.Gid); err != nil {
+			if err := out.Chown(hdr.Uid, hdr.Gid); err != nil && !os.IsNotExist(err) {
 				slog.Warn("chown file", "target", target, "err", err)
 			}
 			out.Close()
-			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
+			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil && !os.IsNotExist(err) {
 				slog.Warn("chown file", "target", target, "err", err)
 			}
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
@@ -496,7 +463,10 @@ func extractTarGz(tarPath, dest string) error {
 				}
 			}
 			if err := os.Lchown(target, hdr.Uid, hdr.Gid); err != nil {
-				slog.Warn("lchown symlink", "target", target, "err", err)
+				// Broken symlinks (target doesn't exist) are common in busybox images.
+				if !os.IsNotExist(err) {
+					slog.Warn("lchown symlink", "target", target, "err", err)
+				}
 			}
 			extractXattrs(hdr, target)
 		case tar.TypeLink:
@@ -617,7 +587,8 @@ func (rt *Runtime) Start(id string) error {
 	if err != nil {
 		return err
 	}
-	if state.Status != common.StateCreated {
+	// Accept both "created" (initial start) and "exited" (restart) states.
+	if state.Status != common.StateCreated && state.Status != common.StateExited {
 		return fmt.Errorf("container %s is in state %s", id, state.Status)
 	}
 
@@ -686,7 +657,7 @@ func (rt *Runtime) Start(id string) error {
 	state.Status = common.StateRunning
 	state.Started = time.Now()
 	state.Cmd = proc
-	state.PidPath = filepath.Join(rt.root, "containers", id, "init.pid")
+	state.PidPath = filepath.Join(rt.root, "containers", state.ID, "init.pid")
 	if err := os.WriteFile(state.PidPath, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
 		return fmt.Errorf("write pid file: %w", err)
 	}
@@ -771,7 +742,9 @@ func (rt *Runtime) handleRestart(state *ContainerState, exitCode int) {
 		state.RestartCount++
 		rt.saveState(state)
 		rt.mu.Unlock()
-		rt.Start(id)
+		if err := rt.Start(id); err != nil {
+			slog.Warn("restart-always failed", "id", id, "err", err)
+		}
 
 	case common.RestartOnFailure:
 		if exitCode != 0 {
@@ -906,15 +879,54 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	}
 
 	uid, gid := parseUser(cfg.User)
-	prootArgs := proot.BuildProotBaseArgs(cleanRootfs, uid, gid)
+	prootArgs, err := proot.BuildProotBaseArgs(cleanRootfs, uid, gid)
+	if err != nil {
+		return 0, nil, err
+	}
 
 	if rt.isAndroid() {
 		prootArgs = proot.AppendAndroidBinds(prootArgs)
 	}
 
+	// Container-specific mounts (bind mounts, tmpfs).
+	// BUG fix: startWithProot was missing mount processing entirely.
+	// Volume mounts (-v) were silently ignored in proot mode.
+	for _, mnt := range cfg.Mounts {
+		switch mnt.Type {
+		case common.MountBind:
+			if mnt.Source != "" && mnt.Target != "" {
+				// Ensure the target directory exists inside the rootfs.
+				targetInRootfs := filepath.Join(cleanRootfs, mnt.Target)
+				if err := os.MkdirAll(targetInRootfs, 0755); err != nil {
+					return 0, nil, fmt.Errorf("create mount target %s: %w", mnt.Target, err)
+				}
+				bindArg := mnt.Source + ":" + mnt.Target
+				if mnt.ReadOnly {
+					bindArg += ":ro"
+				}
+				prootArgs = append(prootArgs, "-b", bindArg)
+			}
+		case common.MountTmpfs:
+			target := filepath.Join(cleanRootfs, mnt.Target)
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return 0, nil, fmt.Errorf("create tmpfs target %s: %w", mnt.Target, err)
+			}
+			prootArgs = append(prootArgs, "-b", target+":"+mnt.Target)
+		}
+	}
+
 	if cfg.Cwd != "" {
 		prootArgs = append(prootArgs, "-w", cfg.Cwd)
 	}
+
+	// Set hostname via environment variable (proot doesn't support true hostname isolation)
+	if cfg.Hostname != "" {
+		cfg.Env = append(cfg.Env, "HOSTNAME="+cfg.Hostname)
+		hostnamePath := filepath.Join(cleanRootfs, "etc", "hostname")
+		os.MkdirAll(filepath.Dir(hostnamePath), 0755)
+		os.WriteFile(hostnamePath, []byte(cfg.Hostname+"\n"), 0644)
+	}
+
 	prootArgs = append(prootArgs, args...)
 
 	prootBin := proot.FindProotBinary()
@@ -928,7 +940,12 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	proot.UnsetProotKillers()
 
 	cmd := exec.Command(prootBin, prootArgs...)
-	cmd.Dir = cleanRootfs
+	// IMPORTANT: cmd.Dir must NOT be set to the guest rootfs path. proot
+	// internally translates the host process's cwd into the guest namespace;
+	// when the host cwd is the same path as the guest root, proot produces a
+	// self-referential path ("<rootfs>/./.") and emits a chdir warning. Use
+	// a neutral host directory instead.
+	cmd.Dir = "/"
 	cmd.Stdout = logFile
 	cmd.Stdin = os.Stdin
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -949,10 +966,11 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		return 0, nil, fmt.Errorf("proot start: %w", err)
 	}
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
+	// Wait 100ms to detect immediate startup failures (e.g., ENOSYS).
+	// We use a non-blocking check instead of cmd.Wait() to avoid race with monitorProcess.
+	time.Sleep(100 * time.Millisecond)
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		// Process died immediately - try to get the error
 		stderrStr := stderrBuf.String()
 		if stderrStr != "" {
 			logFile.Write([]byte(stderrStr))
@@ -961,35 +979,17 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		hasENOSYS := strings.Contains(stderrStr, "Function not implemented") ||
 			strings.Contains(stderrStr, "ENOSYS")
 
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				code := exitErr.ExitCode()
-				signaled := false
-				if ws, ok2 := exitErr.Sys().(syscall.WaitStatus); ok2 {
-					signaled = ws.Signaled()
-				}
-				if code == 126 || code == 127 || (code != 0 && (hasENOSYS || signaled)) {
-					logFile.Write([]byte("DOKI: proot failed, retrying with QEMU...\n"))
-					if pid, qemuCmd, qemuErr := rt.retryWithQemu(cfg, rootfsDir, logFile); qemuErr == nil {
-						return pid, qemuCmd, nil
-					}
-				}
-				if code != 0 {
-					return 0, nil, fmt.Errorf("proot exited with code %d (binary may be incompatible or missing in rootfs)", code)
-				}
-				return cmd.Process.Pid, cmd, nil
+		if hasENOSYS {
+			logFile.Write([]byte("DOKI: proot failed with ENOSYS, retrying with QEMU...\n"))
+			rt.writeProotENOSYSDiagnostic(logFile)
+			if pid, qemuCmd, qemuErr := rt.retryWithQemu(cfg, rootfsDir, logFile); qemuErr == nil {
+				return pid, qemuCmd, nil
 			}
-			if hasENOSYS {
-				logFile.Write([]byte("DOKI: proot failed with ENOSYS, retrying with QEMU...\n"))
-				rt.writeProotENOSYSDiagnostic(logFile)
-				if pid, qemuCmd, qemuErr := rt.retryWithQemu(cfg, rootfsDir, logFile); qemuErr == nil {
-					return pid, qemuCmd, nil
-				}
-			}
-			return 0, nil, fmt.Errorf("proot failed: %w", err)
 		}
-		return cmd.Process.Pid, cmd, nil
-	case <-time.After(2000 * time.Millisecond):
+
+		// Try to reap the process to avoid zombie
+		cmd.Process.Wait()
+		return 0, nil, fmt.Errorf("proot exited immediately")
 	}
 
 	return cmd.Process.Pid, cmd, nil
@@ -1043,7 +1043,9 @@ func (rt *Runtime) startWithNamespaces(cfg *Config, rootfsDir string, logFile *o
 
 	// I5: pivot_root - create old_root directory.
 	oldRootDir := filepath.Join(rootfsDir, ".pivot_root")
-	os.MkdirAll(oldRootDir, 0755)
+	if err := os.MkdirAll(oldRootDir, 0755); err != nil {
+		return 0, nil, fmt.Errorf("pivot_root setup: %w", err)
+	}
 
 	// Build a shell init script that does pivot_root then execs the user command.
 	pivotScript := fmt.Sprintf(
@@ -1137,13 +1139,15 @@ func (rt *Runtime) setupMounts(rootfsDir string, cfg *Config) error {
 
 // ─── Container operations ──────────────────────────────────────────
 
-func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user string) error {
+func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user string) ([]byte, []byte, error) {
+	var stdoutBuf, stderrBuf bytes.Buffer
+
 	state, err := rt.State(id)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if state.Status != common.StateRunning {
-		return fmt.Errorf("container %s is not running", id)
+		return nil, nil, fmt.Errorf("container %s is not running", id)
 	}
 
 	// Find the container's rootfs.
@@ -1158,28 +1162,37 @@ func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user
 	switch rt.mode {
 	case ModeProot:
 		if rootfsDir == "" || !common.PathExists(rootfsDir) {
-			return fmt.Errorf("rootfs not found for container %s", id)
+			return nil, nil, fmt.Errorf("rootfs not found for container %s", id)
 		}
 		uid, gid := parseUser(user)
-		prootArgs := proot.BuildProotBaseArgs(rootfsDir, uid, gid)
+		prootArgs, err := proot.BuildProotBaseArgs(rootfsDir, uid, gid)
+		if err != nil {
+			return nil, nil, err
+		}
 		if workingDir != "" {
 			prootArgs = append(prootArgs, "-w", workingDir)
 		}
 		prootArgs = append(prootArgs, args...)
-		prootBin := "proot"
-		if p, err := exec.LookPath("doki-proot"); err == nil {
-			prootBin = p
+		prootBin := proot.FindProotBinary()
+		if prootBin == "" {
+			return nil, nil, fmt.Errorf("proot: no usable proot binary found")
 		}
+		// Clear LD_PRELOAD family in the parent process so exec.Command does not
+		// propagate libtermux-exec.so to the proot child.
+		proot.UnsetProotKillers()
 		cmd := exec.Command(prootBin, prootArgs...)
-		cmd.Env = env
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		// Use BuildEnv for the same env composition as startWithProot.
+		cmd.Env = proot.BuildEnv(env, nil)
+		// IMPORTANT: cmd.Dir must NOT be set to the guest rootfs path.
+		cmd.Dir = "/"
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+		err = cmd.Run()
+		return stdoutBuf.Bytes(), stderrBuf.Bytes(), err
 
 	case ModeNamespaces:
 		if state.Pid == 0 {
-			return fmt.Errorf("container %s has no PID for nsenter", id)
+			return nil, nil, fmt.Errorf("container %s has no PID for nsenter", id)
 		}
 		nsenterArgs := []string{"-t", fmt.Sprintf("%d", state.Pid), "-m", "-p", "-a"}
 		if workingDir != "" {
@@ -1188,10 +1201,10 @@ func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user
 		nsenterArgs = append(append(nsenterArgs, "--"), args...)
 		cmd := exec.Command("nsenter", nsenterArgs...)
 		cmd.Env = env
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+		err = cmd.Run()
+		return stdoutBuf.Bytes(), stderrBuf.Bytes(), err
 
 	case ModeNative:
 		fallthrough
@@ -1210,29 +1223,23 @@ func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user
 			env = append(env, "PATH="+pathPrefix)
 		}
 		cmd.Env = env
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+		err = cmd.Run()
+		return stdoutBuf.Bytes(), stderrBuf.Bytes(), err
 	}
 }
 
 func (rt *Runtime) Stop(id string, timeout int) error {
 	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	return rt.stopUnlocked(id, timeout)
-}
-
-func (rt *Runtime) stopUnlocked(id string, timeout int) error {
 	state, err := rt.loadState(id)
 	if err != nil {
+		rt.mu.Unlock()
 		return err
 	}
-	if state.ExitChan == nil {
-		state.ExitChan = make(chan struct{})
-	}
 	if state.Status != common.StateRunning {
-		return fmt.Errorf("container %s is not running", id)
+		rt.mu.Unlock()
+		return nil // Idempotent: already stopped
 	}
 
 	sig := syscall.SIGTERM
@@ -1241,26 +1248,77 @@ func (rt *Runtime) stopUnlocked(id string, timeout int) error {
 	}
 	process, err := os.FindProcess(state.Pid)
 	if err != nil {
+		rt.mu.Unlock()
 		return fmt.Errorf("process %d not found: %w", state.Pid, err)
 	}
 	if err := process.Signal(sig); err != nil {
+		// Process may have already exited
+		if strings.Contains(err.Error(), "process already finished") ||
+			strings.Contains(err.Error(), "no such process") {
+			state.Status = common.StateExited
+			state.Finished = time.Now()
+			rt.saveState(state)
+			rt.mu.Unlock()
+			return nil
+		}
+		rt.mu.Unlock()
 		return fmt.Errorf("signal %s to process %d: %w", sig, state.Pid, err)
 	}
+
+	rt.mu.Unlock() // Release lock before waiting
 
 	if timeout <= 0 {
 		timeout = 10
 	}
-	select {
-	case <-state.ExitChan:
-	case <-time.After(time.Duration(timeout) * time.Second):
-		process.Signal(syscall.SIGKILL)
-		select {
-		case <-state.ExitChan:
-		case <-time.After(3 * time.Second):
+
+	// Poll for process exit instead of using ExitChan (which may be disconnected
+	// if state was reloaded from disk). Check every 100ms.
+	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	for time.Now().Before(deadline) {
+		if err := process.Signal(syscall.Signal(0)); err != nil {
+			// Process has exited
+			rt.mu.Lock()
+			state, err := rt.loadState(id)
+			if err == nil {
+				state.Status = common.StateExited
+				state.ExitCode = 0
+				state.Finished = time.Now()
+				rt.saveState(state)
+			}
+			rt.mu.Unlock()
+			return nil
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	rt.cleanupContainer(state)
+	// Timeout: send SIGKILL
+	process.Signal(syscall.SIGKILL)
+	// Wait up to 3 more seconds for SIGKILL to take effect
+	for i := 0; i < 30; i++ {
+		if err := process.Signal(syscall.Signal(0)); err != nil {
+			rt.mu.Lock()
+			state, err := rt.loadState(id)
+			if err == nil {
+				state.Status = common.StateExited
+				state.ExitCode = 137
+				state.Finished = time.Now()
+				rt.saveState(state)
+			}
+			rt.mu.Unlock()
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	rt.mu.Lock()
+	state, err = rt.loadState(id)
+	if err == nil {
+		state.Status = common.StateExited
+		state.ExitCode = 137
+		state.Finished = time.Now()
+		rt.saveState(state)
+	}
+	rt.mu.Unlock()
 	return nil
 }
 
@@ -1270,23 +1328,57 @@ func (rt *Runtime) Kill(id string, signal syscall.Signal) error {
 		return err
 	}
 	if state.Status != common.StateRunning {
-		return nil
+		return fmt.Errorf("container %s is not running", id)
 	}
 	process, err := os.FindProcess(state.Pid)
 	if err != nil {
 		return fmt.Errorf("process %d not found: %w", state.Pid, err)
 	}
-	return process.Signal(signal)
+	if err := process.Signal(signal); err != nil {
+		if strings.Contains(err.Error(), "process already finished") ||
+			strings.Contains(err.Error(), "no such process") {
+			rt.mu.Lock()
+			state, err = rt.loadState(id)
+			if err == nil {
+				state.Status = common.StateExited
+				state.Finished = time.Now()
+				rt.saveState(state)
+			}
+			rt.mu.Unlock()
+			return nil
+		}
+		return err
+	}
+
+	for i := 0; i < 100; i++ {
+		if err := process.Signal(syscall.Signal(0)); err != nil {
+			rt.mu.Lock()
+			state, err = rt.loadState(id)
+			if err == nil {
+				state.Status = common.StateExited
+				state.Finished = time.Now()
+				rt.saveState(state)
+			}
+			rt.mu.Unlock()
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return nil
 }
 
 func (rt *Runtime) Pause(id string) error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	state, err := rt.loadState(id)
-	if err != nil || state.Status != common.StateRunning {
+	if err != nil {
 		return err
 	}
-	if rt.cgMgr.IsAvailable() {
+	if state.Status != common.StateRunning {
+		return fmt.Errorf("container %s is not running", id)
+	}
+	if rt.cgMgr != nil && rt.cgMgr.IsAvailable() {
 		rt.cgMgr.Freeze(id)
 	} else if state.Cmd != nil && state.Cmd.Process != nil {
 		// Fallback: SIGSTOP the process
@@ -1300,10 +1392,13 @@ func (rt *Runtime) Unpause(id string) error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	state, err := rt.loadState(id)
-	if err != nil || state.Status != common.StatePaused {
+	if err != nil {
 		return err
 	}
-	if rt.cgMgr.IsAvailable() {
+	if state.Status != common.StatePaused {
+		return fmt.Errorf("container %s is not paused", id)
+	}
+	if rt.cgMgr != nil && rt.cgMgr.IsAvailable() {
 		rt.cgMgr.Thaw(id)
 	} else if state.Cmd != nil && state.Cmd.Process != nil {
 		// Fallback: SIGCONT the process
@@ -1321,9 +1416,9 @@ func (rt *Runtime) State(id string) (*ContainerState, error) {
 
 func (rt *Runtime) Delete(id string, force bool) error {
 	rt.mu.Lock()
-	defer rt.mu.Unlock()
 	state, err := rt.loadState(id)
 	if err != nil {
+		rt.mu.Unlock()
 		if force {
 			return nil
 		}
@@ -1331,11 +1426,23 @@ func (rt *Runtime) Delete(id string, force bool) error {
 	}
 	if state.Status == common.StateRunning {
 		if !force {
+			rt.mu.Unlock()
 			return fmt.Errorf("container %s is running", id)
 		}
-		rt.stopUnlocked(id, 0)
+		// Release the lock before calling Stop: Stop() acquires and
+		// releases the lock internally to wait on the exit channel.
+		rt.mu.Unlock()
+		_ = rt.Stop(id, 0) // Best-effort stop; ignore errors (process may have exited).
+		// Re-acquire to reload fresh state and run cleanup.
+		rt.mu.Lock()
+		state, err = rt.loadState(id)
+		if err != nil {
+			rt.mu.Unlock()
+			return nil // State already cleaned up by Stop.
+		}
 	}
 	rt.cleanupContainer(state)
+	rt.mu.Unlock()
 	return nil
 }
 
@@ -1421,10 +1528,28 @@ func (rt *Runtime) GetLogs(id string, tail int) (string, error) {
 		return "", err
 	}
 	lines := strings.Split(string(data), "\n")
-	if tail > 0 && len(lines) > tail {
-		lines = lines[len(lines)-tail:]
+	
+	// Remove empty lines (especially trailing newline)
+	var nonEmptyLines []string
+	for _, line := range lines {
+		if line != "" {
+			nonEmptyLines = append(nonEmptyLines, line)
+		}
 	}
-	return strings.Join(lines, "\n"), nil
+	
+	// Apply tail filter
+	if tail > 0 && len(nonEmptyLines) > tail {
+		nonEmptyLines = nonEmptyLines[len(nonEmptyLines)-tail:]
+	}
+	
+	return strings.Join(nonEmptyLines, "\n"), nil
+}
+
+// SaveState persists the container state to disk.
+func (rt *Runtime) SaveState(state *ContainerState) error {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.saveState(state)
 }
 
 // rotateLog rotates a log file if it exceeds maxSize bytes. Keeps up to keep
@@ -1439,11 +1564,17 @@ func (rt *Runtime) rotateLog(logPath string, maxSize int64, keep int) {
 		oldPath := logPath + "." + strconv.Itoa(i)
 		newPath := logPath + "." + strconv.Itoa(i+1)
 		if i == keep-1 {
-			os.Remove(newPath)
+			if err := os.Remove(newPath); err != nil && !os.IsNotExist(err) {
+				slog.Warn("rotateLog: failed to remove oldest rotation", "path", newPath, "error", err)
+			}
 		}
-		os.Rename(oldPath, newPath)
+		if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
+			slog.Warn("rotateLog: failed to rename rotation", "src", oldPath, "dst", newPath, "error", err)
+		}
 	}
-	os.Rename(logPath, logPath+".1")
+	if err := os.Rename(logPath, logPath+".1"); err != nil {
+		slog.Warn("rotateLog: failed to rotate active log", "path", logPath, "error", err)
+	}
 }
 
 func (rt *Runtime) Processes(id string) ([]string, error) {
@@ -1461,8 +1592,12 @@ func (rt *Runtime) Processes(id string) ([]string, error) {
 // ─── Helpers ───────────────────────────────────────────────────────
 
 func (rt *Runtime) cleanupContainer(state *ContainerState) {
-	rt.cgMgr.Destroy(state.ID)
-	rt.nsMgr.DeletePersistentNamespace(state.ID)
+	if rt.cgMgr != nil {
+		rt.cgMgr.Destroy(state.ID)
+	}
+	if rt.nsMgr != nil {
+		rt.nsMgr.DeletePersistentNamespace(state.ID)
+	}
 	if state.Bundle != "" {
 		fuse.CleanupMounts(filepath.Join(state.Bundle, "rootfs"))
 		os.RemoveAll(state.Bundle)
@@ -1488,7 +1623,9 @@ func (rt *Runtime) loadState(id string) (*ContainerState, error) {
 				sp := filepath.Join(rt.root, "containers", e.Name(), "state.json")
 				if data, err := os.ReadFile(sp); err == nil {
 					var s ContainerState
-					json.Unmarshal(data, &s)
+					if err := json.Unmarshal(data, &s); err != nil {
+						continue
+					}
 					return &s, nil
 				}
 			}
@@ -1572,22 +1709,26 @@ func (rt *Runtime) buildCgroupConfig(cfg *Config) *cgroups.Config {
 }
 
 func parseSignal(s string) syscall.Signal {
+	// Handle numeric signals first
+	if n, err := strconv.Atoi(s); err == nil {
+		return syscall.Signal(n)
+	}
 	switch strings.ToUpper(s) {
-	case "SIGHUP":
+	case "SIGHUP", "HUP", "1":
 		return syscall.SIGHUP
-	case "SIGINT":
+	case "SIGINT", "INT", "2":
 		return syscall.SIGINT
-	case "SIGQUIT":
+	case "SIGQUIT", "QUIT", "3":
 		return syscall.SIGQUIT
-	case "SIGKILL":
+	case "SIGKILL", "KILL", "9":
 		return syscall.SIGKILL
-	case "SIGTERM":
+	case "SIGTERM", "TERM", "15":
 		return syscall.SIGTERM
-	case "SIGSTOP":
+	case "SIGSTOP", "STOP", "17":
 		return syscall.SIGSTOP
-	case "SIGUSR1":
+	case "SIGUSR1", "USR1", "10":
 		return syscall.SIGUSR1
-	case "SIGUSR2":
+	case "SIGUSR2", "USR2", "12":
 		return syscall.SIGUSR2
 	default:
 		return syscall.SIGTERM
@@ -1747,6 +1888,11 @@ func ApplySeccomp(profilePath string) error {
 }
 
 // ApplyAppArmor applies an AppArmor profile to a container.
+// KNOWN ISSUE: This writes to /proc/self/attr/current which only affects the
+// calling goroutine, not the actual container process. A correct implementation
+// requires writing to /proc/<pid>/attr/current after the container process has
+// started, which requires an architecture change to defer profile application
+// until after fork/exec.
 func ApplyAppArmor(profileName string) error {
 	if _, err := os.Stat("/sys/kernel/security/apparmor"); err != nil {
 		return nil // AppArmor not available
@@ -1875,7 +2021,11 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 
 	uid, gid := parseUser(cfg.User)
 	prootArgs := []string{"-q", qemuPaths[0]}
-	prootArgs = append(prootArgs, proot.BuildProotBaseArgs(cleanRootfs, uid, gid)...)
+	baseArgs, err := proot.BuildProotBaseArgs(cleanRootfs, uid, gid)
+	if err != nil {
+		return 0, nil, err
+	}
+	prootArgs = append(prootArgs, baseArgs...)
 
 	if rt.isAndroid() {
 		prootArgs = proot.AppendAndroidBinds(prootArgs)
@@ -1890,7 +2040,9 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 			}
 		case common.MountTmpfs:
 			target := filepath.Join(cleanRootfs, mnt.Target)
-			os.MkdirAll(target, 0755)
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return 0, nil, fmt.Errorf("tmpfs mount mkdir %s: %w", target, err)
+			}
 			prootArgs = append(prootArgs, "-b", target+":"+mnt.Target)
 		}
 	}
@@ -1901,20 +2053,26 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 	prootArgs = append(prootArgs, args...)
 
 	cmd := exec.Command(proot.FindProotBinary(), prootArgs...)
-	cmd.Dir = cleanRootfs
+	// IMPORTANT: cmd.Dir must NOT be set to the guest rootfs path (see
+	// startWithProot for the full rationale).
+	cmd.Dir = "/"
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = os.Stdin
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	env := common.StripHostEnv(os.Environ())
-	env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/")
-	env = append(env, "LD_LIBRARY_PATH=/usr/lib:/lib:/usr/local/lib")
-	validEnv := common.ValidateEnv(cfg.Env)
-	for _, e := range validEnv {
-		env = append(env, e)
+	// Clear LD_PRELOAD family in the parent process so exec.Command does not
+	// propagate libtermux-exec.so to the proot+qemu child.
+	proot.UnsetProotKillers()
+	// Use BuildEnv for the same env composition as startWithProot:
+	// StripHostEnv (17-var deny-list) + AndroidEnv defaults + image env +
+	// user env.
+	var imageEnv []string
+	if cfg.ImageConfig != nil {
+		imageEnv = cfg.ImageConfig.Env
 	}
-	cmd.Env = env
+	validEnv := common.ValidateEnv(cfg.Env)
+	cmd.Env = proot.BuildEnv(validEnv, imageEnv)
 
 	fmt.Fprintf(logFile, "DOKI: retrying with QEMU user mode (%s)\n", qemuPaths[0])
 

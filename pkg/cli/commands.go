@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,11 +14,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"text/template"
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
@@ -346,6 +349,7 @@ func (c *DokiCLI) Run(args []string) error {
 		c.waitContainer(containerID)
 	}
 	c.logs(containerID, false, 0, false)
+	fmt.Println() // Add trailing newline after logs
 
 	exitCode, _ := c.Wait(containerID)
 
@@ -382,6 +386,32 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 	var containers []common.ContainerInfo
 	json.NewDecoder(resp.Body).Decode(&containers)
 
+	sort.Slice(containers, func(i, j int) bool {
+		return containers[i].Created < containers[j].Created
+	})
+
+	if quiet {
+		for _, c := range containers {
+			fmt.Println(c.ID)
+		}
+		return nil
+	}
+
+	// Support Go template format
+	if format != "" {
+		tmpl, err := template.New("ps").Parse(format)
+		if err != nil {
+			return fmt.Errorf("invalid format: %w", err)
+		}
+		for _, c := range containers {
+			if err := tmpl.Execute(os.Stdout, c); err != nil {
+				return fmt.Errorf("format error: %w", err)
+			}
+			fmt.Println()
+		}
+		return nil
+	}
+
 	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
 	fmt.Fprintln(w, "CONTAINER ID\tIMAGE\tCOMMAND\tCREATED\tSTATUS\tPORTS\tNAMES")
 
@@ -389,10 +419,6 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 		w.Flush()
 		return nil
 	}
-
-	sort.Slice(containers, func(i, j int) bool {
-		return containers[i].Created < containers[j].Created
-	})
 
 	for _, c := range containers {
 		id := common.ShortID(c.ID)
@@ -653,9 +679,9 @@ func (c *DokiCLI) Create(image string, cmd []string, opts *RunFlags) (string, er
 		}
 	}
 
-	pullPolicy := opts.Pull
-	if pullPolicy == "" {
-		pullPolicy = "missing"
+	pullPolicy := "missing"
+	if opts != nil && opts.Pull != "" {
+		pullPolicy = opts.Pull
 	}
 
 	resp, err := c.doAPI("POST", "/containers/create?pull="+pullPolicy, body)
@@ -706,11 +732,53 @@ func (c *DokiCLI) Exec(containerID string, cmd []string, tty, detach, interactiv
 		"Detach": detach,
 		"Tty":    tty,
 	}
-	if _, err := c.doAPI("POST", "/exec/"+execResult.Id+"/start", startBody); err != nil {
+	resp2, err := c.doAPI("POST", "/exec/"+execResult.Id+"/start", startBody)
+	if err != nil {
 		return fmt.Errorf("exec start: %w", err)
+	}
+	defer resp2.Body.Close()
+
+	if !detach {
+		if tty {
+			// TTY mode: raw stream, no demux needed
+			io.Copy(os.Stdout, resp2.Body)
+		} else {
+			// Non-TTY: multiplexed stream, need demux
+			demuxStream(resp2.Body, os.Stdout, os.Stderr)
+		}
 	}
 
 	return nil
+}
+
+// demuxStream reads Docker's multiplexed stream format and writes to stdout/stderr.
+// Format: 8-byte header [stream_type(1)][0][0][0][size(4 big-endian)] + data
+func demuxStream(r io.Reader, stdout, stderr io.Writer) {
+	header := make([]byte, 8)
+	for {
+		_, err := io.ReadFull(r, header)
+		if err != nil {
+			break
+		}
+		streamType := header[0]
+		size := uint32(header[4])<<24 | uint32(header[5])<<16 | uint32(header[6])<<8 | uint32(header[7])
+		if size == 0 {
+			continue
+		}
+		data := make([]byte, size)
+		_, err = io.ReadFull(r, data)
+		if err != nil {
+			break
+		}
+		switch streamType {
+		case 1: // stdout
+			stdout.Write(data)
+		case 2: // stderr
+			stderr.Write(data)
+		default:
+			stdout.Write(data)
+		}
+	}
 }
 
 func (c *DokiCLI) Logs(containerID string, follow, timestamps bool, tail int, since string) error {
@@ -735,7 +803,8 @@ func (c *DokiCLI) logs(containerID string, follow bool, tail int, timestamps boo
 	}
 	defer resp.Body.Close()
 
-	io.Copy(os.Stdout, resp.Body)
+	// Logs use multiplexed stream format
+	demuxStream(resp.Body, os.Stdout, os.Stderr)
 	return nil
 }
 
@@ -793,16 +862,58 @@ func (c *DokiCLI) Top(containerID string, psArgs string) error {
 	return nil
 }
 
+// inspectContainer is a flattened view of the container inspect
+// response suitable for Go templates. Nested maps are preserved so
+// that {{.State.Status}} works.
+type inspectContainer struct {
+	ID    string                 `json:"Id"`
+	Name  string                 `json:"Name"`
+	Image string                 `json:"Image"`
+	State map[string]interface{} `json:"State"`
+	// Include common fields at the top level too.
+}
+
 func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
+	var hadError bool
 	for _, id := range containerIDs {
 		resp, err := c.doAPI("GET", "/containers/"+id+"/json", nil)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "inspect %s: %v\n", id, err)
-			continue
+		if err != nil || resp.StatusCode == 404 {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			// Try images
+			resp, err = c.doAPI("GET", "/images/"+id+"/json", nil)
+			if err != nil || resp.StatusCode == 404 {
+				if resp != nil {
+					resp.Body.Close()
+				}
+				fmt.Fprintf(os.Stderr, "Error: no such object: %s\n", id)
+				hadError = true
+				continue
+			}
 		}
-		io.Copy(os.Stdout, resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		fmt.Println()
+		if format != "" {
+			tmpl, err := template.New("inspect").Parse(format)
+			if err != nil {
+				return fmt.Errorf("inspect: invalid template: %w", err)
+			}
+			var raw interface{}
+			if err := json.Unmarshal(body, &raw); err != nil {
+				return fmt.Errorf("inspect: parse JSON: %w", err)
+			}
+			data := unwrap(raw)
+			if err := tmpl.Execute(os.Stdout, data); err != nil {
+				return fmt.Errorf("inspect: template execute: %w", err)
+			}
+			fmt.Println()
+		} else {
+			fmt.Println(string(body))
+		}
+	}
+	if hadError {
+		os.Exit(1)
 	}
 	return nil
 }
@@ -935,44 +1046,132 @@ func (c *DokiCLI) Export(containerID string, output string) error {
 }
 
 func (c *DokiCLI) Cp(containerID, srcPath, destPath string, followLink, copyUIDGID bool) error {
-	path := "/containers/" + containerID + "/archive?path=" + srcPath
+	path := "/containers/" + containerID + "/archive?path=" + url.QueryEscape(srcPath)
 	resp, err := c.doAPI("GET", path, nil)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	var out io.Writer = os.Stdout
-	if destPath != "" && destPath != "/" {
-		f, err := os.Create(destPath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		out = f
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("cp failed: %s", string(body))
 	}
-	io.Copy(out, resp.Body)
+
+	// Response is a tar archive - extract it
+	if destPath == "" || destPath == "-" {
+		// Write raw tar to stdout
+		io.Copy(os.Stdout, resp.Body)
+		return nil
+	}
+
+	// Extract tar to destination
+	tr := tar.NewReader(resp.Body)
+	
+	// Check if destination is an existing directory
+	destIsDir := false
+	if fi, err := os.Stat(destPath); err == nil && fi.IsDir() {
+		destIsDir = true
+	}
+	
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar: %w", err)
+		}
+
+		// If destination is a directory, extract into it; otherwise use destPath as the file
+		target := destPath
+		if destIsDir {
+			target = filepath.Join(destPath, filepath.Base(hdr.Name))
+		}
+		
+		if hdr.Typeflag == tar.TypeDir {
+			os.MkdirAll(target, os.FileMode(hdr.Mode))
+		} else if hdr.Typeflag == tar.TypeReg {
+			os.MkdirAll(filepath.Dir(target), 0755)
+			f, err := os.Create(target)
+			if err != nil {
+				return fmt.Errorf("create %s: %w", target, err)
+			}
+			io.Copy(f, tr)
+			f.Close()
+			os.Chmod(target, os.FileMode(hdr.Mode))
+		}
+	}
 	return nil
 }
 
 func (c *DokiCLI) CpToContainer(containerID, srcPath, destPath string, followLink, copyUIDGID bool) error {
-	path := "/containers/" + containerID + "/archive?path=" + destPath
-	f, err := os.Open(srcPath)
+	// Create a tar archive containing the source file
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	fi, err := os.Stat(srcPath)
 	if err != nil {
-		return fmt.Errorf("open source: %w", err)
+		return fmt.Errorf("stat source: %w", err)
 	}
-	defer f.Close()
-	resp, err := c.doAPI("PUT", path, f)
+
+	if fi.IsDir() {
+		// Add directory contents to tar
+		filepath.Walk(srcPath, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			relPath, _ := filepath.Rel(srcPath, path)
+			if relPath == "." {
+				return nil
+			}
+			hdr, err := tar.FileInfoHeader(info, "")
+			if err != nil {
+				return err
+			}
+			hdr.Name = relPath
+			tw.WriteHeader(hdr)
+			if !info.IsDir() {
+				f, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				io.Copy(tw, f)
+				f.Close()
+			}
+			return nil
+		})
+	} else {
+		// Add single file to tar
+		hdr, err := tar.FileInfoHeader(fi, "")
+		if err != nil {
+			return fmt.Errorf("tar header: %w", err)
+		}
+		hdr.Name = filepath.Base(srcPath)
+		tw.WriteHeader(hdr)
+		f, err := os.Open(srcPath)
+		if err != nil {
+			return fmt.Errorf("open source: %w", err)
+		}
+		io.Copy(tw, f)
+		f.Close()
+	}
+	tw.Close()
+
+	path := "/containers/" + containerID + "/archive?path=" + url.QueryEscape(destPath)
+	resp, err := c.doAPI("PUT", path, &buf)
 	if err != nil {
 		return err
 	}
 	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("cp to container failed: %s", resp.Status)
+	}
 	return nil
 }
 
 func (c *DokiCLI) Rename(containerID, newName string) error {
-	body := map[string]string{"name": newName}
-	resp, err := c.doAPI("POST", "/containers/"+containerID+"/rename", body)
+	resp, err := c.doAPI("POST", "/containers/"+containerID+"/rename?name="+newName, nil)
 	if err != nil {
 		return err
 	}
@@ -1059,6 +1258,7 @@ func (c *DokiCLI) Unpause(ids []string) error {
 }
 
 func (c *DokiCLI) Rm(ids []string, force, volumes, link bool) error {
+	var firstErr error
 	for _, id := range ids {
 		params := []string{}
 		if force {
@@ -1073,13 +1273,35 @@ func (c *DokiCLI) Rm(ids []string, force, volumes, link bool) error {
 		}
 		resp, err := c.doAPI("DELETE", path, nil)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error removing %s: %v\n", id, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("error removing %s: %w", id, err)
+			}
+			continue
+		}
+		// 404 means the container is already gone: treat as success when
+		// --force is set, otherwise surface the error.
+		if resp.StatusCode == http.StatusNotFound {
+			resp.Body.Close()
+			if !force {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("container %s not found", common.ShortID(id))
+				}
+				continue
+			}
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("error removing %s: %s", id, strings.TrimSpace(string(body)))
+			}
 			continue
 		}
 		resp.Body.Close()
 		fmt.Println(common.ShortID(id))
 	}
-	return nil
+	return firstErr
 }
 
 func (c *DokiCLI) Attach(containerID string, detachKeys, sigProxy string) error {
@@ -1138,9 +1360,18 @@ func (c *DokiCLI) Pull(imageName string, allTags, quiet bool) error {
 			var msg struct {
 				Status string `json:"status"`
 				Id     string `json:"id"`
+				Error  string `json:"error"`
 			}
 			if err := dec.Decode(&msg); err != nil {
 				break
+			}
+			if msg.Error != "" {
+				fmt.Println(msg.Id, "error:", msg.Error)
+				return fmt.Errorf("pull failed: %s", msg.Error)
+			}
+			if strings.HasPrefix(msg.Status, "error:") {
+				fmt.Println(msg.Id, msg.Status)
+				return fmt.Errorf("pull failed: %s", strings.TrimPrefix(msg.Status, "error: "))
 			}
 			if msg.Status != "" {
 				fmt.Println(msg.Id, msg.Status)
@@ -1162,17 +1393,40 @@ func (c *DokiCLI) Push(imageName string, allTags, quiet bool) error {
 		return err
 	}
 	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("push failed (%s): %s", resp.Status, string(body))
+	}
+	// Parse JSON stream to detect errors
+	decoder := json.NewDecoder(resp.Body)
+	for decoder.More() {
+		var msg map[string]interface{}
+		if err := decoder.Decode(&msg); err != nil {
+			break
+		}
+		if status, ok := msg["status"].(string); ok {
+			if strings.HasPrefix(status, "error") {
+				return fmt.Errorf("push failed: %s", status)
+			}
+			if !quiet {
+				fmt.Println(status)
+			}
+		}
+	}
 	return nil
 }
 
 func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 	path := "/images/json"
+	params := []string{}
 	if all {
-		path += "?all=true"
+		params = append(params, "all=true")
 	}
 	if filter != "" {
-		path += "&filters=" + filter
+		params = append(params, "filters="+url.QueryEscape(filter))
+	}
+	if len(params) > 0 {
+		path += "?" + strings.Join(params, "&")
 	}
 	resp, err := c.doAPI("GET", path, nil)
 	if err != nil {
@@ -1185,7 +1439,15 @@ func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 
 	if quiet {
 		for _, img := range images {
-			fmt.Println(common.ShortID(img.ID))
+			id := img.ID
+			// Strip sha256: prefix
+			if strings.HasPrefix(id, "sha256:") {
+				id = id[7:]
+			}
+			if !noTrunc && len(id) > 12 {
+				id = id[:12]
+			}
+			fmt.Println(id)
 		}
 		return nil
 	}
@@ -1194,22 +1456,31 @@ func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 	fmt.Fprintln(w, "REPOSITORY\tTAG\tIMAGE ID\tCREATED\tSIZE")
 
 	for _, img := range images {
-		repo := "-"
-		tag := "-"
-		if len(img.RepoTags) > 0 {
-			parts := strings.SplitN(img.RepoTags[0], ":", 2)
-			repo = parts[0]
-			if len(parts) > 1 {
-				tag = parts[1]
-			}
-		}
 		created := formatDuration(time.Now().Sub(time.Unix(img.Created, 0)))
 		size := formatSize(img.Size)
-		id := common.ShortID(img.ID)
-		if noTrunc {
-			id = img.ID
+		id := img.ID
+		// Strip sha256: prefix for display
+		if strings.HasPrefix(id, "sha256:") {
+			id = id[7:]
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", repo, tag, id, created, size)
+		if !noTrunc && len(id) > 12 {
+			id = id[:12]
+		}
+		if len(img.RepoTags) == 0 {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", "-", "-", id, created, size)
+		} else {
+			for _, repoTag := range img.RepoTags {
+				parts := strings.SplitN(repoTag, ":", 2)
+				repo := parts[0]
+				tag := "-"
+				if len(parts) > 1 {
+					tag = parts[1]
+				}
+				// Strip sha256: prefix from repository name.
+				repo = strings.TrimPrefix(repo, "sha256:")
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", repo, tag, id, created, size)
+			}
+		}
 	}
 	w.Flush()
 	return nil
@@ -1255,10 +1526,10 @@ func (c *DokiCLI) History(imageName string, noTrunc, quiet bool) error {
 
 	var history []struct {
 		Id        string `json:"Id"`
-		Created   int64  `json:"Created"`
-		CreatedBy string `json:"CreatedBy"`
+		Created   string `json:"created"`
+		CreatedBy string `json:"created_by"`
 		Size      int64  `json:"Size"`
-		Comment   string `json:"Comment"`
+		Comment   string `json:"comment"`
 	}
 	json.NewDecoder(resp.Body).Decode(&history)
 
@@ -1267,7 +1538,10 @@ func (c *DokiCLI) History(imageName string, noTrunc, quiet bool) error {
 		if noTrunc {
 			id = h.Id
 		}
-		created := time.Unix(h.Created, 0).Format(time.RFC3339)
+		created := h.Created
+		if created == "" {
+			created = "N/A"
+		}
 		fmt.Printf("%s  %s  %s  %d  %s\n", id, created, h.CreatedBy, h.Size, h.Comment)
 	}
 	return nil
@@ -1332,7 +1606,7 @@ func (c *DokiCLI) Import(source, repo, tag string, changes []string, message str
 	return nil
 }
 
-func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs map[string]string, noCache, pull, quiet, rm bool) error {
+func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs map[string]string, noCache, pull, quiet, rm bool, target string) error {
 	// Resolve context dir to absolute path.
 	absDir, err := filepath.Abs(contextDir)
 	if err != nil {
@@ -1342,10 +1616,10 @@ func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs ma
 	path := "/build"
 	params := []string{"context=" + absDir}
 	for _, tag := range tags {
-		params = append(params, "t="+tag)
+		params = append(params, "t="+url.QueryEscape(tag))
 	}
 	if dokifile != "" {
-		params = append(params, "dockerfile="+dokifile)
+		params = append(params, "dockerfile="+url.QueryEscape(dokifile))
 	}
 	if noCache {
 		params = append(params, "nocache=true")
@@ -1358,6 +1632,12 @@ func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs ma
 	}
 	if quiet {
 		params = append(params, "q=true")
+	}
+	if target != "" {
+		params = append(params, "target="+url.QueryEscape(target))
+	}
+	for k, v := range buildArgs {
+		params = append(params, "buildarg="+url.QueryEscape(k+"="+v))
 	}
 	path += "?" + strings.Join(params, "&")
 
@@ -1446,7 +1726,11 @@ func (c *DokiCLI) NetworkCreate(name, driver string, internal, ipv6 bool, subnet
 
 	var nw common.NetworkInfo
 	json.NewDecoder(resp.Body).Decode(&nw)
-	fmt.Println(nw.ID)
+	shortID := nw.ID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+	fmt.Println(shortID)
 	return nil
 }
 
@@ -1599,8 +1883,8 @@ func (c *DokiCLI) SystemVersion() error {
 	fmt.Printf("Client: Doki\n")
 	fmt.Printf(" Version:    %s\n", c.version)
 	fmt.Printf(" API version: %s\n", common.DokiAPIVersion)
-	fmt.Printf(" Go version:  go1.26\n")
-	fmt.Printf(" OS/Arch:     android/arm64\n")
+	fmt.Printf(" Go version:  %s\n", goruntime.Version())
+	fmt.Printf(" OS/Arch:     %s/%s\n", goruntime.GOOS, goruntime.GOARCH)
 	return nil
 }
 
@@ -2648,6 +2932,29 @@ func parseMemory(s string) int64 {
 
 	val, _ := strconv.ParseFloat(s, 64)
 	return int64(val * float64(multiplier))
+}
+
+// unwrap recursively converts interface{} values from JSON
+// unmarshalling so that nested maps become map[string]interface{}
+// instead of interface{}. This allows Go templates to access nested
+// fields like {{.State.Status}}.
+func unwrap(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(val))
+		for k, v2 := range val {
+			out[k] = unwrap(v2)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(val))
+		for i, v2 := range val {
+			out[i] = unwrap(v2)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func init() {

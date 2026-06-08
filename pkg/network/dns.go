@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,7 +30,22 @@ import (
 
 // DNSWellKnownAddress returns the well-known address for the internal DNS server.
 // Docker uses 127.0.0.11:53; on Android we use 127.0.0.11:8053 (port 53 is blocked).
+//
+// BUG-09 fix: the previous implementation unconditionally returned port 53,
+// which fails on Android where port 53 requires root. Now checks the
+// DOKI_DNS_LISTEN environment variable first, then falls back to 8053 on
+// Android (detected via /data/data/com.termux), and 53 elsewhere.
 func DNSWellKnownAddress() string {
+	if listen := os.Getenv("DOKI_DNS_LISTEN"); listen != "" {
+		// If the listen address includes a port, use it as-is for the
+		// well-known address. The host part is always 127.0.0.11.
+		if _, port, err := net.SplitHostPort(listen); err == nil {
+			return net.JoinHostPort("127.0.0.11", port)
+		}
+	}
+	if _, err := os.Stat("/data/data/com.termux"); err == nil {
+		return "127.0.0.11:8053"
+	}
 	return "127.0.0.11:53"
 }
 
@@ -321,6 +337,7 @@ func (d *DNSServer) handleTCPConn(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	d.tcpQueries.Add(1)
+	d.queriesServed.Add(1)
 
 	// TCP DNS: 2-byte length prefix + DNS message.
 	var lenBuf [2]byte
@@ -345,6 +362,30 @@ func (d *DNSServer) handleTCPConn(conn net.Conn) {
 	var resp []byte
 	if ip, ok := d.Resolve(name); ok && qtype == dnsTypeA {
 		resp = buildAResponse(query, qEnd, name, net.ParseIP(ip).To4(), d.positiveTTL)
+	} else if ip6, ok := d.ResolveAAAA(name); ok && qtype == dnsTypeAAAA {
+		resp = buildAAAAResponse(query, qEnd, name, net.ParseIP(ip6), d.positiveTTL)
+	} else if qtype == dnsTypePTR {
+		// Convert ARPA name to IP before looking up
+		ptrIP := arpaToIP(name)
+		if ptr, ok := d.ResolvePTR(ptrIP); ok {
+			resp = buildPTRResponse(query, qEnd, name, ptr, d.positiveTTL)
+		} else if cached, _, found := d.cache.get(name, qtype); found {
+			resp = cached
+		} else {
+			resp, err = d.forward(query)
+			if err != nil {
+				d.forwardFails.Add(1)
+				resp = buildServFail(query, qEnd, name, qtype)
+			} else {
+				d.forwards.Add(1)
+				isSuccess := isNoError(resp)
+				ttl := d.positiveTTL
+				if !isSuccess {
+					ttl = d.negativeTTL
+				}
+				d.cache.set(name, qtype, resp, ttl)
+			}
+		}
 	} else if cached, _, found := d.cache.get(name, qtype); found {
 		resp = cached
 	} else {
@@ -408,6 +449,14 @@ func (d *DNSServer) handleQuery(query []byte, clientAddr *net.UDPAddr) {
 	// 2. Cache hit (positive or negative, any record type).
 	if cached, _, found := d.cache.get(name, qtype); found {
 		d.cacheHits.Add(1)
+		// BUG-04 fix: the cached response contains the original query's
+		// transaction ID in bytes [0:2]. DNS clients validate that the
+		// response transaction ID matches the query's. Patch the cached
+		// response with the current query's transaction ID.
+		if len(cached) >= 2 && len(query) >= 2 {
+			cached[0] = query[0]
+			cached[1] = query[1]
+		}
 		d.writeResponse(cached, clientAddr)
 		return
 	}
@@ -609,6 +658,10 @@ func parseDNSName(msg []byte, off int) (string, int, error) {
 }
 
 func buildDNSHeader(query []byte, rcode uint16) []byte {
+	return buildDNSHeaderWithAnswers(query, rcode, 1)
+}
+
+func buildDNSHeaderWithAnswers(query []byte, rcode uint16, ancount uint16) []byte {
 	hdr := make([]byte, 12)
 	copy(hdr, query[:2]) // Transaction ID
 	flags := dnsFlagResponse | dnsFlagRD
@@ -616,9 +669,9 @@ func buildDNSHeader(query []byte, rcode uint16) []byte {
 		flags |= rcode & 0x000F
 	}
 	binary.BigEndian.PutUint16(hdr[2:4], flags)
-	binary.BigEndian.PutUint16(hdr[4:6], 1)  // QDCOUNT
-	binary.BigEndian.PutUint16(hdr[6:8], 1)  // ANCOUNT
-	binary.BigEndian.PutUint16(hdr[8:10], 0) // NSCOUNT
+	binary.BigEndian.PutUint16(hdr[4:6], 1)          // QDCOUNT
+	binary.BigEndian.PutUint16(hdr[6:8], ancount)     // ANCOUNT
+	binary.BigEndian.PutUint16(hdr[8:10], 0)          // NSCOUNT
 	binary.BigEndian.PutUint16(hdr[10:12], 0)
 	return hdr
 }
@@ -682,7 +735,7 @@ func nameToWire(name string) []byte {
 }
 
 func buildServFail(query []byte, qEnd int, name string, qtype uint16) []byte {
-	hdr := buildDNSHeader(query, dnsRcodeServFail)
+	hdr := buildDNSHeaderWithAnswers(query, dnsRcodeServFail, 0)
 	resp := make([]byte, 0, 512)
 	resp = append(resp, hdr...)
 	resp = append(resp, query[12:qEnd]...)
@@ -720,15 +773,38 @@ func appendUint16(buf []byte, v uint16) []byte {
 // arpaToIP converts a reverse lookup DNS name (e.g. "2.0.17.172.in-addr.arpa")
 // to a standard IP address string. Returns "" on parse failure.
 func arpaToIP(arpa string) string {
-	arpa = strings.TrimSuffix(arpa, ".in-addr.arpa")
-	arpa = strings.TrimSuffix(arpa, ".ip6.arpa")
-	parts := strings.Split(arpa, ".")
-	if len(parts) == 4 {
-		// IPv4: "2.0.17.172" -> "172.17.0.2"
-		ip := net.ParseIP(parts[3] + "." + parts[2] + "." + parts[1] + "." + parts[0])
-		if ip != nil {
-			return ip.String()
+	if strings.HasSuffix(arpa, ".in-addr.arpa") {
+		arpa = strings.TrimSuffix(arpa, ".in-addr.arpa")
+		parts := strings.Split(arpa, ".")
+		if len(parts) == 4 {
+			ip := net.ParseIP(parts[3] + "." + parts[2] + "." + parts[1] + "." + parts[0])
+			if ip != nil {
+				return ip.String()
+			}
 		}
+		return ""
+	}
+	if strings.HasSuffix(arpa, ".ip6.arpa") {
+		arpa = strings.TrimSuffix(arpa, ".ip6.arpa")
+		parts := strings.Split(arpa, ".")
+		if len(parts) == 32 {
+			hex := make([]byte, 32)
+			for i, p := range parts {
+				hex[31-i] = p[0]
+			}
+			var sb strings.Builder
+			for i := 0; i < 32; i += 4 {
+				if i > 0 {
+					sb.WriteByte(':')
+				}
+				sb.Write(hex[i : i+4])
+			}
+			ip := net.ParseIP(sb.String())
+			if ip != nil {
+				return ip.String()
+			}
+		}
+		return ""
 	}
 	return ""
 }

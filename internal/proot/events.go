@@ -56,7 +56,10 @@ func (b *EventBus) Publish(event ContainerEvent) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for _, fn := range b.subscribers[event.ID] {
-		go fn(event)
+		go func(f EventSubscriber) {
+			defer func() { recover() }()
+			f(event)
+		}(fn)
 	}
 }
 

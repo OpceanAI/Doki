@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -185,6 +186,9 @@ func (c *BuildCache) Delete(key string) {
 	}
 	os.Remove(entry.LayerPath)
 	c.curSize -= entry.Size
+	if c.curSize < 0 {
+		c.curSize = 0
+	}
 	delete(c.index, key)
 	c.saveIndex()
 }
@@ -238,11 +242,15 @@ func GenerateKey(instType string, args []string, env map[string]string) string {
 		h.Write([]byte(a))
 		h.Write([]byte{0})
 	}
-	// Sort env for deterministic keys.
-	for k, v := range env {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		h.Write([]byte(k))
 		h.Write([]byte("="))
-		h.Write([]byte(v))
+		h.Write([]byte(env[k]))
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))

@@ -46,7 +46,10 @@ func (sm *SnapshotManager) Create(id string, metadata map[string]string) (*Snaps
 	}
 
 	// Copy the layer data to the snapshot directory.
-	srcDir := filepath.Join(sm.root, id)
+	// BUG-02 fix: layers are stored under "<root>/layers/<id>", not
+	// "<root>/<id>". The previous code used the wrong path, causing
+	// the snapshot to either fail with ErrNotFound or snapshot wrong data.
+	srcDir := filepath.Join(sm.root, "layers", id)
 	if !common.PathExists(srcDir) {
 		return nil, common.NewErrNotFound("layer", id)
 	}
@@ -121,7 +124,8 @@ func (sm *SnapshotManager) Restore(snapID, targetID string) error {
 		return common.NewErrNotFound("snapshot", snapID)
 	}
 
-	targetDir := filepath.Join(sm.root, targetID)
+	// BUG-02 fix: same path fix as Create — layers are under "<root>/layers/<id>".
+	targetDir := filepath.Join(sm.root, "layers", targetID)
 	// Remove existing target.
 	os.RemoveAll(targetDir)
 

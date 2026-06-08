@@ -87,7 +87,9 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 
 	// pivot_root setup.
 	oldRootDir := filepath.Join(rootfsDir, ".pivot_root")
-	os.MkdirAll(oldRootDir, 0755)
+	if err := os.MkdirAll(oldRootDir, 0755); err != nil {
+		return 0, fmt.Errorf("pivot_root setup: %w", err)
+	}
 	pivotScript := fmt.Sprintf(
 		`mount --bind "%s" "%s" && pivot_root "%s" "%s/.pivot_root" && cd / && umount -l "/.pivot_root" && exec "$@"`,
 		rootfsDir, rootfsDir, rootfsDir, rootfsDir)
@@ -118,9 +120,12 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 
 	// Set up user namespace mapping.
 	if !state.Config.Privileged {
-		r.nsMgr.SetupUserNamespace(cmd.Process.Pid, &ns.Config{
+		if err := r.nsMgr.SetupUserNamespace(cmd.Process.Pid, &ns.Config{
 			User: true, Rootless: true,
-		})
+		}); err != nil {
+			cmd.Process.Kill()
+			return 0, fmt.Errorf("setup user namespace: %w", err)
+		}
 	}
 
 	// Bring up loopback in new network namespace.

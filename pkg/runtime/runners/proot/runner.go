@@ -126,9 +126,9 @@ func (r *Runner) startCLI(ctx context.Context, state *rt.ContainerState) (int, e
 		rootfsDir = filepath.Join(state.Bundle, "rootfs")
 	}
 
-	prootBin := "proot"
-	if _, err := exec.LookPath("doki-proot"); err == nil {
-		prootBin = "doki-proot"
+	prootBin := proot.FindProotBinary()
+	if prootBin == "" {
+		prootBin = "proot"
 	}
 
 	prootArgs := []string{
@@ -143,8 +143,20 @@ func (r *Runner) startCLI(ctx context.Context, state *rt.ContainerState) (int, e
 	}
 	prootArgs = append(prootArgs, args...)
 
+	// Clear LD_PRELOAD family in the parent process so exec.Command does not
+	// propagate libtermux-exec.so to the proot child.
+	proot.UnsetProotKillers()
+
 	cmd := exec.CommandContext(ctx, prootBin, prootArgs...)
-	cmd.Env = state.Config.Env
+	// Use BuildEnv for the same env composition as startWithProot:
+	// StripHostEnv (17-var deny-list) + AndroidEnv defaults + image env +
+	// user env.
+	var imageEnv []string
+	if state.Config.ImageConfig != nil {
+		imageEnv = state.Config.ImageConfig.Env
+	}
+	cmd.Env = proot.BuildEnv(state.Config.Env, imageEnv)
+	cmd.Dir = "/"
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -200,15 +212,34 @@ func (r *Runner) Exec(_ context.Context, id string, cfg *rt.ExecConfig) (int, er
 	}
 
 	uid, gid := parseUser(cfg.User)
-	prootBase := proot.BuildProotBaseArgs(rootfsDir, uid, gid)
+	prootBase, err := proot.BuildProotBaseArgs(rootfsDir, uid, gid)
+	if err != nil {
+		return 0, err
+	}
 	if cfg.WorkingDir != "" {
 		prootBase = append(prootBase, "--cwd", cfg.WorkingDir)
 	}
-	args := append(prootBase, "--", cfg.Args[0])
-	args = append(args, cfg.Args[1:]...)
+	// Build the full argv: [prootBin, prootBase..., "--", userCmd...]
+	// prootBase[0] is "-r", not the proot binary. The previous code passed
+	// prootBase as the entire argv to exec.Command, which made the kernel
+	// try to exec "-r" as a command and fail with "executable file not
+	// found".
+	prootBin := proot.FindProotBinary()
+	if prootBin == "" {
+		prootBin = "proot"
+	}
+	argv := append([]string{prootBin}, prootBase...)
+	argv = append(argv, "--")
+	argv = append(argv, cfg.Args...)
 
-	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Env = cfg.Env
+	// Clear LD_PRELOAD family in the parent process so exec.Command does not
+	// propagate libtermux-exec.so to the proot child.
+	proot.UnsetProotKillers()
+
+	cmd := exec.Command(prootBin, argv[1:]...)
+	// Use BuildEnv for the same env composition as startWithProot.
+	cmd.Env = proot.BuildEnv(cfg.Env, nil)
+	cmd.Dir = "/"
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -236,6 +267,21 @@ func parseUser(user string) (int, int) {
 		}
 	}
 	return uid, gid
+}
+
+// normalizeProotCwd converts a container working directory into a form
+// that proot can safely use with -w. Relative paths like "." or "" must
+// be replaced with "/" to avoid the "<rootfs>/./." chdir warning that
+// proot emits when the guest cwd is ambiguous.
+func normalizeProotCwd(cwd string) string {
+	cwd = filepath.Clean(cwd)
+	if cwd == "." || cwd == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(cwd, "/") {
+		return "/" + cwd
+	}
+	return cwd
 }
 
 func (r *Runner) Kill(_ context.Context, id string, sig syscall.Signal) error {

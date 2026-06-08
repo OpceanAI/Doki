@@ -59,7 +59,7 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 | **Architectures** | ARM64, ARMv7, x86_64 |
 | **Runtime deps** | Zero |
 
-### Binary Availability by Platform (v0.9.2)
+### Binary Availability by Platform (v0.9.3)
 
 | Platform | doki | dokid | doki-compose | doki-init |
 |:---------|:----:|:-----:|:------------:|:---------:|
@@ -125,7 +125,7 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
   <tr>
     <td width="50%" valign="top">
       <h3>Docker Compatible</h3>
-      <p>Same REST API v1.44. Drop-in replacement for Docker CLI and SDKs. docker-compose, docker-py, CI/CD pipelines all work without modification.</p>
+      <p>Same REST API v1.48. Drop-in replacement for Docker CLI and SDKs. docker-compose, docker-py, CI/CD pipelines all work without modification.</p>
     </td>
     <td width="50%" valign="top">
       <h3>Ultra Lightweight</h3>
@@ -493,7 +493,7 @@ services:
 
 ## REST API
 
-Doki exposes the **Docker Engine API v1.44** over a Unix socket. 53 endpoints.
+Doki exposes the **Docker Engine API v1.48** over a Unix socket. 53 endpoints.
 
 ### Key Endpoints
 
@@ -570,6 +570,37 @@ doki run -p 8080:80/tcp -p 8080:80/udp              # TCP and UDP
 doki run -P nginx:alpine                            # Publish all EXPOSEd ports
 doki run -p 8080-8090:80 nginx:alpine               # Port range
 ```
+
+### DokiLink-Lite (Multi-Host Mesh, v0.9.3)
+
+Doki 0.9.3 ships **DokiLink-Lite**, a TCP/UDP proxy + mesh layer that
+lets you forward a container's published port to another Doki
+instance. Pure Go stdlib + `crypto/tls` + `golang.org/x/crypto/nacl`,
+no gVisor, no full WireGuard stack, no NAT traversal, no relay.
+
+```bash
+# Show the local install id and public key.
+doki mesh status
+# install id:    fndwnv3mn7dt
+# public key:    K0dm12xvxzUTBZ3lJkOcOyBrGPPNlCWpTJhcEv0BQys=
+
+# Add a static peer.
+doki link add mybuddy 192.168.1.42:7432 \
+  --pub "$(doki mesh status | awk '/public key/ {print $3}')"
+
+# Now publish a container reachable through the mesh.
+doki run -d -p 0.0.0.0:9090:80 --name web nginx:alpine
+```
+
+Encryption layers:
+
+- **L0 (none)**: loopback only — default on Android/Termux
+- **L1 (TLS 1.3)**: default, signed by per-install ECDSA P-256 CA
+- **L2 (secretbox)**: opt-in with `DOKI_LINK_PAYLOAD_ENC=1`, key
+  derived from both peers' Ed25519 public keys
+
+See `.wiki/Networking.md` for the full architecture, sequence
+diagrams, and limitations (no DHT, no NAT traversal, mDNS LAN-only).
 
 ### DNS Architecture (v0.9.2 rewrite)
 
@@ -904,6 +935,7 @@ Doki/
     cri/                  Kubernetes CRI plugin
     cli/                  CLI library (2200+ lines)
     common/               Shared types, config, utilities
+    netlink/              DokiLink-Lite mesh networking (TCP/UDP proxy, TLS, gossip)
   internal/
     dokivm/               MicroVM subsystem (crosvm, firecracker, qemu)
     namespaces/           Linux namespace management
@@ -915,7 +947,7 @@ Doki/
   kernels/                Pre-compiled VM kernels (ARM64 + x86_64)
 ```
 
-**40 Go source files. 14,500+ lines of code. 4 compiled binaries. Zero external dependencies.**
+**50+ Go source files. 18,000+ lines of code. 4 compiled binaries. Zero external dependencies.**
 
 <br>
 
@@ -953,7 +985,7 @@ Doki/
 
 | Feature | Status | Notes |
 |:--------|:------:|:------|
-| `doki cp` | Stub | Copy files host/container not implemented |
+| `doki cp` | Tested | Copy files host/container with tar extraction |
 | MicroVM isolation | Untested | Code exists, not tested on compatible hardware |
 | gVisor isolation | Untested | runsc detection works, runtime not validated |
 | WASM containers | Untested | wasmedge/iwasm detection works, runtime not validated |
@@ -966,6 +998,18 @@ Doki/
 | Kubernetes CRI | Stub | gRPC server not implemented |
 | CNI networking | Untested | Plugin manager exists, not wired |
 | Network bridge isolation | Partial | Works rootful (iptables DNAT); in proot/native, containers share host network |
+
+### Fixed in v0.9.3 (moved from this list)
+
+- ~~kill not updating state~~ — fixed in v0.9.3, polls with signal(0) after kill
+- ~~stop not updating state~~ — fixed in v0.9.3, always saves exited state
+- ~~Exec no output~~ — fixed in v0.9.3, returns stdout/stderr bytes
+- ~~Compose flags after command ignored~~ — fixed in v0.9.3, parser continues after subcommand
+- ~~Container list Name empty~~ — fixed in v0.9.3, stateToInfo sets Name
+- ~~Create ignores ?name=~~ — fixed in v0.9.3, reads URL query parameter
+- ~~Image inspect Config lowercase~~ — fixed in v0.9.3, PascalCase conversion
+- ~~ps --format not implemented~~ — fixed in v0.9.3, template execution
+- ~~doki cp stub~~ — fixed in v0.9.3, tar extraction working
 
 ### Fixed in v0.9.2 (moved from this list)
 
@@ -983,7 +1027,72 @@ Doki/
 
 ## What's New
 
-### v0.9.2 (Current)
+### v0.9.3 (Current)
+
+This release ships **DokiLink-Lite** (mesh networking) and **190+ bug fixes** across 4 rounds of comprehensive auditing. No breaking changes — fully backward-compatible with v0.9.2.
+
+#### DokiLink-Lite (Mesh Networking)
+
+A TCP/UDP proxy + mesh layer that lets you forward a container's published port to another Doki instance. Pure Go stdlib + `crypto/tls` + `golang.org/x/crypto/nacl`, no gVisor, no full WireGuard stack, no NAT traversal, no relay.
+
+| Feature | Description |
+|:--------|:------------|
+| TCP/UDP proxy | `pkg/netlink/proxy.go` — half-close, idle timeouts, transport wrappers |
+| TLS 1.3 (L1) | Default encryption, per-install ECDSA P-256 CA with SAN DNS names |
+| NaCl secretbox (L2) | Opt-in via `DOKI_LINK_PAYLOAD_ENC=1`, Ed25519-derived key |
+| Install identity | Ed25519 keypair + ECDSA CA at `$DOKI_ROOT/keys/` (0600) |
+| TOFU trust | Public key recorded on first contact, verified on reconnect |
+| Static peers | `$DOKI_ROOT/mesh/peers.json` via `doki link add/rm` |
+| mDNS (opt-in) | Built with `-tags netlink_mdns`, LAN-only discovery |
+| Gossip | Signed JSON messages over TCP, 15s peer discovery tick |
+
+```bash
+doki mesh status                      # show install id + public key
+doki link add mybuddy 192.168.1.42:7432 --pub "..."
+doki mesh ls                          # list known peers
+```
+
+#### Critical Bug Fixes (Round 4)
+
+- **kill not updating state** — process killed but state stayed "running" forever. Now polls with `signal(0)` then saves exited state.
+- **stop not updating state on SIGKILL failure** — always saves exit code 137 before returning.
+- **Exec no output** — runtime wrote to daemon stdout, not HTTP response. Changed to return bytes.
+- **Stop ExitChan race** — replaced channel polling with `signal(0)` polling.
+- **Compose flags after command** — `doki-compose up -p 8080:80` now works (parser was ignoring flags after the subcommand).
+- **flagsWithValue -f** — `rm -f` was skipping the container ID.
+
+#### High Bug Fixes (Round 4)
+
+- **Container list Name always empty** — `stateToInfo` now sets `info.Name`
+- **Create ignores ?name= query param** — reads `?name=` from URL query
+- **Image inspect Config** — converted from OCI lowercase to Docker PascalCase
+- **Image inspect Created** — int64 unix timestamp now converted to RFC3339
+- **ps --format** — template parsing and execution now works
+- **compose ps -q** — returns full container ID, not truncated
+- **ps ID = Name** — CONTAINER ID and NAMES columns now differ
+- **images sha256: prefix** — stripped from REPOSITORY column
+- **Pull exit code** — returns 1 on failure (was always 0)
+
+#### Medium Bug Fixes (Round 4)
+
+- **Rename** returns 204 No Content (was 200)
+- **Stop on already-stopped** returns 304 (was 204)
+- **cp file path** — writes directly to target path, not `target/basename`
+- **kill on non-running** — returns error (was nil)
+- **logs newlines** — each line now ends with `\n`
+- **compose config/logs order** — sorted alphabetically
+- **nftables OUTPUT chain** — port mapping rules now apply to local traffic
+- **IPv6 ARPA** — `arpaToIP` handles `.ip6.arpa.` with 32 nibbles
+- **mesh onMessage** — data race fixed (pubKeyBytes inside RLock)
+
+#### Other Improvements
+
+- `DOKI_USE_SOCAT=1` forces socat fallback for port forwarding
+- `DOKI_LINK_ADDR` overrides gossip listen address
+- `DOKI_LINK_MESH=0` disables mesh entirely on air-gapped hosts
+- `Makefile` produces `.tar.gz` archives with SHA256 checksums
+
+### v0.9.2
 
 This release is a **stability + correctness** pass over v0.9.1. No new user-facing commands, but a long list of bugs that were breaking real workflows are now fixed.
 

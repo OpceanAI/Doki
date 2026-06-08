@@ -74,15 +74,23 @@ func HostResolvConf() *ResolvConf {
 
 // NameserverList returns the nameservers as host:port strings suitable for dialling.
 // Appends ":53" to nameservers without a port.
+//
+// BUG-12 fix: the previous code used strings.Contains(ns, ":") to detect
+// whether a port was present. IPv6 addresses contain colons
+// (e.g. "2001:4860:4860::8888") and were incorrectly treated as already
+// having a port. Use net.SplitHostPort to correctly distinguish bare IPs
+// from host:port pairs.
 func (rc *ResolvConf) NameserverList() []string {
 	if len(rc.Nameservers) == 0 {
 		return []string{"8.8.8.8:53", "8.8.4.4:53"}
 	}
 	list := make([]string, len(rc.Nameservers))
 	for i, ns := range rc.Nameservers {
-		if strings.Contains(ns, ":") {
+		if _, _, err := net.SplitHostPort(ns); err == nil {
+			// Already has a port — use as-is.
 			list[i] = ns
 		} else {
+			// Bare IP (v4 or v6) — append default port.
 			list[i] = net.JoinHostPort(ns, "53")
 		}
 	}

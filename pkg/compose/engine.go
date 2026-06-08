@@ -1,13 +1,16 @@
 package compose
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -69,6 +72,7 @@ type Service struct {
 	StopGracePeriod string           `yaml:"stop_grace_period,omitempty"`
 	Deploy       *DeployConfig       `yaml:"deploy,omitempty"`
 	Profile      string              `yaml:"profile,omitempty"`
+	Profiles     []string            `yaml:"profiles,omitempty"`
 	Extends      interface{}         `yaml:"extends,omitempty"`
 	Secrets      []string            `yaml:"secrets,omitempty"`
 	Configs      []string            `yaml:"configs,omitempty"`
@@ -78,7 +82,7 @@ type Service struct {
 	OomKillDisable bool              `yaml:"oom_kill_disable,omitempty"`
 	OomScoreAdj  int                 `yaml:"oom_score_adj,omitempty"`
 	MacAddress   string              `yaml:"mac_address,omitempty"`
-	LogDriver    string              `yaml:"logging.driver,omitempty"`
+	Logging      *LoggingConfig      `yaml:"logging,omitempty"`
 	Ulimits      map[string]interface{} `yaml:"ulimits,omitempty"`
 	Tmpfs        interface{}         `yaml:"tmpfs,omitempty"`
 	BlkioConfig  map[string]interface{} `yaml:"blkio_config,omitempty"`
@@ -109,6 +113,12 @@ type HealthcheckConfig struct {
 	StartPeriod   string      `yaml:"start_period,omitempty"`
 	StartInterval string      `yaml:"start_interval,omitempty"`
 	Disable       bool        `yaml:"disable,omitempty"`
+}
+
+// LoggingConfig defines logging settings.
+type LoggingConfig struct {
+	Driver  string            `yaml:"driver,omitempty"`
+	Options map[string]string `yaml:"options,omitempty"`
 }
 
 // DeployConfig defines deployment settings.
@@ -176,6 +186,7 @@ type Engine struct {
 	projectDir  string
 	envVars     map[string]string
 	netCreated  map[string]bool
+	noBuild     bool
 }
 
 // NewEngine creates a new compose engine.
@@ -240,13 +251,22 @@ func (e *Engine) Load(path string) error {
 
 	// Validate compose file version
 	if file.Version != "" {
-		ver, err := strconv.ParseFloat(file.Version, 64)
+		parts := strings.SplitN(file.Version, ".", 3)
+		if len(parts) < 1 {
+			return fmt.Errorf("invalid compose file version: %s", file.Version)
+		}
+		major, err := strconv.Atoi(parts[0])
 		if err != nil {
 			return fmt.Errorf("invalid compose file version: %s", file.Version)
 		}
-		if ver < 3.0 {
-			return fmt.Errorf("unsupported compose file version: %s (requires >= 3.0)", file.Version)
+		minor := 0
+		if len(parts) > 1 {
+			minor, _ = strconv.Atoi(parts[1])
 		}
+		if major < 2 {
+			return fmt.Errorf("unsupported compose file version: %s (requires >= 2.0)", file.Version)
+		}
+		_ = minor
 	}
 
 	// Y24: Variable interpolation.
@@ -262,6 +282,11 @@ func (e *Engine) Load(path string) error {
 		if err := e.resolveExtends(name); err != nil {
 			return fmt.Errorf("resolve extends for %s: %w", name, err)
 		}
+	}
+
+	// Validate compose file structure (after extends resolution).
+	if err := Validate(e.file); err != nil {
+		return fmt.Errorf("validate: %w", err)
 	}
 
 	return nil
@@ -612,6 +637,7 @@ func (e *Engine) mergeService(target, base *Service) {
 	if target.Entrypoint == nil && base.Entrypoint != nil {
 		target.Entrypoint = base.Entrypoint
 	}
+	// Merge environment: if target has none, use base
 	if target.Environment == nil && base.Environment != nil {
 		target.Environment = base.Environment
 	}
@@ -690,6 +716,15 @@ func (e *Engine) mergeService(target, base *Service) {
 	if target.Profile == "" {
 		target.Profile = base.Profile
 	}
+	if len(target.Profiles) == 0 {
+		target.Profiles = base.Profiles
+	}
+	if target.ContainerName == "" {
+		target.ContainerName = base.ContainerName
+	}
+	if target.Logging == nil {
+		target.Logging = base.Logging
+	}
 	if len(target.Secrets) == 0 {
 		target.Secrets = base.Secrets
 	}
@@ -726,14 +761,22 @@ func (e *Engine) Up() error {
 		e.netCreated[name] = true
 	}
 
+	// Build images for services with build config.
+	if err := e.Build(); err != nil {
+		return err
+	}
+
 	// Start services in dependency order.
-	ordered := e.orderServices()
+	ordered, err := e.orderServices()
+	if err != nil {
+		return fmt.Errorf("dependency ordering: %w", err)
+	}
 
 	for _, svcName := range ordered {
 		svc := e.file.Services[svcName]
 
 		// Y8: Skip services whose profile doesn't match.
-		if !e.profileMatches(svc.Profile, profiles) {
+		if !e.profileMatches(svc, profiles) {
 			continue
 		}
 
@@ -742,8 +785,15 @@ func (e *Engine) Up() error {
 			return fmt.Errorf("wait for dependencies of %s: %w", svcName, err)
 		}
 
-		if err := e.startService(svcName); err != nil {
-			return fmt.Errorf("start service %s: %w", svcName, err)
+		// Y: Scale support — start N instances if scale > 1.
+		scale := svc.Scale
+		if scale <= 0 {
+			scale = 1
+		}
+		for i := 1; i <= scale; i++ {
+			if err := e.startServiceN(svcName, i); err != nil {
+				return fmt.Errorf("start service %s instance %d: %w", svcName, i, err)
+			}
 		}
 	}
 
@@ -757,39 +807,91 @@ func (e *Engine) waitForDependencies(svc *Service) error {
 	if deps == nil {
 		return nil
 	}
-	var waitFor []string
+
+	type depWait struct {
+		name      string
+		condition string
+	}
+	var toWait []depWait
+
 	switch d := deps.(type) {
 	case []interface{}:
 		for _, dep := range d {
 			if m, ok := dep.(map[string]interface{}); ok {
-				if cond, _ := m["condition"].(string); cond == "service_healthy" {
-					if name, _ := m["service"].(string); name != "" {
-						waitFor = append(waitFor, name)
-					}
+				name, _ := m["service"].(string)
+				cond, _ := m["condition"].(string)
+				if name == "" {
+					continue
 				}
+				if cond == "" {
+					cond = "service_started"
+				}
+				toWait = append(toWait, depWait{name: name, condition: cond})
 			}
 		}
 	case map[string]interface{}:
-		for dep, cond := range d {
-			if s, ok := cond.(string); ok && s == "service_healthy" {
-				waitFor = append(waitFor, dep)
+		for name, cond := range d {
+			condStr, _ := cond.(string)
+			if condStr == "" {
+				condStr = "service_started"
 			}
+			toWait = append(toWait, depWait{name: name, condition: condStr})
 		}
 	}
-	for _, name := range waitFor {
-		containerID := e.containerName(name)
-		timeout := 60
-		var healthy bool
-		for i := 0; i < timeout; i++ {
-			state, err := e.runtime.State(containerID)
-			if err == nil && state.HealthStatus != nil && state.HealthStatus.Status == "healthy" {
-				healthy = true
-				break
-			}
-			time.Sleep(time.Second)
+
+	timeout := 60
+	if t := os.Getenv("COMPOSE_DEPENDENCY_TIMEOUT"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil && v > 0 {
+			timeout = v
 		}
-		if !healthy {
-			return fmt.Errorf("dependency %s not healthy after %ds", name, timeout)
+	}
+	for _, dep := range toWait {
+		containerID := e.containerName(dep.name)
+		switch dep.condition {
+		case "service_started":
+			// Wait for container to be running.
+			var running bool
+			for i := 0; i < timeout; i++ {
+				state, err := e.runtime.State(containerID)
+				if err == nil && state.Status != "" && state.Status != common.StateCreated {
+					running = true
+					break
+				}
+				time.Sleep(time.Second)
+			}
+			if !running {
+				return fmt.Errorf("dependency %s not started after %ds", dep.name, timeout)
+			}
+
+		case "service_healthy":
+			// Wait for container to be healthy.
+			var healthy bool
+			for i := 0; i < timeout; i++ {
+				state, err := e.runtime.State(containerID)
+				if err == nil && state.HealthStatus != nil && state.HealthStatus.Status == "healthy" {
+					healthy = true
+					break
+				}
+				time.Sleep(time.Second)
+			}
+			if !healthy {
+				return fmt.Errorf("dependency %s not healthy after %ds", dep.name, timeout)
+			}
+
+		case "service_completed_successfully":
+			// Wait for container to exit with code 0.
+			var completed bool
+			for i := 0; i < timeout; i++ {
+				state, err := e.runtime.State(containerID)
+				if err == nil && state.Status == common.StateExited && state.ExitCode == 0 {
+					completed = true
+					break
+				}
+				time.Sleep(time.Second)
+			}
+			if !completed {
+				return fmt.Errorf("dependency %s did not complete successfully after %ds", dep.name, timeout)
+			}
 		}
 	}
 	return nil
@@ -805,16 +907,31 @@ func (e *Engine) getProfilesFilter() []string {
 }
 
 // Y8: profileMatches checks if a service profile matches the filter.
-func (e *Engine) profileMatches(svcProfile string, profiles []string) bool {
+func (e *Engine) profileMatches(svc *Service, profiles []string) bool {
+	// Services with no profile always start
+	if svc.Profile == "" && len(svc.Profiles) == 0 {
+		return true
+	}
+	// If no profiles specified, exclude services that have a profile
 	if len(profiles) == 0 {
-		return true // No filter, include all.
+		return false
 	}
-	if svcProfile == "" {
-		return true // Services with no profile always start.
+	// Check singular Profile field
+	if svc.Profile != "" {
+		for _, p := range profiles {
+			if strings.TrimSpace(p) == svc.Profile {
+				return true
+			}
+		}
 	}
-	for _, p := range profiles {
-		if strings.TrimSpace(p) == svcProfile {
-			return true
+	// Check plural Profiles field
+	if len(svc.Profiles) > 0 {
+		for _, sp := range svc.Profiles {
+			for _, p := range profiles {
+				if strings.TrimSpace(p) == sp {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -856,6 +973,36 @@ func (e *Engine) Stop() error {
 		}
 		if err := e.runtime.Stop(containerName, timeout); err != nil {
 			slog.Warn("stop", "service", svcName, "err", err)
+		}
+	}
+
+	return nil
+}
+
+// Start starts stopped services. For containers that exited, recreates them via Up.
+func (e *Engine) Start() error {
+	if e.file == nil {
+		return fmt.Errorf("no compose file loaded")
+	}
+
+	for svcName := range e.file.Services {
+		containerName := e.containerName(svcName)
+		// Check if container exists and is stopped (exited).
+		state, err := e.runtime.State(containerName)
+		if err != nil || state == nil {
+			// Container doesn't exist, create it.
+			if err := e.startService(svcName); err != nil {
+				slog.Warn("start", "service", svcName, "err", err)
+			}
+			continue
+		}
+		if state.Status == common.StateRunning {
+			continue // already running
+		}
+		// Stopped/exited: need to recreate.
+		_ = e.runtime.Delete(containerName, true)
+		if err := e.startService(svcName); err != nil {
+			slog.Warn("start", "service", svcName, "err", err)
 		}
 	}
 
@@ -916,16 +1063,23 @@ func (e *Engine) Pull() error {
 		return fmt.Errorf("no compose file loaded")
 	}
 
+	pulled := make(map[string]bool) // Track pulled images to avoid duplicates
+
 	for name, svc := range e.file.Services {
 		imageName := svc.Image
 		if imageName == "" {
 			imageName = e.project + "_" + name
 		}
 
+		if pulled[imageName] {
+			continue // Skip if already pulled
+		}
+
 		if _, err := e.image.Pull(imageName); err != nil {
 			return fmt.Errorf("pull %s: %w", imageName, err)
 		}
 		fmt.Printf("Pulled %s\n", imageName)
+		pulled[imageName] = true
 	}
 	return nil
 }
@@ -958,13 +1112,18 @@ func (e *Engine) Build() error {
 		if dockerfile == "" {
 			dockerfile = "Dockerfile"
 		}
+		// Resolve dockerfile path relative to context if not absolute
+		if !filepath.IsAbs(dockerfile) {
+			dockerfile = filepath.Join(context, dockerfile)
+		}
 
 		buildCfg := &builder.BuildConfig{
-			Context:  context,
-			Dokifile: dockerfile,
-			BuildArgs: svc.Build.Args,
-			Labels:    svc.Build.Labels,
-			Target:    svc.Build.Target,
+			Context:     context,
+			Dokifile:    dockerfile,
+			Tags:        []string{svc.Image},
+			BuildArgs:   svc.Build.Args,
+			Labels:      svc.Build.Labels,
+			Target:      svc.Build.Target,
 			NetworkMode: svc.Build.Network,
 		}
 
@@ -998,15 +1157,52 @@ func (e *Engine) Ps() ([]common.ContainerInfo, error) {
 
 	containers := make([]common.ContainerInfo, 0)
 	for _, state := range states {
-		shortID := state.ID
-		if len(shortID) > 12 {
-			shortID = shortID[:12]
+		name := state.ID
+		// Filter: only include containers that belong to this compose project.
+		// Containers may be named by container_name (e.g., "test-db-svc")
+		// or by project convention (e.g., "project_service_1").
+		belongsToProject := false
+		for svcName := range e.file.Services {
+			if e.containerName(svcName) == name || e.containerNameN(svcName, 1) == name {
+				belongsToProject = true
+				break
+			}
 		}
+		if !belongsToProject {
+			continue
+		}
+
+		shortID := state.ID
+
+		// Determine image from state or service config.
+		imageName := ""
+		for svcName, svc := range e.file.Services {
+			if e.containerName(svcName) == name || e.containerNameN(svcName, 1) == name {
+				imageName = svc.Image
+				break
+			}
+		}
+
+		cmd := ""
+		if state.Config != nil && len(state.Config.Args) > 0 {
+			cmd = strings.Join(state.Config.Args, " ")
+		}
+		if len(cmd) > 20 {
+			cmd = cmd[:17] + "..."
+		}
+
+		status := string(state.Status)
+		if state.Status == common.StateRunning {
+			status = "Up"
+		}
+
 		containers = append(containers, common.ContainerInfo{
 			ID:      shortID,
-			Names:   []string{"/" + shortID},
+			Image:   imageName,
+			Names:   []string{"/" + name},
+			Command: cmd,
 			State:   state.Status,
-			Status:  string(state.Status),
+			Status:  status,
 			Created: state.Created.Unix(),
 		})
 	}
@@ -1022,7 +1218,19 @@ func (e *Engine) containerName(svcName string) string {
 	return e.project + "_" + svcName + "_1"
 }
 
+func (e *Engine) containerNameN(svcName string, n int) string {
+	svc := e.file.Services[svcName]
+	if svc != nil && svc.ContainerName != "" {
+		return svc.ContainerName
+	}
+	return fmt.Sprintf("%s_%s_%d", e.project, svcName, n)
+}
+
 func (e *Engine) startService(name string) error {
+	return e.startServiceN(name, 1)
+}
+
+func (e *Engine) startServiceN(name string, instance int) error {
 	svc, ok := e.file.Services[name]
 	if !ok {
 		return fmt.Errorf("service %s not found", name)
@@ -1066,7 +1274,7 @@ func (e *Engine) startService(name string) error {
 		cmd = []string{"/bin/sh"}
 	}
 
-	containerID := e.containerName(name)
+	containerID := e.containerNameN(name, instance)
 
 	// Resolve image layers so rootfs gets populated.
 	var imageLayers []string
@@ -1166,7 +1374,9 @@ func (e *Engine) startService(name string) error {
 
 	// Y6: Deploy resources.
 	if svc.Deploy != nil && svc.Deploy.Resources != nil {
-		cfg.Resources = &runtime.Resources{}
+		if cfg.Resources == nil {
+			cfg.Resources = &runtime.Resources{}
+		}
 		if svc.Deploy.Resources.Limits != nil {
 			if svc.Deploy.Resources.Limits.CPUs != "" {
 				cfg.Resources.NanoCpus = parseCPU(svc.Deploy.Resources.Limits.CPUs)
@@ -1251,7 +1461,9 @@ func (e *Engine) startService(name string) error {
 
 	// Wire remaining compose fields
 	if svc.Platform != "" {
-		cfg.ImageRef = svc.Platform + "/" + cfg.ImageRef
+		cfg.ImageRef = svc.Platform + "/" + imageName
+	} else {
+		cfg.ImageRef = imageName
 	}
 	if svc.Runtime != "" {
 		cfg.Runtime = svc.Runtime
@@ -1278,7 +1490,16 @@ func (e *Engine) startService(name string) error {
 
 	// Create container.
 	if _, err := e.runtime.Create(cfg); err != nil {
-		return fmt.Errorf("create %s: %w", name, err)
+		var conflict *common.ErrConflict
+		if errors.As(err, &conflict) {
+			// Container already exists — force delete and recreate.
+			_ = e.runtime.Delete(containerID, true)
+			if _, err := e.runtime.Create(cfg); err != nil {
+				return fmt.Errorf("recreate %s: %w", name, err)
+			}
+		} else {
+			return fmt.Errorf("create %s: %w", name, err)
+		}
 	}
 
 	// Y1/Y3: Connect container to networks.
@@ -1390,7 +1611,7 @@ func (e *Engine) serviceNetworks(name string, svc *Service) []string {
 	return nil
 }
 
-func (e *Engine) orderServices() []string {
+func (e *Engine) orderServices() ([]string, error) {
 	ordered := make([]string, 0, len(e.file.Services))
 	visited := make(map[string]bool)
 	inStack := make(map[string]bool)
@@ -1432,14 +1653,11 @@ func (e *Engine) orderServices() []string {
 
 	for name := range e.file.Services {
 		if !dfs(name) {
-			for name := range e.file.Services {
-				ordered = append(ordered, name)
-			}
-			return ordered
+			return nil, fmt.Errorf("circular dependency detected involving service %q", name)
 		}
 	}
 
-	return ordered
+	return ordered, nil
 }
 
 func toStringSlice(v interface{}) []string {
@@ -1478,9 +1696,14 @@ func toEnvSlice(v interface{}) []string {
 	case []string:
 		return val
 	case map[string]interface{}:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
 		result := make([]string, 0, len(val))
-		for k, val := range val {
-			result = append(result, fmt.Sprintf("%s=%v", k, val))
+		for _, k := range keys {
+			result = append(result, fmt.Sprintf("%s=%v", k, val[k]))
 		}
 		return result
 	}
@@ -1526,6 +1749,10 @@ func parseVolume(spec, projectDir string) common.Mount {
 	case 2:
 		if strings.HasPrefix(parts[1], "/") || strings.HasPrefix(parts[1], ".") {
 			// source:target
+			mnt.Source = parts[0]
+			mnt.Target = parts[1]
+		} else if strings.HasPrefix(parts[0], "/") || strings.HasPrefix(parts[0], ".") {
+			// ./data:/app or /host/path:/container/path
 			mnt.Source = parts[0]
 			mnt.Target = parts[1]
 		} else {
@@ -1630,9 +1857,297 @@ func parseDuration(s string) (time.Duration, error) {
 	if err == nil {
 		return d, nil
 	}
-	// Try with "s" suffix if it's a bare number.
 	if n, err2 := strconv.Atoi(s); err2 == nil {
 		return time.Duration(n) * time.Second, nil
 	}
 	return 0, err
+}
+
+func (e *Engine) StopServices(services []string) error {
+	if e.file == nil {
+		return fmt.Errorf("no compose file loaded")
+	}
+	targets := e.file.Services
+	if len(services) > 0 {
+		targets = make(map[string]*Service)
+		for _, s := range services {
+			svc, ok := e.file.Services[s]
+			if !ok {
+				return fmt.Errorf("no such service: %s", s)
+			}
+			targets[s] = svc
+		}
+	}
+	for svcName, svc := range targets {
+		containerName := e.containerName(svcName)
+		timeout := 10
+		if svc.StopGracePeriod != "" {
+			if d, err := parseDuration(svc.StopGracePeriod); err == nil {
+				timeout = int(d.Seconds())
+			}
+		}
+		if err := e.runtime.Stop(containerName, timeout); err != nil {
+			slog.Warn("stop", "service", svcName, "err", err)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) StartServices(services []string) error {
+	if e.file == nil {
+		return fmt.Errorf("no compose file loaded")
+	}
+	targets := e.file.Services
+	if len(services) > 0 {
+		targets = make(map[string]*Service)
+		for _, s := range services {
+			svc, ok := e.file.Services[s]
+			if !ok {
+				return fmt.Errorf("no such service: %s", s)
+			}
+			targets[s] = svc
+		}
+	}
+	for svcName := range targets {
+		containerName := e.containerName(svcName)
+		state, err := e.runtime.State(containerName)
+		if err != nil || state == nil {
+			if err := e.startService(svcName); err != nil {
+				slog.Warn("start", "service", svcName, "err", err)
+			}
+			continue
+		}
+		if state.Status == common.StateRunning {
+			continue
+		}
+		_ = e.runtime.Delete(containerName, true)
+		if err := e.startService(svcName); err != nil {
+			slog.Warn("start", "service", svcName, "err", err)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) RestartServices(services []string) error {
+	if e.file == nil {
+		return fmt.Errorf("no compose file loaded")
+	}
+	targets := e.file.Services
+	if len(services) > 0 {
+		targets = make(map[string]*Service)
+		for _, s := range services {
+			svc, ok := e.file.Services[s]
+			if !ok {
+				return fmt.Errorf("no such service: %s", s)
+			}
+			targets[s] = svc
+		}
+	}
+	for svcName, svc := range targets {
+		containerName := e.containerName(svcName)
+		timeout := 10
+		if svc.StopGracePeriod != "" {
+			if d, err := parseDuration(svc.StopGracePeriod); err == nil {
+				timeout = int(d.Seconds())
+			}
+		}
+		if err := e.runtime.Stop(containerName, timeout); err != nil {
+			slog.Warn("stop", "service", svcName, "err", err)
+		}
+		if err := e.runtime.Delete(containerName, true); err != nil {
+			slog.Warn("delete", "service", svcName, "err", err)
+		}
+		if err := e.startService(svcName); err != nil {
+			return fmt.Errorf("restart %s: %w", svcName, err)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) KillServices(signal string, services []string) error {
+	if e.file == nil {
+		return fmt.Errorf("no compose file loaded")
+	}
+	targets := e.file.Services
+	if len(services) > 0 {
+		targets = make(map[string]*Service)
+		for _, s := range services {
+			svc, ok := e.file.Services[s]
+			if !ok {
+				return fmt.Errorf("no such service: %s", s)
+			}
+			targets[s] = svc
+		}
+	}
+	sig := parseSignalStr(signal)
+	for svcName := range targets {
+		containerName := e.containerName(svcName)
+		if err := e.runtime.Kill(containerName, sig); err != nil {
+			slog.Warn("kill", "service", svcName, "err", err)
+		}
+	}
+	return nil
+}
+
+func parseSignalStr(s string) syscall.Signal {
+	s = strings.TrimPrefix(strings.ToUpper(s), "SIG")
+	signals := map[string]syscall.Signal{
+		"HUP": syscall.SIGHUP, "INT": syscall.SIGINT, "QUIT": syscall.SIGQUIT,
+		"KILL": syscall.SIGKILL, "USR1": syscall.SIGUSR1, "USR2": syscall.SIGUSR2,
+		"TERM": syscall.SIGTERM, "CONT": syscall.SIGCONT, "STOP": syscall.SIGSTOP,
+		"9": syscall.SIGKILL, "15": syscall.SIGTERM, "1": syscall.SIGHUP,
+	}
+	if sig, ok := signals[s]; ok {
+		return sig
+	}
+	return syscall.SIGTERM
+}
+
+func (e *Engine) PauseServices(services []string) error {
+	if e.file == nil {
+		return fmt.Errorf("no compose file loaded")
+	}
+	targets := e.file.Services
+	if len(services) > 0 {
+		targets = make(map[string]*Service)
+		for _, s := range services {
+			svc, ok := e.file.Services[s]
+			if !ok {
+				return fmt.Errorf("no such service: %s", s)
+			}
+			targets[s] = svc
+		}
+	}
+	for svcName := range targets {
+		containerName := e.containerName(svcName)
+		if err := e.runtime.Pause(containerName); err != nil {
+			slog.Warn("pause", "service", svcName, "err", err)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) UnpauseServices(services []string) error {
+	if e.file == nil {
+		return fmt.Errorf("no compose file loaded")
+	}
+	targets := e.file.Services
+	if len(services) > 0 {
+		targets = make(map[string]*Service)
+		for _, s := range services {
+			svc, ok := e.file.Services[s]
+			if !ok {
+				return fmt.Errorf("no such service: %s", s)
+			}
+			targets[s] = svc
+		}
+	}
+	for svcName := range targets {
+		containerName := e.containerName(svcName)
+		if err := e.runtime.Unpause(containerName); err != nil {
+			slog.Warn("unpause", "service", svcName, "err", err)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) Create() error {
+	return e.Up()
+}
+
+func (e *Engine) Top(services []string) error {
+	if e.file == nil {
+		return fmt.Errorf("no compose file loaded")
+	}
+	targets := e.file.Services
+	if len(services) > 0 {
+		targets = make(map[string]*Service)
+		for _, s := range services {
+			svc, ok := e.file.Services[s]
+			if !ok {
+				return fmt.Errorf("no such service: %s", s)
+			}
+			targets[s] = svc
+		}
+	}
+	for svcName := range targets {
+		containerName := e.containerName(svcName)
+		fmt.Printf("=== %s ===\n", svcName)
+		state, err := e.runtime.State(containerName)
+		if err != nil {
+			fmt.Printf("  (error: %v)\n", err)
+			continue
+		}
+		if state.Status != common.StateRunning {
+			fmt.Printf("  (not running: %s)\n", state.Status)
+			continue
+		}
+		fmt.Printf("  PID: %d  STATUS: %s\n", state.Pid, state.Status)
+		if state.Config != nil && len(state.Config.Args) > 0 {
+			fmt.Printf("  CMD: %s\n", strings.Join(state.Config.Args, " "))
+		}
+	}
+	return nil
+}
+
+func (e *Engine) PrintConfigSubset(services, volumes, networks bool) {
+	if e.file == nil {
+		return
+	}
+	if services {
+		names := make([]string, 0, len(e.file.Services))
+		for name := range e.file.Services {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Println(name)
+		}
+	}
+	if volumes {
+		names := make([]string, 0, len(e.file.Volumes))
+		for name := range e.file.Volumes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Println(name)
+		}
+	}
+	if networks {
+		names := make([]string, 0, len(e.file.Networks))
+		for name := range e.file.Networks {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Println(name)
+		}
+	}
+}
+
+func (e *Engine) ProjectImages() ([]common.ImageInfo, error) {
+	if e.file == nil {
+		return nil, fmt.Errorf("no compose file loaded")
+	}
+	allImgs, err := e.image.List()
+	if err != nil {
+		return nil, err
+	}
+	projectImgs := make(map[string]bool)
+	for _, svc := range e.file.Services {
+		if svc.Image != "" {
+			projectImgs[svc.Image] = true
+		}
+	}
+	var result []common.ImageInfo
+	for _, img := range allImgs {
+		for _, tag := range img.RepoTags {
+			if projectImgs[tag] {
+				result = append(result, img)
+				break
+			}
+		}
+	}
+	return result, nil
 }

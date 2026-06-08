@@ -342,3 +342,113 @@ Antes de v0.9.2: `ip link` mostraba decenas de interfaces `veth*` después de co
 - `pkg/network/android_dns.go` — descubrimiento DNS en Android
 - `pkg/network/rootless.go` — integración con pasta
 - `pkg/common/resolv.go` — parsing de resolv.conf
+- `pkg/netlink/proxy.go` — reenviador TCP (reemplaza socat)
+- `pkg/netlink/udp.go` — reenviador UDP con mapa de sesiones
+- `pkg/netlink/keys.go` — identidad de instalación, Ed25519 + ECDSA P-256
+- `pkg/netlink/crypto.go` — envolturas TLS 1.3 y NaCl secretbox
+- `pkg/netlink/peer.go` — registro de pares y almacén de confianza
+- `pkg/netlink/mesh.go` — protocolo gossip, registro de pares, enrutador mesh
+- `pkg/netlink/discovery_static.go` — cargador de `peers.json`
+- `pkg/netlink/discovery_mdns_{on,off}.go` — servicio mDNS (opt-in)
+
+## DokiLink-Lite (Mesh Multi-Host)
+
+Doki 0.9.3 introduce **DokiLink-Lite**: una capa de proxy TCP/UDP +
+descubrimiento mesh que permite reenviar un puerto publicado de un
+contenedor a otra instancia Doki en la misma LAN (o más allá, si
+configura pares estáticos manualmente). Es intencionalmente mínimo:
+sin gVisor, sin stack completo de WireGuard, sin NAT traversal, sin
+servidor de retransmisión.
+
+### Capas de Cifrado
+
+| Capa | Cuándo | Librería | Notas |
+|:-----|:-------|:---------|:------|
+| L0 (ninguna) | solo loopback | — | por defecto en Android/Termux |
+| L1 (TLS 1.3) | cualquier inter-host | `crypto/tls` stdlib | por defecto, firmado por CA por instalación |
+| L2 (secretbox) | solo payload | `golang.org/x/crypto/nacl/secretbox` | opt-in con `DOKI_LINK_PAYLOAD_ENC=1`, clave derivada de las pubkeys Ed25519 de ambos pares |
+
+### Arquitectura
+
+```mermaid
+sequenceDiagram
+    participant Cliente
+    participant DokiA as Doki (A)
+    participant TLS as TLS 1.3
+    participant Box as secretbox
+    participant DokiB as Doki (B)
+    participant Contenedor
+
+    Cliente->>DokiA: dial :9090
+    DokiA->>TLS: WrapServer (L1)
+    TLS->>Box: WrapServer (L2, opt-in)
+    Box->>DokiB: reenvío TCP
+    DokiB->>Contenedor: dial :8080
+    Contenedor-->>DokiB: respuesta
+    DokiB-->>Box: reenviar de vuelta
+    Box-->>TLS: reenviar de vuelta
+    TLS-->>DokiA: reenviar de vuelta
+    DokiA-->>Cliente: respuesta
+```
+
+### Descubrimiento de Pares
+
+```mermaid
+flowchart LR
+    A[Identidad de instalación] --> B{Descubrimiento}
+    B -->|estático| P[peers.json]
+    B -->|mDNS| M[navegador mdns]
+    P --> T[TrustStore]
+    M --> T
+    T --> Mesh[Registro mesh]
+    Mesh --> G[Gossip cada 15s]
+    G --> Contenedores[Anuncios de contenedores]
+```
+
+### CLI
+
+```bash
+# Inspeccionar la identidad local de instalación.
+doki mesh status
+# install id:    fndwnv3mn7dt
+# public key:    K0dm12xvxzUTBZ3lJkOcOyBrGPPNlCWpTJhcEv0BQys=
+# ca fingerprint: cc4165e0ef4c
+# ca expires:    2027-06-07
+
+# Agregar un par estático.
+doki link add mybuddy 192.168.1.42:7432 --pub "$(doki mesh status | awk '/public key/ {print $3}')"
+
+# Listar pares.
+doki mesh ls
+# PEER ID    NAME       ADDRESS            LAST SEEN
+# mybuddy    mybuddy    192.168.1.42:7432  2s
+
+# Eliminar un par.
+doki link rm mybuddy
+```
+
+### Limitaciones (lea antes de desplegar)
+
+1. **Sin NAT traversal, sin relay**: DokiLink solo funciona cuando
+   ambos pares pueden alcanzarse en el puerto de gossip (por defecto
+   `:7432`). Para escenarios cross-NAT, ejecute primero una
+   superposición Tailscale / Nebula.
+2. **mDNS solo en LAN**: construido con `-tags netlink_mdns`. Las
+   builds por defecto incluyen un stub. Use pares estáticos para
+   cross-VLAN.
+3. **El framing secretbox por datagrama** tiene 24 bytes de nonce
+   + 16 bytes de overhead — las cargas UDP pesadas pagan un costo
+   fijo por paquete.
+4. **Sin DHT, sin auto-descubrimiento más allá de mDNS / JSON
+   estático**: el `peers.json` es la única fuente de verdad para
+   pares entre redes.
+5. **El contenedor ve la red del host** en modo proot+Termux: el
+   reenvío DokiLink es un relevo TCP/UDP en el loopback del host,
+   no un puente de namespaces de red. Los contenedores en modo
+   `proot` ya pueden alcanzar cualquier servicio del host, así que
+   el proxy no añade una frontera de seguridad en ese modo.
+6. **El protocolo de cable es JSON, limitado a 4 KiB por mensaje**:
+   gRPC / protobuf es una característica futura de v0.11+.
+7. **Vida útil de la CA: 365 días, certificados de enlace 90
+   días**: re-emita con `doki mesh status` para confirmar expiración.
+   La herramienta de rotación está planificada para v0.10.

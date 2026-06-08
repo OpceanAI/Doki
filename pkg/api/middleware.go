@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/hex"
 	"log"
 	"log/slog"
 	"net/http"
@@ -93,11 +92,7 @@ func (m *Middleware) RequestID(next http.Handler) http.Handler {
 }
 
 func commonGenID(n int) string {
-	b := make([]byte, n/2)
-	for i := range b {
-		b[i] = byte(time.Now().UnixNano()>>(i*8)) ^ byte(i*31)
-	}
-	return hex.EncodeToString(b)
+	return common.GenerateID(n)
 }
 
 // RateLimit implements simple token bucket rate limiting.
@@ -170,16 +165,13 @@ func (rl *RateLimit) RateLimitMiddleware(next http.Handler) http.Handler {
 // GracefulShutdown handles OS signals for graceful shutdown.
 func GracefulShutdown(ctx context.Context, server *http.Server, timeout time.Duration) {
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sig)
 
 	for {
 		select {
 		case s := <-sig:
 			switch s {
-			case syscall.SIGHUP:
-				log.Println("[doki] received SIGHUP - reloading configuration")
-				// Reload config.
 			default:
 				log.Println("[doki] shutting down gracefully...")
 				shutdownCtx, cancel := context.WithTimeout(ctx, timeout)

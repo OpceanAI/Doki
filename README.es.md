@@ -573,6 +573,40 @@ doki run -P nginx:alpine                            # Publica todos los puertos 
 doki run -p 8080-8090:80 nginx:alpine               # Rango de puertos
 ```
 
+### DokiLink-Lite (Mesh Multi-Host, v0.9.3)
+
+Doki 0.9.3 incluye **DokiLink-Lite**, una capa de proxy TCP/UDP +
+mesh que permite reenviar un puerto publicado de un contenedor a
+otra instancia Doki. Go stdlib puro + `crypto/tls` +
+`golang.org/x/crypto/nacl`, sin gVisor, sin stack completo de
+WireGuard, sin NAT traversal, sin relay.
+
+```bash
+# Mostrar el install id y la clave pública local.
+doki mesh status
+# install id:    fndwnv3mn7dt
+# public key:    K0dm12xvxzUTBZ3lJkOcOyBrGPPNlCWpTJhcEv0BQys=
+
+# Agregar un par estático.
+doki link add mybuddy 192.168.1.42:7432 \
+  --pub "$(doki mesh status | awk '/public key/ {print $3}')"
+
+# Ahora publicar un contenedor alcanzable a través del mesh.
+doki run -d -p 0.0.0.0:9090:80 --name web nginx:alpine
+```
+
+Capas de cifrado:
+
+- **L0 (ninguna)**: solo loopback — por defecto en Android/Termux
+- **L1 (TLS 1.3)**: por defecto, firmado por CA ECDSA P-256 por
+  instalación
+- **L2 (secretbox)**: opt-in con `DOKI_LINK_PAYLOAD_ENC=1`, clave
+  derivada de las pubkeys Ed25519 de ambos pares
+
+Vea `.wiki/Networking.es.md` para la arquitectura completa,
+diagramas de secuencia y limitaciones (sin DHT, sin NAT traversal,
+mDNS solo en LAN).
+
 ### Arquitectura DNS (rewrite de v0.9.2)
 
 Doki corre un servidor DNS interno que maneja la resolución de nombres entre contenedores y reenvía consultas externas a resolvers upstream. La arquitectura:

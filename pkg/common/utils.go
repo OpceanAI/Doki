@@ -259,7 +259,22 @@ func CopyDir(src, dst string) error {
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
-		if entry.IsDir() {
+		info, err := os.Lstat(srcPath)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(srcPath)
+			if err != nil {
+				continue
+			}
+			os.Remove(dstPath)
+			if err := os.Symlink(target, dstPath); err != nil {
+				if err := EnsureDir(dstPath); err == nil {
+					CopyDir(srcPath, dstPath)
+				}
+			}
+		} else if info.IsDir() {
 			if err := CopyDir(srcPath, dstPath); err != nil {
 				return err
 			}
@@ -268,7 +283,7 @@ func CopyDir(src, dst string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+			if err := os.WriteFile(dstPath, data, info.Mode()); err != nil {
 				return err
 			}
 		}

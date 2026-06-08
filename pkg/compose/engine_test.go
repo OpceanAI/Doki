@@ -178,7 +178,10 @@ func TestOrderServicesNoDeps(t *testing.T) {
 			},
 		},
 	}
-	ordered := e.orderServices()
+	ordered, err := e.orderServices()
+	if err != nil {
+		t.Fatalf("orderServices: %v", err)
+	}
 	if len(ordered) != 3 {
 		t.Fatalf("len(ordered) = %d, want 3", len(ordered))
 	}
@@ -206,7 +209,10 @@ func TestOrderServicesWithDeps(t *testing.T) {
 			},
 		},
 	}
-	ordered := e.orderServices()
+	ordered, err := e.orderServices()
+	if err != nil {
+		t.Fatalf("orderServices: %v", err)
+	}
 
 	// db should come before api, api before web.
 	dbIdx := indexOf(ordered, "db")
@@ -241,7 +247,10 @@ func TestOrderServicesWithMapDeps(t *testing.T) {
 			},
 		},
 	}
-	ordered := e.orderServices()
+	ordered, err := e.orderServices()
+	if err != nil {
+		t.Fatalf("orderServices: %v", err)
+	}
 	apiIdx := indexOf(ordered, "api")
 	webIdx := indexOf(ordered, "web")
 	if apiIdx > webIdx {

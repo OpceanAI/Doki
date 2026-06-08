@@ -15,7 +15,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 BUILD_USER ?= $(shell id -un 2>/dev/null || echo unknown)
 DOKI_PKG   = github.com/OpceanAI/Doki/pkg/common
 DOKI_API   = 1.48
-DOKI_VER   = 0.9.2
+DOKI_VER   = 0.9.3
 
 # 16KB page size alignment (Android 15+ requirement, May 2026).
 ifeq ($(GOOS),android)

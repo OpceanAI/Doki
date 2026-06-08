@@ -324,8 +324,13 @@ func generateResources(r *ResourceConfig) *LinuxResources {
 		}
 		if r.NanoCpus > 0 {
 			// Convert nanocpus to quota/period.
+			// BUG fix: the previous formula (NanoCpus / 1000) produced a
+			// quota/period ratio 10x too large. For 1 CPU (NanoCpus=1e9),
+			// the code produced quota=1,000,000 with period=100,000,
+			// yielding 10 CPUs. The correct formula is:
+			// quota = NanoCpus * period / 1e9
 			period := uint64(100000)
-			quota := int64(r.NanoCpus / 1000) // 1000 ns = 1 µs
+			quota := int64(float64(r.NanoCpus) * float64(period) / 1e9)
 			cpu.Period = &period
 			cpu.Quota = &quota
 		}

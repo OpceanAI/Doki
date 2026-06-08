@@ -1,6 +1,8 @@
 package network
 
 import (
+	crypto_rand "crypto/rand"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,7 +16,55 @@ import (
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
+	"github.com/OpceanAI/Doki/pkg/netlink"
 )
+
+// PortForwarder is anything that can be cleanly stopped: a socat process
+// (wrapped in execCmdForwarder) or a DokiLink-Lite proxy (TCPProxy/UDPProxy).
+// The interface lets us mix implementations in the same map and reaps
+// zombie socat children consistently (BUG-11 fix).
+type PortForwarder interface {
+	Close() error
+}
+
+// execCmdForwarder wraps a socat (or any other external) *exec.Cmd to
+// satisfy PortForwarder. Kill+Wait ensures the child is reaped.
+type execCmdForwarder struct {
+	cmd *exec.Cmd
+}
+
+func (e *execCmdForwarder) Close() error {
+	if e == nil || e.cmd == nil || e.cmd.Process == nil {
+		return nil
+	}
+	err := e.cmd.Process.Kill()
+	_ = e.cmd.Wait()
+	return err
+}
+
+// tcpProxyForwarder wraps a netlink.TCPProxy to satisfy PortForwarder.
+type tcpProxyForwarder struct {
+	p *netlink.TCPProxy
+}
+
+func (t *tcpProxyForwarder) Close() error {
+	if t == nil || t.p == nil {
+		return nil
+	}
+	return t.p.Close()
+}
+
+// udpProxyForwarder wraps a netlink.UDPProxy to satisfy PortForwarder.
+type udpProxyForwarder struct {
+	p *netlink.UDPProxy
+}
+
+func (u *udpProxyForwarder) Close() error {
+	if u == nil || u.p == nil {
+		return nil
+	}
+	return u.p.Close()
+}
 
 // Manager manages container networks.
 type Manager struct {
@@ -23,7 +73,7 @@ type Manager struct {
 	networks         map[string]*Network
 	firewall         *FirewallManager
 	dns              *DNSServer
-	portForwardProcs map[string][]*exec.Cmd
+	portForwardProcs map[string][]PortForwarder
 	pfMu             sync.Mutex
 }
 
@@ -83,7 +133,7 @@ func NewManager(root string, firewall *FirewallManager, dns *DNSServer) (*Manage
 		networks:         make(map[string]*Network),
 		firewall:         firewall,
 		dns:              dns,
-		portForwardProcs: make(map[string][]*exec.Cmd),
+		portForwardProcs: make(map[string][]PortForwarder),
 	}
 
 	// Create default networks.
@@ -156,9 +206,13 @@ func calculateGateway(subnet string) string {
 	if err != nil {
 		return ""
 	}
+	// BUG-06 fix: the previous code hardcoded byte[last]=1 which produces
+	// a gateway outside the subnet for non-/24 subnets (e.g. 172.17.0.128/25
+	// yields 172.17.0.1 which is outside the subnet). Use incrementIP on the
+	// network address instead.
 	gateway := make(net.IP, len(ipNet.IP))
 	copy(gateway, ipNet.IP)
-	gateway[len(gateway)-1] = 1
+	incrementIP(gateway, ipNet.Mask)
 	return gateway.String()
 }
 
@@ -431,8 +485,14 @@ func generateMacAddr() string {
 	// Read random bytes for remaining 4 bytes.
 	randBytes := make([]byte, 4)
 	if f, err := os.Open("/dev/urandom"); err == nil {
-		io.ReadFull(f, randBytes)
+		if _, err := io.ReadFull(f, randBytes); err != nil {
+			// BUG-18 fix: if /dev/urandom fails, fall back to crypto/rand
+			// so MAC addresses are not all zeros (which causes collisions).
+			crypto_rand.Read(randBytes)
+		}
 		f.Close()
+	} else {
+		crypto_rand.Read(randBytes)
 	}
 	for i := 2; i < 6; i++ {
 		mac[i] = randBytes[i-2]
@@ -519,6 +579,8 @@ func (m *Manager) SetupNetwork(containerID string, containerPid int, networkName
 	}
 
 	if nw.Driver == "bridge" {
+		// Lock to prevent race conditions when accessing/modifying nw.Containers
+		m.mu.Lock()
 		ep := nw.Containers[containerID]
 		if ep == nil {
 			// No endpoint yet — create one with IP allocation.
@@ -529,9 +591,11 @@ func (m *Manager) SetupNetwork(containerID string, containerPid int, networkName
 			}
 			nw.Containers[containerID] = ep
 			if err := m.saveNetwork(nw); err != nil {
+				m.mu.Unlock()
 				return err
 			}
 		}
+		m.mu.Unlock()
 
 		// Register DNS entries (idempotent — AddEntry overwrites).
 		if m.dns != nil && ep.IPv4Address != "" {
@@ -559,18 +623,27 @@ func ValidatePortBinding(hostPort uint16, privileged bool) error {
 }
 
 // TeardownNetwork removes networking for a container.
+//
+// BUG-05 fix: the previous implementation called GetNetwork (which releases
+// m.mu.RLock() on return) and then accessed nw.Containers without holding
+// any lock. Concurrent Connect/Disconnect calls (which take m.mu.Lock())
+// could mutate nw.Containers during the read.
 func (m *Manager) TeardownNetwork(containerID string, networkName string) error {
 	if networkName == "none" || networkName == "host" {
 		return nil
 	}
 
-	nw, err := m.GetNetwork(networkName)
+	m.mu.RLock()
+	nw, err := m.loadNetwork(networkName)
 	if err != nil {
+		m.mu.RUnlock()
 		return err
 	}
+	ep := nw.Containers[containerID]
+	driver := nw.Driver
+	m.mu.RUnlock()
 
-	if nw.Driver == "bridge" {
-		ep := nw.Containers[containerID]
+	if driver == "bridge" {
 		return teardownBridgeNetwork(nw, ep, m.firewall)
 	}
 
@@ -688,12 +761,20 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 	}
 	_, dnsPort, _ := net.SplitHostPort(dnsListen)
 	if dnsPort != "" && dnsPort != "53" {
-		dnatArgs := []string{"-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53",
+		dnatArgs := []string{"-t", "nat", "-C", "OUTPUT", "-p", "udp", "--dport", "53",
 			"-d", "127.0.0.11", "-j", "DNAT", "--to-destination", "127.0.0.11:" + dnsPort}
-		_ = exec.Command("iptables", dnatArgs...).Run()
-		dnatArgsTCP := []string{"-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--dport", "53",
+		if err := exec.Command("iptables", dnatArgs...).Run(); err != nil {
+			addArgs := []string{"-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53",
+				"-d", "127.0.0.11", "-j", "DNAT", "--to-destination", "127.0.0.11:" + dnsPort}
+			_ = exec.Command("iptables", addArgs...).Run()
+		}
+		dnatArgsTCP := []string{"-t", "nat", "-C", "OUTPUT", "-p", "tcp", "--dport", "53",
 			"-d", "127.0.0.11", "-j", "DNAT", "--to-destination", "127.0.0.11:" + dnsPort}
-		_ = exec.Command("iptables", dnatArgsTCP...).Run()
+		if err := exec.Command("iptables", dnatArgsTCP...).Run(); err != nil {
+			addArgsTCP := []string{"-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--dport", "53",
+				"-d", "127.0.0.11", "-j", "DNAT", "--to-destination", "127.0.0.11:" + dnsPort}
+			_ = exec.Command("iptables", addArgsTCP...).Run()
+		}
 	}
 
 	return nil
@@ -736,50 +817,114 @@ func IsSlirp4netnsAvailable() bool {
 	return err == nil
 }
 
-// StartPortForwarding starts a TCP proxy from hostPort to the container's IP+containerPort.
-func StartPortForwarding(hostPort int, containerIP string, containerPort int, proto string) (*exec.Cmd, error) {
+// StartPortForwarding starts a port forward from hostPort to the container's
+// (IP, containerPort) using DokiLink-Lite (pure-Go TCP/UDP proxy). If
+// DokiLink is explicitly disabled via DOKI_USE_SOCAT=1, it falls back to
+// the legacy socat process. The returned value implements PortForwarder
+// (closeable, reaps child processes).
+//
+// DokiLink-Lite is preferred because:
+//   - It does not require socat to be installed (Termux does not ship it
+//     by default; users must `apt install socat`).
+//   - It works on platforms where the kernel blocks fork+exec for
+//     network-related syscalls (Android seccomp).
+//   - It can be wrapped in TLS/secretbox in v0.9.3+ (see netlink/crypto.go).
+func StartPortForwarding(hostPort int, containerIP string, containerPort int, proto string) (PortForwarder, error) {
+	useSocat := strings.EqualFold(os.Getenv("DOKI_USE_SOCAT"), "1") ||
+		strings.EqualFold(os.Getenv("DOKI_USE_SOCAT"), "true")
+
+	if useSocat {
+		return startPortForwardingSocat(hostPort, containerIP, containerPort, proto)
+	}
+
+	listenHost := "0.0.0.0"
+	if common.UseProotHostNetworking() {
+		// In proot+Termux the container shares the host netns and is
+		// reachable on loopback. We still advertise 0.0.0.0 in Docker
+		// API output for compatibility, but binding to 127.0.0.1 is
+		// safer and faster (no surprise exposure to the LAN).
+		listenHost = "127.0.0.1"
+	}
+	listenAddr := net.JoinHostPort(listenHost, fmt.Sprintf("%d", hostPort))
+	upstreamAddr := net.JoinHostPort(common.ProotContainerIP(containerIP), fmt.Sprintf("%d", containerPort))
+
+	if proto == "udp" {
+		p := netlink.NewUDPProxy(netlink.UDPProxyConfig{
+			ListenAddr: listenAddr,
+			Upstream:   upstreamAddr,
+		})
+		if err := p.Start(context.Background()); err != nil {
+			slog.Warn("doki-link: udp proxy failed, falling back to socat",
+				"host", hostPort, "err", err)
+			return startPortForwardingSocat(hostPort, containerIP, containerPort, proto)
+		}
+		return &udpProxyForwarder{p: p}, nil
+	}
+	p := netlink.NewTCPProxy(netlink.TCPProxyConfig{
+		ListenAddr: listenAddr,
+		Upstream:   upstreamAddr,
+	})
+	if err := p.Start(context.Background()); err != nil {
+		slog.Warn("doki-link: tcp proxy failed, falling back to socat",
+			"host", hostPort, "err", err)
+		return startPortForwardingSocat(hostPort, containerIP, containerPort, proto)
+	}
+	return &tcpProxyForwarder{p: p}, nil
+}
+
+// startPortForwardingSocat is the legacy implementation. It is used as
+// a fallback when DokiLink-Lite cannot bind (port already in use,
+// permission denied, etc.) or when DOKI_USE_SOCAT=1 is set.
+func startPortForwardingSocat(hostPort int, containerIP string, containerPort int, proto string) (PortForwarder, error) {
 	if proto == "udp" {
 		cmd := exec.Command("socat", fmt.Sprintf("UDP-LISTEN:%d,fork,reuseaddr", hostPort),
-			fmt.Sprintf("UDP:%s:%d", containerIP, containerPort))
+			fmt.Sprintf("UDP:%s:%d", common.ProotContainerIP(containerIP), containerPort))
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
 			return nil, fmt.Errorf("udp port forward %d->%s:%d: %w", hostPort, containerIP, containerPort, err)
 		}
-		return cmd, nil
+		return &execCmdForwarder{cmd: cmd}, nil
 	}
 	cmd := exec.Command("socat", fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", hostPort),
-		fmt.Sprintf("TCP:%s:%d", containerIP, containerPort))
+		fmt.Sprintf("TCP:%s:%d", common.ProotContainerIP(containerIP), containerPort))
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("tcp port forward %d->%s:%d: %w", hostPort, containerIP, containerPort, err)
 	}
-	return cmd, nil
+	return &execCmdForwarder{cmd: cmd}, nil
 }
 
 // ApplyPortForwardings creates TCP/UDP proxies from host ports to container ports.
 func (m *Manager) ApplyPortForwardings(containerID string, ports []common.Port, pid int) error {
-	m.pfMu.Lock()
-	defer m.pfMu.Unlock()
-
-	// Find the container's bridge IP from the endpoint attached to this container.
+	// BUG-01 fix: IPv4Address is stored as a bare IP (e.g. "172.17.0.2"),
+	// never in CIDR notation. net.ParseCIDR requires "/mask" and returns
+	// an error on bare IPs. Use net.ParseIP instead.
+	//
+	// BUG-02 fix: the previous code iterated ALL networks and ALL
+	// endpoints, picking the first non-empty IP regardless of which
+	// container it belongs to. Now we look up the specific containerID.
+	//
+	// Concurrency fix: m.networks is protected by m.mu, not m.pfMu.
+	// Acquire m.mu.RLock() for the lookup, then release before starting
+	// port forwards (which need m.pfMu).
+	m.mu.RLock()
 	containerIP := ""
 	for _, nw := range m.networks {
-		for _, ep := range nw.Containers {
-			if ep != nil && ep.IPv4Address != "" {
-				ip, _, _ := net.ParseCIDR(ep.IPv4Address)
-				if ip != nil {
-					containerIP = ip.String()
-				}
-				break
+		if ep, ok := nw.Containers[containerID]; ok && ep != nil && ep.IPv4Address != "" {
+			if ip := net.ParseIP(ep.IPv4Address); ip != nil {
+				containerIP = ip.String()
 			}
-		}
-		if containerIP != "" {
 			break
 		}
 	}
+	m.mu.RUnlock()
+
 	if containerIP == "" {
 		return fmt.Errorf("no bridge endpoint for container %s; cannot forward ports", containerID)
 	}
+
+	m.pfMu.Lock()
+	defer m.pfMu.Unlock()
 
 	for _, port := range ports {
 		if port.PublicPort <= 0 {
@@ -789,26 +934,33 @@ func (m *Manager) ApplyPortForwardings(containerID string, ports []common.Port, 
 		if proto == "" {
 			proto = "tcp"
 		}
-		cmd, err := StartPortForwarding(int(port.PublicPort), containerIP, int(port.PrivatePort), proto)
+		slog.Debug("doki-link: starting forwarder",
+			"container", containerID,
+			"containerIP", containerIP,
+			"host", port.PublicPort,
+			"containerPort", port.PrivatePort,
+			"proto", proto,
+			"useProotHost", common.UseProotHostNetworking())
+		fw, err := StartPortForwarding(int(port.PublicPort), containerIP, int(port.PrivatePort), proto)
 		if err != nil {
 			slog.Warn("port forward failed", "host", port.PublicPort, "container", port.PrivatePort, "err", err)
 			continue
 		}
-		m.portForwardProcs[containerID] = append(m.portForwardProcs[containerID], cmd)
+		m.portForwardProcs[containerID] = append(m.portForwardProcs[containerID], fw)
 	}
 	return nil
 }
 
-// RemovePortForwardings kills all TCP proxy processes for a container.
+// RemovePortForwardings stops all port forwards for a container. Works
+// for both DokiLink-Lite proxies (Close on TCPProxy/UDPProxy) and the
+// legacy socat fallback (execCmdForwarder.Close kills and reaps).
 func (m *Manager) RemovePortForwardings(containerID string) {
 	m.pfMu.Lock()
 	defer m.pfMu.Unlock()
 
-	cmds := m.portForwardProcs[containerID]
-	for _, cmd := range cmds {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
+	fws := m.portForwardProcs[containerID]
+	for _, fw := range fws {
+		_ = fw.Close()
 	}
 	delete(m.portForwardProcs, containerID)
 }

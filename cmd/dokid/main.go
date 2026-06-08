@@ -1,4 +1,4 @@
-// Doki daemon entry point. Doki v0.9.2.
+// Doki daemon entry point. Doki v0.9.3.
 //
 // Responsibilities:
 //   - parse flags and env
@@ -43,6 +43,7 @@ import (
 	"github.com/OpceanAI/Doki/pkg/api"
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/image"
+	"github.com/OpceanAI/Doki/pkg/netlink"
 	"github.com/OpceanAI/Doki/pkg/network"
 	dr "github.com/OpceanAI/Doki/pkg/runtime"
 	"github.com/OpceanAI/Doki/pkg/storage"
@@ -181,6 +182,52 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("firewall backend", "name", network.DetectFirewallBackend())
+
+	// DokiLink-Lite mesh: load or generate install identity and start
+	// the gossip listener. The mesh is opt-out: setting
+	// DOKI_LINK_MESH=0 disables it entirely (e.g. on air-gapped hosts).
+	meshStop := func() {}
+	if os.Getenv("DOKI_LINK_MESH") != "0" {
+		keysDir := filepath.Join(dataDir, "keys")
+		identity, idErr := netlink.NewIdentity(keysDir)
+		if idErr != nil {
+			logger.Warn("doki-link: identity init", "err", idErr)
+		} else {
+			trustDir := filepath.Join(dataDir, "trust")
+			trust, _ := netlink.NewTrustStore(trustDir)
+			if err := trust.Load(); err != nil {
+				logger.Warn("doki-link: trust load", "err", err)
+			}
+			peersPath := filepath.Join(dataDir, "mesh", "peers.json")
+			sp, _ := netlink.NewStaticPeers(peersPath)
+			mesh, meshErr := netlink.NewMesh(netlink.MeshConfig{
+				Identity:   identity,
+				Trust:      trust,
+				Static:     sp,
+				ListenAddr: meshListenAddr(),
+				Logger:     logger,
+			})
+			if meshErr != nil {
+				logger.Warn("doki-link: mesh init", "err", meshErr)
+			} else {
+				ctx, cancel := context.WithCancel(context.Background())
+				if startErr := mesh.Start(ctx); startErr != nil {
+					logger.Warn("doki-link: mesh start", "err", startErr)
+					cancel()
+				} else {
+					logger.Info("doki-link ready",
+						"install_id", identity.ShortID(),
+						"listen", meshListenAddr(),
+					)
+					meshStop = func() {
+						mesh.Stop()
+						cancel()
+					}
+				}
+			}
+		}
+	}
+	defer meshStop()
 
 	// Create runner registry and register all available runners.
 	registry := dr.NewRegistry()
@@ -563,4 +610,18 @@ func recoverContainers(logger *slog.Logger, rt *dr.Runtime, dataDir string, imgS
 func processExists(pid int) bool {
 	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
 	return err == nil
+}
+
+// meshListenAddr returns the address the DokiLink gossip listener
+// binds to. DOKI_LINK_ADDR overrides the default of ":7432". On
+// Android/Termux the listener must be loopback-only (no raw socket
+// access) so we use 127.0.0.1:7432.
+func meshListenAddr() string {
+	if a := os.Getenv("DOKI_LINK_ADDR"); a != "" {
+		return a
+	}
+	if common.IsTermux() || common.IsProotMode() {
+		return "127.0.0.1:7432"
+	}
+	return ":7432"
 }
