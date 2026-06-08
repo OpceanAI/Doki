@@ -1,6 +1,9 @@
 package common
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ErrNotFound is returned when a resource is not found.
 type ErrNotFound struct {
@@ -85,6 +88,28 @@ func (e *ErrPermissionDenied) Error() string {
 // NewErrNotFound creates a new ErrNotFound.
 func NewErrNotFound(resource, id string) error {
 	return &ErrNotFound{Resource: resource, ID: id}
+}
+
+// IsNotFound checks if an error is an ErrNotFound.
+func IsNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, ok := err.(*ErrNotFound)
+	if ok {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "no such")
+}
+
+// IsConflict checks if an error is an ErrConflict.
+func IsConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, ok := err.(*ErrConflict)
+	return ok
 }
 
 // NewErrConflict creates a new ErrConflict.

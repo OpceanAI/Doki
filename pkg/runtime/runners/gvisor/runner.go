@@ -79,7 +79,9 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 		var s struct {
 			Pid int `json:"pid"`
 		}
-		json.Unmarshal(data, &s)
+		if err := json.Unmarshal(data, &s); err != nil {
+			return 0, fmt.Errorf("parse state: %w", err)
+		}
 		pid = s.Pid
 	}
 	r.log.Info("container started", "id", common.ShortID(id), "pid", pid)
@@ -152,7 +154,9 @@ func (r *Runner) loadState(id string) (*rt.ContainerState, error) {
 		return nil, err
 	}
 	var s rt.ContainerState
-	json.Unmarshal(data, &s)
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("parse state: %w", err)
+	}
 	return &s, nil
 }
 

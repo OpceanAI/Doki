@@ -27,6 +27,7 @@ import (
 var distroFS embed.FS
 
 type DistroManager struct {
+	mu         sync.RWMutex
 	homeDir    string
 	distroDir  string
 	imageStore *image.Store
@@ -53,6 +54,9 @@ func (m *DistroManager) loadDefinitions() error {
 	if err != nil {
 		return err
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
@@ -82,18 +86,20 @@ func (m *DistroManager) Resolve(name string) (*DistroDefinition, error) {
 	parts := strings.SplitN(name, ":", 2)
 	distroName := parts[0]
 
+	m.mu.RLock()
 	def, ok := m.defs[distroName]
 	if !ok {
+		m.mu.RUnlock()
 		return nil, fmt.Errorf("unknown distro: %s (available: alpine, ubuntu, debian, arch)", name)
 	}
+	resolved := *def
+	m.mu.RUnlock()
 
 	if len(parts) > 1 {
-		copy := *def
-		copy.Source.Tag = parts[1]
-		return &copy, nil
+		resolved.Source.Tag = parts[1]
 	}
 
-	return def, nil
+	return &resolved, nil
 }
 
 func (m *DistroManager) IsInstalled(name string) bool {
@@ -274,12 +280,18 @@ func extractLayerNative(tarPath, dest string) error {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			os.MkdirAll(target, 0755)
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeReg, tar.TypeRegA:
-			os.MkdirAll(filepath.Dir(target), 0755)
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
 			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-				os.Remove(target)
+				if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+					return err
+				}
 			}
 			out, err := os.Create(target)
 			if err != nil {
@@ -293,7 +305,9 @@ func extractLayerNative(tarPath, dest string) error {
 			os.Chmod(target, os.FileMode(hdr.Mode))
 			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeSymlink:
-			os.MkdirAll(filepath.Dir(target), 0755)
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
 			linkTarget := hdr.Linkname
 			if !filepath.IsAbs(linkTarget) {
 				resolved := filepath.Clean(filepath.Join(filepath.Dir(target), linkTarget))
@@ -301,35 +315,57 @@ func extractLayerNative(tarPath, dest string) error {
 					return fmt.Errorf("tar: symlink escape: %s -> %s", hdr.Linkname, resolved)
 				}
 			}
-			os.Remove(target)
-			os.Symlink(hdr.Linkname, target)
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
 		case tar.TypeLink:
-			os.MkdirAll(filepath.Dir(target), 0755)
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
 			linkTarget := filepath.Clean(filepath.Join(dest, hdr.Linkname))
 			if !strings.HasPrefix(linkTarget, cleanDest+string(os.PathSeparator)) && linkTarget != cleanDest {
 				return fmt.Errorf("tar: hardlink escape")
 			}
-			os.Remove(target)
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 			if err := os.Link(linkTarget, target); err != nil {
 				data, readErr := os.ReadFile(linkTarget)
 				if readErr != nil {
 					return fmt.Errorf("tar: hardlink %s: %w", hdr.Name, err)
 				}
-				os.WriteFile(target, data, 0644)
+				if err := os.WriteFile(target, data, 0644); err != nil {
+					return fmt.Errorf("tar: hardlink fallback write %s: %w", hdr.Name, err)
+				}
 			}
 		case tar.TypeBlock, tar.TypeChar:
-			os.MkdirAll(filepath.Dir(target), 0755)
-			os.Remove(target)
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 			dev := int(hdr.Devmajor)<<8 | int(hdr.Devminor)
 			mode := syscall.S_IFBLK
 			if hdr.Typeflag == tar.TypeChar {
 				mode = syscall.S_IFCHR
 			}
-			syscall.Mknod(target, uint32(mode)|uint32(hdr.Mode&0777), dev)
+			if err := syscall.Mknod(target, uint32(mode)|uint32(hdr.Mode&0777), dev); err != nil {
+				return err
+			}
 		case tar.TypeFifo:
-			os.MkdirAll(filepath.Dir(target), 0755)
-			os.Remove(target)
-			syscall.Mknod(target, syscall.S_IFIFO|uint32(hdr.Mode&0777), 0)
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if err := syscall.Mknod(target, syscall.S_IFIFO|uint32(hdr.Mode&0777), 0); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -374,6 +410,8 @@ func (m *DistroManager) Update(def *DistroDefinition) error {
 
 // Search looks for available pre-defined distros by name.
 func (m *DistroManager) Search(query string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var results []string
 	for _, def := range m.defs {
 		if strings.Contains(def.Name, query) || strings.Contains(def.Description, query) {
@@ -385,6 +423,8 @@ func (m *DistroManager) Search(query string) []string {
 
 // RegisterDef adds a custom distro definition.
 func (m *DistroManager) RegisterDef(def *DistroDefinition) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.defs[def.Name] = def
 	for _, alias := range def.Aliases {
 		m.defs[alias] = def

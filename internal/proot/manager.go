@@ -86,7 +86,7 @@ func DetectKernelRelease() string {
 
 // BuildProotBaseArgs returns the common proot arguments for all execution methods.
 // If uid/gid are >= 0, adds -i flag to impersonate that user inside proot.
-func BuildProotBaseArgs(rootfs string, uid, gid int) []string {
+func BuildProotBaseArgs(rootfs string, uid, gid int) ([]string, error) {
 	args := []string{
 		"-r", rootfs,
 		"-b", "/proc",
@@ -104,10 +104,12 @@ func BuildProotBaseArgs(rootfs string, uid, gid int) []string {
 	}
 
 	selinuxTarget := filepath.Join(rootfs, "sys", "fs", "selinux")
-	os.MkdirAll(selinuxTarget, 0755)
+	if err := os.MkdirAll(selinuxTarget, 0755); err != nil {
+		return nil, err
+	}
 	args = append(args, "-b", selinuxTarget+":/sys/fs/selinux")
 
-	return args
+	return args, nil
 }
 
 // AppendAndroidBinds appends Android-specific bind mounts to proot args.
@@ -182,7 +184,10 @@ func UnsetProotKillers() {
 
 // Exec executes a command in a proot-based environment.
 func (m *Manager) Exec(rootfs string, args []string, env []string, workDir string) (string, error) {
-	prootArgs := BuildProotBaseArgs(rootfs, -1, -1)
+	prootArgs, err := BuildProotBaseArgs(rootfs, -1, -1)
+	if err != nil {
+		return "", err
+	}
 
 	// AppendAndroidBinds adds Android-specific mount points.
 	prootArgs = AppendAndroidBinds(prootArgs)

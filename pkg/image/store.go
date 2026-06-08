@@ -3,10 +3,12 @@ package image
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -35,7 +37,7 @@ type manifestCacheEntry struct {
 
 // Config represents an OCI image configuration.
 type Config struct {
-	Created      string            `json:"created,omitempty"`
+	Created      FlexString         `json:"created,omitempty"`
 	Author       string            `json:"author,omitempty"`
 	Architecture string            `json:"architecture"`
 	OS           string            `json:"os"`
@@ -76,10 +78,37 @@ type RootFS struct {
 
 // History describes the history of an image layer.
 type History struct {
-	Created    string `json:"created,omitempty"`
-	CreatedBy  string `json:"created_by,omitempty"`
-	Comment    string `json:"comment,omitempty"`
-	EmptyLayer bool   `json:"empty_layer,omitempty"`
+	Id         string     `json:"Id,omitempty"`
+	Created    FlexString `json:"created,omitempty"`
+	CreatedBy  string     `json:"created_by,omitempty"`
+	Size       int64      `json:"Size,omitempty"`
+	Comment    string     `json:"comment,omitempty"`
+	EmptyLayer bool       `json:"empty_layer,omitempty"`
+}
+
+// FlexString is a string that can be unmarshaled from either a JSON string or
+// an int64 (unix timestamp). Docker image configs use RFC3339 strings, while
+// OCI image configs may use int64 unix timestamps.
+type FlexString string
+
+func (fs *FlexString) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		*fs = FlexString(s)
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*fs = FlexString(time.Unix(n, 0).UTC().Format(time.RFC3339))
+	return nil
 }
 
 // ImageRecord stores image metadata on disk.
@@ -254,7 +283,9 @@ func (s *Store) saveImageRecord(imageRef string, ref *registry.ImageRef, manifes
 }
 
 func (s *Store) downloadLayer(registryHost, name string, layer registry.ManifestBlob, targetPath string) error {
-	common.EnsureDir(filepath.Dir(targetPath))
+	if err := common.EnsureDir(filepath.Dir(targetPath)); err != nil {
+		return fmt.Errorf("ensure dir for layer: %w", err)
+	}
 
 	f, err := os.Create(targetPath)
 	if err != nil {
@@ -368,7 +399,7 @@ func (s *Store) List() ([]common.ImageInfo, error) {
 	images := make([]common.ImageInfo, 0, len(records))
 	for _, record := range records {
 		images = append(images, common.ImageInfo{
-			ID:           record.ID[:12],
+			ID:           record.ID,
 			RepoTags:     record.RepoTags,
 			RepoDigests:  record.RepoDigests,
 			Created:      record.Created,
@@ -395,7 +426,7 @@ func (s *Store) listRecords() ([]ImageRecord, error) {
 
 	entries, err := os.ReadDir(filepath.Join(s.root, "manifests"))
 	if err != nil {
-		return records, nil
+		return records, err
 	}
 
 	for _, entry := range entries {
@@ -546,12 +577,17 @@ func (s *Store) Exists(idOrTag string) bool {
 }
 
 // StartGC starts periodic garbage collection of unused blobs.
-func (s *Store) StartGC(interval time.Duration, maxAge time.Duration) {
+func (s *Store) StartGC(ctx context.Context, interval time.Duration, maxAge time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			s.cleanupExpiredLayers(maxAge)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.cleanupExpiredLayers(maxAge)
+			}
 		}
 	}()
 }
@@ -573,7 +609,9 @@ func (s *Store) cleanupExpiredLayers(maxAge time.Duration) {
 			layerPath := filepath.Join(s.root, "layers", layerDigest)
 			if info, err := os.Stat(layerPath); err == nil {
 				if time.Since(info.ModTime()) > maxAge {
-					os.Remove(layerPath)
+					if err := os.Remove(layerPath); err != nil {
+						slog.Warn("gc: failed to remove stale layer", "path", layerPath, "error", err)
+					}
 				}
 			}
 		}
@@ -594,30 +632,52 @@ func (s *Store) Search(term string, limit int) ([]SearchResult, error) {
 	client := s.registry
 
 	url := fmt.Sprintf("https://hub.docker.com/v2/search/repositories/?query=%s&page_size=%d", url.QueryEscape(term), limit)
-	resp, err := client.DoRequest(nil, "GET", url, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := client.DoRequest(ctx, "GET", url, nil, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Results []SearchResult `json:"results"`
+	var hubResult struct {
+		Results []dockerHubSearchResult `json:"results"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&hubResult); err != nil {
 		return nil, err
 	}
 
-	return result.Results, nil
+	results := make([]SearchResult, 0, len(hubResult.Results))
+	for _, r := range hubResult.Results {
+		results = append(results, SearchResult{
+			Name:        r.RepoName,
+			Description: r.ShortDescription,
+			StarCount:   r.StarCount,
+			IsOfficial:  r.IsOfficial,
+			IsAutomated: r.IsAutomated,
+		})
+	}
+
+	return results, nil
 }
 
 // SearchResult represents a Docker Hub search result.
 type SearchResult struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	StarCount   int    `json:"star_count"`
-	IsOfficial  bool   `json:"is_official"`
-	IsAutomated bool   `json:"is_automated"`
+	Name        string `json:"Name"`
+	Description string `json:"Description"`
+	StarCount   int    `json:"StarCount"`
+	IsOfficial  bool   `json:"IsOfficial"`
+	IsAutomated bool   `json:"IsAutomated"`
+}
+
+// dockerHubSearchResult is the raw Docker Hub API response format.
+type dockerHubSearchResult struct {
+	RepoName        string `json:"repo_name"`
+	ShortDescription string `json:"short_description"`
+	StarCount       int    `json:"star_count"`
+	IsOfficial      bool   `json:"is_official"`
+	IsAutomated     bool   `json:"is_automated"`
 }
 
 // Export exports an image to a Docker-format save tar.

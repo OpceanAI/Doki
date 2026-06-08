@@ -160,8 +160,8 @@ func HasSystemd() bool {
 
 // SystemdListenFDs returns file descriptors passed by systemd socket activation.
 func SystemdListenFDs() []*os.File {
-	pid, _ := strconv.Atoi(os.Getenv("LISTEN_PID"))
-	if pid != os.Getpid() {
+	pid, err := strconv.Atoi(os.Getenv("LISTEN_PID"))
+	if err != nil || pid != os.Getpid() {
 		return nil
 	}
 	nfds, _ := strconv.Atoi(os.Getenv("LISTEN_FDS"))

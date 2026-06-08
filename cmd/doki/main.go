@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/OpceanAI/Doki/internal/proot"
 	"github.com/OpceanAI/Doki/pkg/cli"
 	"github.com/OpceanAI/Doki/pkg/common"
 )
@@ -61,6 +62,17 @@ func dispatch(c *cli.DokiCLI, name string, args []string) {
 			fmt.Println(sub.Help)
 			return
 		}
+		if subCmd, ok := sub.SubCommands[args[0]]; ok {
+			handlerArgs := args[1:]
+			if subCmd.Handler != nil {
+				if err := subCmd.Handler(c, handlerArgs); err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					os.Exit(1)
+				}
+			}
+			return
+		}
+		// Fall back to global dispatch for aliases like "ps".
 		dispatch(c, args[0], args[1:])
 		return
 	}
@@ -151,13 +163,15 @@ Options:
   -a, --all      Show all containers (default shows just running)
   -q, --quiet    Only display container IDs
   -n, --last N   Show N last created containers
-  -f, --filter   Filter output based on conditions`,
+  -f, --filter   Filter output based on conditions
+  --format       Format output using Go template`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			all := flagBool(args, "-a", "--all")
 			quiet := flagBool(args, "-q", "--quiet")
 			lastN := flagInt(args, "-n", "--last")
 			filter := flagStr(args, "-f", "--filter")
-			return c.Ps(all, quiet, false, filter, "", lastN, false)
+			format := flagStr(args, "--format")
+			return c.Ps(all, quiet, false, filter, format, lastN, false)
 		},
 	},
 	"create": {
@@ -194,7 +208,17 @@ Options:
   -t, --time SECONDS  Seconds to wait for stop before killing (default 10)`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			timeout := flagInt(args, "-t", "--time")
-			return c.Stop(cleanIDs(args), timeout)
+			ids := cleanIDs(args)
+			if len(ids) == 0 {
+				return fmt.Errorf("doki stop: requires at least 1 argument")
+			}
+			if err := c.Stop(ids, timeout); err != nil {
+				return err
+			}
+			for _, id := range ids {
+				fmt.Println(id)
+			}
+			return nil
 		},
 	},
 	"restart": {
@@ -207,7 +231,17 @@ Options:
   -t, --time SECONDS  Seconds to wait for stop before killing (default 10)`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			timeout := flagInt(args, "-t", "--time")
-			return c.Restart(cleanIDs(args), timeout)
+			ids := cleanIDs(args)
+			if len(ids) == 0 {
+				return fmt.Errorf("doki restart: requires at least 1 argument")
+			}
+			if err := c.Restart(ids, timeout); err != nil {
+				return err
+			}
+			for _, id := range ids {
+				fmt.Println(id)
+			}
+			return nil
 		},
 	},
 	"kill": {
@@ -220,7 +254,17 @@ Options:
   -s, --signal SIGNAL  Signal to send (default "KILL")`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			sig := flagStr(args, "-s", "--signal")
-			return c.Kill(cleanIDs(args), sig)
+			ids := cleanIDs(args)
+			if len(ids) == 0 {
+				return fmt.Errorf("doki kill: requires at least 1 argument")
+			}
+			if err := c.Kill(ids, sig); err != nil {
+				return err
+			}
+			for _, id := range ids {
+				fmt.Println(id)
+			}
+			return nil
 		},
 	},
 	"rm": {
@@ -235,7 +279,11 @@ Options:
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			force := flagBool(args, "-f", "--force")
 			volumes := flagBool(args, "-v", "--volumes")
-			return c.Rm(cleanIDs(args), force, volumes, false)
+			ids := cleanIDs(args)
+			if len(ids) == 0 {
+				return fmt.Errorf("doki rm: requires at least 1 argument")
+			}
+			return c.Rm(ids, force, volumes, false)
 		},
 	},
 	"pause": {
@@ -244,7 +292,17 @@ Options:
 
 Pause all processes within one or more containers.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			return c.Pause(cleanIDs(args))
+			ids := cleanIDs(args)
+			if len(ids) == 0 {
+				return fmt.Errorf("doki pause: requires at least 1 argument")
+			}
+			if err := c.Pause(ids); err != nil {
+				return err
+			}
+			for _, id := range ids {
+				fmt.Println(id)
+			}
+			return nil
 		},
 	},
 	"unpause": {
@@ -253,7 +311,17 @@ Pause all processes within one or more containers.`,
 
 Unpause all processes within one or more containers.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			return c.Unpause(cleanIDs(args))
+			ids := cleanIDs(args)
+			if len(ids) == 0 {
+				return fmt.Errorf("doki unpause: requires at least 1 argument")
+			}
+			if err := c.Unpause(ids); err != nil {
+				return err
+			}
+			for _, id := range ids {
+				fmt.Println(id)
+			}
+			return nil
 		},
 	},
 	"exec": {
@@ -276,15 +344,27 @@ Options:
 			env := flagStrSlice(args, "-e", "--env")
 			workdir := flagStr(args, "-w", "--workdir")
 			user := flagStr(args, "-u", "--user")
-			if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-				containerID := args[0]
-				execArgs := args[1:]
-				if len(execArgs) == 0 {
-					return fmt.Errorf("doki exec: requires at least 1 argument (command)")
+			// Find container ID (first non-flag arg)
+			containerID := ""
+			execArgs := []string{}
+			foundContainer := false
+			for _, a := range args {
+				if !foundContainer && !strings.HasPrefix(a, "-") {
+					containerID = a
+					foundContainer = true
+					continue
 				}
-				return c.Exec(containerID, execArgs, tty, detach, interactive, env, workdir, user)
+				if foundContainer {
+					execArgs = append(execArgs, a)
+				}
 			}
-			return nil
+			if containerID == "" {
+				return fmt.Errorf("doki exec: requires at least 1 argument (container)")
+			}
+			if len(execArgs) == 0 {
+				return fmt.Errorf("doki exec: requires at least 1 argument (command)")
+			}
+			return c.Exec(containerID, execArgs, tty, detach, interactive, env, workdir, user)
 		},
 	},
 	"logs": {
@@ -301,10 +381,18 @@ Options:
 			follow := flagBool(args, "-f", "--follow")
 			tail := flagInt(args, "-n", "--tail")
 			timestamps := flagBool(args, "-t", "--timestamps")
-			if len(args) > 0 {
-				return c.Logs(args[0], follow, timestamps, tail, "")
+			// Find container ID (first non-flag arg)
+			containerID := ""
+			for _, a := range args {
+				if !strings.HasPrefix(a, "-") {
+					containerID = a
+					break
+				}
 			}
-			return nil
+			if containerID == "" {
+				return fmt.Errorf("doki logs: requires at least 1 argument (container)")
+			}
+			return c.Logs(containerID, follow, timestamps, tail, "")
 		},
 	},
 	"stats": {
@@ -326,10 +414,11 @@ Options:
 
 Display the running processes of a container.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			if len(args) > 0 {
-				return c.Top(args[0], "")
+			ids := cleanIDs(args)
+			if len(ids) == 0 {
+				return fmt.Errorf("doki top: requires at least 1 argument (container)")
 			}
-			return nil
+			return c.Top(ids[0], "")
 		},
 	},
 	"inspect": {
@@ -525,10 +614,11 @@ Options:
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			allTags := flagBool(args, "-a", "--all-tags")
 			quiet := flagBool(args, "-q", "--quiet")
-			if len(args) > 0 {
-				return c.Pull(args[0], allTags, quiet)
+			names := cleanIDs(args)
+			if len(names) == 0 {
+				return fmt.Errorf("doki pull: requires at least 1 argument (image)")
 			}
-			return nil
+			return c.Pull(names[0], allTags, quiet)
 		},
 	},
 	"push": {
@@ -558,12 +648,14 @@ List images.
 Options:
   -a, --all      Show all images
   -q, --quiet    Only show image IDs
-  -f, --filter   Filter output based on conditions`,
+  -f, --filter   Filter output based on conditions
+  --no-trunc     Don't truncate output`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			all := flagBool(args, "-a", "--all")
 			quiet := flagBool(args, "-q", "--quiet")
+			noTrunc := flagBool(args, "--no-trunc")
 			filter := flagStr(args, "-f", "--filter")
-			return c.Images(all, quiet, false, filter)
+			return c.Images(all, quiet, noTrunc, filter)
 		},
 	},
 	"rmi": {
@@ -657,11 +749,13 @@ Import the contents from a tarball to create a filesystem image.`,
 Build an image from a Dokifile or Dockerfile.
 
 Options:
-  -f, --file FILE    Path to Dokifile (default: Dokifile)
-  -t, --tag TAG      Name and optionally a tag (name:tag)
-  --no-cache         Do not use cache when building
-  --pull             Always pull base images
-  -q, --quiet        Suppress build output`,
+  -f, --file FILE          Path to Dokifile (default: Dokifile)
+  -t, --tag TAG            Name and optionally a tag (name:tag)
+  --build-arg KEY=VALUE    Set build-time variable (can be repeated)
+  --no-cache               Do not use cache when building
+  --pull                   Always pull base images
+  -q, --quiet              Suppress build output
+  --target STAGE           Set target build stage`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			tags := flagStrSlice(args, "-t", "--tag")
 			f := flagStr(args, "-f", "--file")
@@ -669,6 +763,8 @@ Options:
 			pull := flagBool(args, "--pull")
 			quiet := flagBool(args, "-q", "--quiet")
 			rmFlag := !flagBool(args, "--rm=false")
+			buildArgs := flagMap(args, "--build-arg")
+			target := flagStr(args, "--target")
 			contextDir := "."
 			skip := 0
 			for _, a := range args {
@@ -676,7 +772,7 @@ Options:
 					skip--
 					continue
 				}
-				if a == "-t" || a == "--tag" || a == "-f" || a == "--file" {
+				if a == "-t" || a == "--tag" || a == "-f" || a == "--file" || a == "--build-arg" || a == "--target" {
 					skip = 1
 					continue
 				}
@@ -689,7 +785,7 @@ Options:
 				contextDir = a
 				break
 			}
-			return c.Build(contextDir, f, tags, nil, noCache, pull, quiet, rmFlag)
+			return c.Build(contextDir, f, tags, buildArgs, noCache, pull, quiet, rmFlag, target)
 		},
 	},
 	"search": {
@@ -774,6 +870,68 @@ Display system-wide information.`,
 Show the Doki version information.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			return c.SystemVersion()
+		},
+	},
+	"mesh": {
+		Name: "mesh",
+		Help: `Usage: doki mesh COMMAND
+
+DokiLink-Lite mesh management.
+
+Commands:
+  ls           List known peers
+  status       Show local install id and CA fingerprint`,
+		Handler: func(c *cli.DokiCLI, args []string) error {
+			if len(args) == 0 {
+				return c.MeshLs()
+			}
+			switch args[0] {
+			case "ls", "list":
+				return c.MeshLs()
+			case "status":
+				return c.MeshStatus()
+			default:
+				return fmt.Errorf("doki mesh: '%s' is not a valid subcommand", args[0])
+			}
+		},
+	},
+	"link": {
+		Name: "link",
+		Help: `Usage: doki link COMMAND [OPTIONS]
+
+DokiLink-Lite peer management.
+
+Commands:
+  add ID ADDR --pub BASE64   Add a static peer
+  rm ID                      Remove a peer
+  show                       Show the raw peers.json file
+
+Example:
+  doki link add mybuddy 192.168.1.42:7432 --pub $(doki mesh status | grep pubkey)`,
+		Handler: func(c *cli.DokiCLI, args []string) error {
+			if len(args) == 0 {
+				return fmt.Errorf("doki link: missing subcommand. try `doki link add`")
+			}
+			switch args[0] {
+			case "add":
+				pub := flagStr(args, "--pub", "-p")
+				if len(args) < 3 {
+					return fmt.Errorf("doki link add: usage: doki link add <id> <addr> --pub <b64>")
+				}
+				return c.LinkAdd(args[1], args[2], pub)
+			case "rm", "remove":
+				if len(args) < 2 {
+					return fmt.Errorf("doki link rm: usage: doki link rm <id>")
+				}
+				if args[1][0] == '-' {
+					return fmt.Errorf("doki link rm: missing peer ID")
+				}
+				return c.LinkRemove(args[1])
+			case "show", "ls":
+				return c.LinkShow()
+			default:
+				return fmt.Errorf("doki link: '%s' is not a valid subcommand", args[0])
+			}
 		},
 	},
 	"events": {
@@ -1256,6 +1414,9 @@ func printMainHelp() {
 	fmt.Println("  system      Manage Doki")
 	fmt.Println("  pod         Manage pods")
 	fmt.Println("  kube        Kubernetes integration")
+	fmt.Println("  compose     Multi-container orchestration")
+	fmt.Println("  mesh        DokiLink-Lite mesh management")
+	fmt.Println("  link        DokiLink-Lite peer management")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  run         Create and run a new container from an image")
@@ -1346,12 +1507,64 @@ func flagStrSlice(args []string, names ...string) []string {
 	return result
 }
 
+func flagMap(args []string, names ...string) map[string]string {
+	result := make(map[string]string)
+	for _, n := range names {
+		for i, a := range args {
+			if a == n && i+1 < len(args) {
+				k, v, ok := strings.Cut(args[i+1], "=")
+				if ok {
+					result[k] = v
+				}
+			}
+			if strings.HasPrefix(a, n+"=") {
+				k, v, ok := strings.Cut(strings.TrimPrefix(a, n+"="), "=")
+				if ok {
+					result[k] = v
+				}
+			}
+		}
+	}
+	return result
+}
+
+// flagsWithValue lists flags that ALWAYS consume the next argument as their value.
+// Short flags like -f, -t, -s are AMBIGUOUS (e.g., -f means --filter in "ps" but
+// --force in "rm") so they are intentionally excluded. Only unambiguous long forms
+// and short forms that never collide with boolean flags are listed here.
+var flagsWithValue = map[string]bool{
+	"--format": true,
+	"--filter": true,
+	"-n":       true,
+	"--tail":   true,
+	"--since":  true,
+	"--until":  true,
+	"-l":       true,
+	"--latest": true,
+	"--time":   true,
+	"--signal": true,
+}
+
 func cleanIDs(args []string) []string {
 	var ids []string
-	for _, a := range args {
-		if !strings.HasPrefix(a, "-") {
-			ids = append(ids, a)
+	skipNext := false
+	for i, a := range args {
+		if skipNext {
+			skipNext = false
+			continue
 		}
+		if strings.HasPrefix(a, "-") {
+			// If this is a flag with a = value, skip the whole thing.
+			if strings.Contains(a, "=") {
+				continue
+			}
+			// Only skip the next argument if this flag is known to take a value.
+			if flagsWithValue[a] && i+1 < len(args) {
+				skipNext = true
+			}
+			continue
+		}
+		ids = append(ids, a)
 	}
 	return ids
 }
@@ -1425,10 +1638,9 @@ func createMinimalRootfs(path string) error {
 
 // runInProot executes a command inside a rootfs using doki-proot or system proot.
 func runInProot(rootfs string, args []string) error {
-	prootBin := "proot"
-	// Prefer doki-proot if available
-	if _, err := os.Stat("doki-proot"); err == nil {
-		prootBin = "doki-proot"
+	prootBin := proot.FindProotBinary()
+	if prootBin == "" {
+		prootBin = "proot"
 	}
 
 	// Remove --distro flag and its value from args
@@ -1453,14 +1665,22 @@ func runInProot(rootfs string, args []string) error {
 		cleanArgs = []string{"/bin/sh"}
 	}
 
-	prootArgs := []string{
-		"-r", rootfs,
-		"-b", "/proc",
-		"-b", "/sys",
-		"-b", "/dev",
-		"--kill-on-exit",
-		"--link2symlink",
-		"-i", "0:0",
+	// Clear LD_PRELOAD family in the parent process so exec.Command does not
+	// propagate libtermux-exec.so to the proot child.
+	proot.UnsetProotKillers()
+
+	prootArgs, err := proot.BuildProotBaseArgs(rootfs, 0, 0)
+	if err != nil {
+		return fmt.Errorf("build proot args: %w", err)
+	}
+	prootArgs = proot.AppendAndroidBinds(prootArgs)
+	// Bind-mount essential host directories so the distro rootfs has access
+	// to binaries and libraries. The createMinimalRootfs only creates empty
+	// directories; without these binds the rootfs has no executables.
+	for _, dir := range []string{"/bin", "/usr", "/lib", "/lib64", "/etc/alternatives"} {
+		if _, err := os.Stat(dir); err == nil {
+			prootArgs = append(prootArgs, "-b", dir)
+		}
 	}
 	prootArgs = append(prootArgs, cleanArgs...)
 
@@ -1468,7 +1688,11 @@ func runInProot(rootfs string, args []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+	// Use BuildEnv for the same env composition as startWithProot:
+	// StripHostEnv (17-var deny-list) + AndroidEnv defaults.
+	cmd.Env = proot.BuildEnv(nil, nil)
+	// IMPORTANT: cmd.Dir must NOT be set to the guest rootfs path.
+	cmd.Dir = "/"
 
 	return cmd.Run()
 }

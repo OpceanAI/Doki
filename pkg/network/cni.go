@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -200,24 +201,37 @@ func (f *FirewallManager) AddPortMapping(containerIP string, hostPort, container
 func (f *FirewallManager) ensureChains() error {
 	if f.backend == FirewallIptables {
 		_ = exec.Command("iptables", "-t", "nat", "-N", "DOKI").Run()
-		_ = exec.Command("iptables", "-t", "nat", "-C", "PREROUTING", "-j", "DOKI").Run() // best-effort check
-		_ = exec.Command("iptables", "-t", "nat", "-A", "PREROUTING", "-j", "DOKI").Run()
-		_ = exec.Command("iptables", "-t", "nat", "-A", "OUTPUT", "-j", "DOKI").Run()
+		if exec.Command("iptables", "-t", "nat", "-C", "PREROUTING", "-j", "DOKI").Run() != nil {
+			_ = exec.Command("iptables", "-t", "nat", "-A", "PREROUTING", "-j", "DOKI").Run()
+		}
+		if exec.Command("iptables", "-t", "nat", "-C", "OUTPUT", "-j", "DOKI").Run() != nil {
+			_ = exec.Command("iptables", "-t", "nat", "-A", "OUTPUT", "-j", "DOKI").Run()
+		}
 		return nil
 	}
 	_ = exec.Command("nft", "add", "table", "ip", "nat").Run()
 	_ = exec.Command("nft", "add", "chain", "ip", "nat", "DOKI",
+		"{", "type", "nat", "hook", "prerouting", "priority", "0", ";", "}").Run()
+	_ = exec.Command("nft", "add", "chain", "ip", "nat", "DOKI_OUTPUT",
 		"{", "type", "nat", "hook", "output", "priority", "0", ";", "}").Run()
 	return nil
 }
 
 func (f *FirewallManager) addNftablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
-	cmd := exec.Command("nft",
+	args := []string{
 		"add", "rule", "ip", "nat", "DOKI",
 		fmt.Sprintf("%s", proto), "dport", fmt.Sprintf("%d", hostPort),
 		"dnat", "to", fmt.Sprintf("%s:%d", containerIP, containerPort),
-	)
-	return cmd.Run()
+	}
+	if err := exec.Command("nft", args...).Run(); err != nil {
+		return err
+	}
+	outArgs := []string{
+		"add", "rule", "ip", "nat", "DOKI_OUTPUT",
+		fmt.Sprintf("%s", proto), "dport", fmt.Sprintf("%d", hostPort),
+		"dnat", "to", fmt.Sprintf("%s:%d", containerIP, containerPort),
+	}
+	return exec.Command("nft", outArgs...).Run()
 }
 
 func (f *FirewallManager) addIptablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
@@ -238,11 +252,40 @@ func (f *FirewallManager) RemovePortMapping(containerIP string, hostPort, contai
 }
 
 func (f *FirewallManager) removeNftablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
-	// nft delete requires a numeric handle - use iptables as reliable fallback
-	cmd := exec.Command("iptables", "-t", "nat", "-D", "DOKI",
-		"-p", proto, "--dport", fmt.Sprintf("%d", hostPort),
-		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIP, containerPort))
-	return cmd.Run()
+	// Find the rule handle by listing rules and matching
+	listCmd := exec.Command("nft", "-a", "list", "chain", "ip", "nat", "DOKI")
+	output, err := listCmd.Output()
+	if err != nil {
+		// Try DOKI_OUTPUT chain as well
+		listCmd = exec.Command("nft", "-a", "list", "chain", "ip", "nat", "DOKI_OUTPUT")
+		output, err = listCmd.Output()
+		if err != nil {
+			return err
+		}
+	}
+	// Parse output to find handle number for matching rule
+	matchStr := fmt.Sprintf("%s dport %d", proto, hostPort)
+	handle := ""
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.Contains(line, matchStr) && strings.Contains(line, containerIP) {
+			// Extract handle number (last number after # handle)
+			if idx := strings.Index(line, "# handle"); idx >= 0 {
+				handle = strings.TrimSpace(line[idx+8:])
+			}
+			break
+		}
+	}
+	if handle == "" {
+		return nil // Rule not found, nothing to remove
+	}
+	// Delete by handle
+	cmd := exec.Command("nft", "delete", "rule", "ip", "nat", "DOKI", "handle", handle)
+	if err := cmd.Run(); err != nil {
+		// Try DOKI_OUTPUT chain
+		cmd = exec.Command("nft", "delete", "rule", "ip", "nat", "DOKI_OUTPUT", "handle", handle)
+		return cmd.Run()
+	}
+	return nil
 }
 
 func (f *FirewallManager) removeIptablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
@@ -251,8 +294,7 @@ func (f *FirewallManager) removeIptablesPortMapping(containerIP string, hostPort
 		"-p", proto, "--dport", fmt.Sprintf("%d", hostPort),
 		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIP, containerPort),
 	)
-	_ = cmd.Run()
-	return nil
+	return cmd.Run()
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────

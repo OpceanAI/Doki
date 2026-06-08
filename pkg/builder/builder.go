@@ -79,6 +79,23 @@ func matchDoubleStar(pattern, name string) bool {
 	}
 	prefix := parts[0]
 	rest := strings.Join(parts[1:], "**")
+	// Try matching rest directly against full name (for ** at start)
+	if prefix == "" {
+		if m, _ := filepath.Match(rest, name); m {
+			return true
+		}
+		// Also try matching just the last component of rest against each path component
+		basePattern := rest
+		if idx := strings.LastIndex(rest, "/"); idx >= 0 {
+			basePattern = rest[idx+1:]
+		}
+		if m, _ := filepath.Match(basePattern, name); m {
+			return true
+		}
+		if m, _ := filepath.Match(basePattern, filepath.Base(name)); m {
+			return true
+		}
+	}
 	for i := 0; i <= len(name); i++ {
 		leftMatch := false
 		if prefix == "" {
@@ -106,6 +123,7 @@ type DokifileParser struct {
 	parsed     bool
 	directives map[string]string
 	stages     []*Stage
+	globalArgs map[string]string
 }
 
 // Stage represents a build stage in a Dokifile.
@@ -152,6 +170,7 @@ type Builder struct {
 	store         *image.Store
 	registry      *registry.Client
 	stageDirs     map[string]string
+	stages        []*Stage
 	envMap        map[string]string
 	argDefaults   map[string]string
 	cacheDir      string
@@ -199,12 +218,37 @@ func NewDokifileParser() *DokifileParser {
 	return &DokifileParser{
 		escape:     '\\',
 		directives: make(map[string]string),
+		globalArgs: make(map[string]string),
 	}
 }
 
 // Parse parses a Dokifile.
 func (p *DokifileParser) Parse(content []byte) error {
-	lines := strings.Split(string(content), "\n")
+	rawLines := strings.Split(string(content), "\n")
+
+	// Pre-process: join continuation lines (trailing backslash).
+	// Skip comment lines (starting with #) — they are directives, not code.
+	var lines []string
+	var continued string
+	for _, line := range rawLines {
+		trimmed := strings.TrimRight(line, " \t")
+		isComment := strings.HasPrefix(strings.TrimSpace(line), "#")
+		if !isComment && strings.HasSuffix(trimmed, "\\") {
+			// Strip the trailing backslash and accumulate.
+			continued += trimmed[:len(trimmed)-1] + " "
+			continue
+		}
+		if continued != "" {
+			lines = append(lines, continued+line)
+			continued = ""
+		} else {
+			lines = append(lines, line)
+		}
+	}
+	if continued != "" {
+		lines = append(lines, continued)
+	}
+
 	p.stages = nil
 
 	var currentStage *Stage
@@ -275,6 +319,16 @@ func (p *DokifileParser) Parse(content []byte) error {
 		if instruction.Type == "FROM" {
 			currentStage = p.parseFromInstruction(instruction)
 			p.stages = append(p.stages, currentStage)
+		} else if currentStage == nil && instruction.Type == "ARG" {
+			// Global ARG before FROM
+			for _, arg := range instruction.Args {
+				parts := strings.SplitN(arg, "=", 2)
+				if len(parts) == 2 {
+					p.globalArgs[parts[0]] = parts[1]
+				} else {
+					p.globalArgs[arg] = ""
+				}
+			}
 		} else if currentStage != nil {
 			currentStage.Instructions = append(currentStage.Instructions, *instruction)
 		}
@@ -304,7 +358,7 @@ func (p *DokifileParser) parseFromInstruction(inst *Instruction) *Stage {
 		switch {
 		case strings.HasPrefix(arg, "--platform="):
 			stage.Platform = strings.TrimPrefix(arg, "--platform=")
-		case arg == "AS" && i+1 < len(args):
+		case strings.ToUpper(arg) == "AS" && i+1 < len(args):
 			stage.Name = args[i+1]
 		case !strings.HasPrefix(arg, "--") && stage.From == "":
 			stage.From = arg
@@ -565,7 +619,10 @@ func (p *DokifileParser) GetStages() []*Stage {
 	return p.stages
 }
 
-// GetDirective returns a parser directive value.
+func (p *DokifileParser) GetGlobalArgs() map[string]string {
+	return p.globalArgs
+}
+
 func (p *DokifileParser) GetDirective(key string) string {
 	return p.directives[key]
 }
@@ -611,8 +668,15 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 	}
 
 	// Read Dokifile
-	dokifilePath := filepath.Join(cfg.Context, cfg.Dokifile)
-	if cfg.Dokifile == "" {
+	dokifilePath := cfg.Dokifile
+	if filepath.IsAbs(dokifilePath) && common.PathExists(dokifilePath) {
+		// Absolute path provided via -f flag; use directly.
+	} else if dokifilePath != "" && common.PathExists(filepath.Join(cfg.Context, dokifilePath)) {
+		dokifilePath = filepath.Join(cfg.Context, dokifilePath)
+	} else {
+		dokifilePath = ""
+	}
+	if dokifilePath == "" {
 		for _, name := range []string{"Dokifile", "dokifile", "Dockerfile", "dockerfile"} {
 			if common.PathExists(filepath.Join(cfg.Context, name)) {
 				dokifilePath = filepath.Join(cfg.Context, name)
@@ -637,31 +701,34 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 		return fmt.Errorf("no FROM instruction found")
 	}
 
+	// Apply global ARGs to FROM instructions
+	globalArgs := parser.GetGlobalArgs()
+	for k, v := range globalArgs {
+		if _, exists := b.argDefaults[k]; !exists {
+			b.argDefaults[k] = v
+		}
+	}
+	for _, stage := range stages {
+		stage.From = substituteVars(stage.From, b.envMap, b.argDefaults, b.argDefaults)
+	}
+
 	// If target is specified, only build up to that stage
 	if cfg.Target != "" {
-		targetIdx := -1
+		found := false
 		for i, s := range stages {
-			if s.Name == cfg.Target && i == len(stages)-1 {
-				targetIdx = i
+			if s.Name == cfg.Target {
+				stages = stages[:i+1]
+				found = true
 				break
 			}
 		}
-		if targetIdx < 0 {
-			found := false
-			for i, s := range stages {
-				if s.Name == cfg.Target {
-					stages = stages[:i+1]
-					found = true
-					break
-				}
-			}
-			if !found {
-				return fmt.Errorf("target stage %q not found", cfg.Target)
-			}
+		if !found {
+			return fmt.Errorf("target stage %q not found", cfg.Target)
 		}
 	}
 
 	// Build each stage
+	b.stages = stages
 	var finalWorkDir string
 	var workDirs []string
 	defer func() {
@@ -684,8 +751,8 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 					return fmt.Errorf("copy from stage %s: %w", stage.FromStage, err)
 				}
 			}
-		} else if stage.From != "" {
-			// Pull base image if needed
+		} else if stage.From != "" && strings.ToLower(stage.From) != "scratch" {
+			// Pull base image if needed (skip for scratch)
 			if !b.store.Exists(stage.From) && cfg.Pull {
 				if _, err := b.store.Pull(stage.From); err != nil {
 					return fmt.Errorf("pull base image %s: %w", stage.From, err)
@@ -702,7 +769,7 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 
 		// Replay ONBUILD triggers from parent stage/image
 		if stage.FromStage != "" || stage.From != "" {
-			// Find parent stage
+			// Find parent stage in current build
 			var parentStage *Stage
 			for _, s := range stages {
 				if (stage.FromStage != "" && s.Name == stage.FromStage) ||
@@ -713,10 +780,33 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 			}
 			if parentStage != nil {
 				if onbuildData, ok := parentStage.Metadata["onbuild"]; ok && onbuildData != "" {
-					instType := parentStage.Metadata["onbuild_type"]
-					args := strings.Fields(onbuildData)
-					onbuildInst := Instruction{Type: instType, Args: args, Raw: strings.Join(args, " ")}
-					stage.Instructions = append([]Instruction{onbuildInst}, stage.Instructions...)
+					onbuildInsts := parseOnbuildInstructions(onbuildData)
+					converted := make([]Instruction, len(onbuildInsts))
+					for i, inst := range onbuildInsts {
+						converted[i] = *inst
+					}
+					stage.Instructions = append(converted, stage.Instructions...)
+				}
+			} else if stage.From != "" && strings.ToLower(stage.From) != "scratch" {
+				// Check external base image for ONBUILD triggers
+				if record, err := b.store.Get(stage.From); err == nil && record.Config != nil {
+					for _, h := range record.Config.History {
+						if h.CreatedBy != "" && strings.HasPrefix(strings.ToUpper(h.CreatedBy), "ONBUILD ") {
+							onbuildCmd := strings.TrimPrefix(h.CreatedBy, "ONBUILD ")
+							onbuildCmd = strings.TrimPrefix(onbuildCmd, "onbuild ")
+							parts := strings.SplitN(onbuildCmd, " ", 2)
+							if len(parts) >= 1 {
+								inst := Instruction{
+									Type: strings.ToUpper(parts[0]),
+									Raw:  onbuildCmd,
+								}
+								if len(parts) == 2 {
+									inst.Args = parseArgs(parts[1])
+								}
+								stage.Instructions = append([]Instruction{inst}, stage.Instructions...)
+							}
+						}
+					}
 				}
 			}
 		}
@@ -726,9 +816,15 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 			return fmt.Errorf("stage %s: %w", stage.From, err)
 		}
 
-		// Save stage dir for --from references
+		// Save stage dir for --from references (by name and by index)
 		if stage.Name != "" {
 			b.stageDirs[stage.Name] = workDir
+		}
+		for i, s := range stages {
+			if s == stage {
+				b.stageDirs[strconv.Itoa(i)] = workDir
+				break
+			}
 		}
 
 		finalWorkDir = workDir
@@ -740,15 +836,23 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 }
 
 // parseOnbuildInstructions parses stored ONBUILD metadata into Instruction structs.
+// Format: "type|arg1 arg2 ...;;type2|arg3 arg4 ..." (multiple entries separated by ;;)
 func parseOnbuildInstructions(onbuildData string) []*Instruction {
-	// Format: "type|arg1 arg2 ..."
-	parts := strings.SplitN(onbuildData, "|", 2)
-	if len(parts) != 2 {
+	if onbuildData == "" {
 		return nil
 	}
-	instType := parts[0]
-	args := strings.Fields(parts[1])
-	return []*Instruction{{Type: instType, Args: args, Raw: strings.Join(args, " ")}}
+	entries := strings.Split(onbuildData, ";;")
+	var result []*Instruction
+	for _, entry := range entries {
+		parts := strings.SplitN(entry, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		instType := parts[0]
+		args := strings.Fields(parts[1])
+		result = append(result, &Instruction{Type: instType, Args: args, Raw: strings.Join(args, " ")})
+	}
+	return result
 }
 
 func (b *Builder) extractBaseImageToDir(imageRef, destDir string) error {
@@ -785,9 +889,10 @@ func (b *Builder) commitImage(stage *Stage, workDir string, tags []string) error
 	}
 
 	config := &image.Config{
-		Created:      time.Now().UTC().Format(time.RFC3339),
+		Created:      image.FlexString(time.Now().UTC().Format(time.RFC3339)),
 		Architecture: getArch(),
 		OS:           "linux",
+		Author:       stage.Metadata["Maintainer"],
 		Config:       *stage.ImageConfig,
 		RootFS: image.RootFS{
 			Type:    "layers",
@@ -889,43 +994,10 @@ func parseArgs(s string) []string {
 }
 
 func parseJSONArray(s string) []string {
-	s = s[1 : len(s)-1]
 	var args []string
-	var current strings.Builder
-	inQuote := false
-
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-
-		if c == '"' {
-			inQuote = !inQuote
-			if !inQuote {
-				args = append(args, strings.TrimSpace(current.String()))
-				current.Reset()
-			}
-			continue
-		}
-
-		if !inQuote {
-			if c == ',' {
-				if current.Len() > 0 {
-					args = append(args, strings.TrimSpace(current.String()))
-					current.Reset()
-				}
-				continue
-			}
-			if c == ' ' || c == '\t' {
-				continue
-			}
-		}
-
-		current.WriteByte(c)
+	if err := json.Unmarshal([]byte(s), &args); err != nil {
+		return nil
 	}
-
-	if current.Len() > 0 {
-		args = append(args, strings.TrimSpace(current.String()))
-	}
-
 	return args
 }
 

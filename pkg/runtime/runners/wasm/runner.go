@@ -173,7 +173,9 @@ func (r *Runner) loadState(id string) (*rt.ContainerState, error) {
 		return nil, err
 	}
 	var s rt.ContainerState
-	json.Unmarshal(data, &s)
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("parse state: %w", err)
+	}
 	return &s, nil
 }
 

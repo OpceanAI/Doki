@@ -71,7 +71,9 @@ func (t *TapManager) SetupBridge() error {
 	}
 
 	cmd = exec.Command("ip", "addr", "add", "10.89.0.1/16", "dev", t.bridge)
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("assign bridge IP: %w", err)
+	}
 
 	cmd = exec.Command("ip", "link", "set", t.bridge, "up")
 	if err := cmd.Run(); err != nil {

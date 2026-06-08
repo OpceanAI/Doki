@@ -251,8 +251,8 @@ func (c *Client) getToken(realm, service, scope string) (string, error) {
 }
 
 // doAuthRequest performs an authenticated request with automatic token retry.
-func (c *Client) doAuthRequest(method, urlStr string, headers map[string]string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, urlStr, body)
+func (c *Client) doAuthRequest(ctx context.Context, method, urlStr string, headers map[string]string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, urlStr, body)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +296,7 @@ func (c *Client) doAuthRequest(method, urlStr string, headers map[string]string,
 			if buf != nil {
 				retryBody = bytes.NewReader(buf)
 			}
-			req2, err := http.NewRequest(method, urlStr, retryBody)
+			req2, err := http.NewRequestWithContext(ctx, method, urlStr, retryBody)
 			if err != nil {
 				return nil, fmt.Errorf("create retry request: %w", err)
 			}
@@ -337,7 +337,7 @@ func parseWwwAuthenticate(header string) (realm, service, scope string) {
 
 func (c *Client) Ping(registry string) error {
 	u := fmt.Sprintf("https://%s/v2/", registry)
-	resp, err := c.doAuthRequest("GET", u, nil, nil)
+	resp, err := c.doAuthRequest(context.Background(), "GET", u, nil, nil)
 	if err != nil {
 		return fmt.Errorf("ping %s: %w", registry, err)
 	}
@@ -350,7 +350,7 @@ func (c *Client) Ping(registry string) error {
 
 func (c *Client) GetTags(registry, repository string) (*TagList, error) {
 	u := fmt.Sprintf("https://%s/v2/%s/tags/list", registry, repository)
-	resp, err := c.doAuthRequest("GET", u, nil, nil)
+	resp, err := c.doAuthRequest(context.Background(), "GET", u, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +375,7 @@ func (c *Client) GetManifest(registry, name, reference string) (*ManifestV2, str
 
 	u := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, name, reference)
 	headers := map[string]string{"Accept": accept}
-	resp, err := c.doAuthRequest("GET", u, headers, nil)
+	resp, err := c.doAuthRequest(context.Background(), "GET", u, headers, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -398,7 +398,7 @@ func (c *Client) GetManifest(registry, name, reference string) (*ManifestV2, str
 
 func (c *Client) DownloadBlob(registry, name, digest string, writer io.Writer) error {
 	u := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, name, digest)
-	resp, err := c.doAuthRequest("GET", u, nil, nil)
+	resp, err := c.doAuthRequest(context.Background(), "GET", u, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -430,7 +430,7 @@ func (c *Client) DownloadBlob(registry, name, digest string, writer io.Writer) e
 
 func (c *Client) HeadBlob(registry, name, digest string) (int64, error) {
 	u := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, name, digest)
-	resp, err := c.doAuthRequest("HEAD", u, nil, nil)
+	resp, err := c.doAuthRequest(context.Background(), "HEAD", u, nil, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -443,7 +443,7 @@ func (c *Client) HeadBlob(registry, name, digest string) (int64, error) {
 
 func (c *Client) GetBlob(registry, name, digest string) ([]byte, error) {
 	u := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, name, digest)
-	resp, err := c.doAuthRequest("GET", u, nil, nil)
+	resp, err := c.doAuthRequest(context.Background(), "GET", u, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +456,7 @@ func (c *Client) GetBlob(registry, name, digest string) ([]byte, error) {
 }
 
 func (c *Client) DoRequest(ctx context.Context, method, urlStr string, headers map[string]string, body io.Reader) (*http.Response, error) {
-	return c.doAuthRequest(method, urlStr, headers, body)
+	return c.doAuthRequest(ctx, method, urlStr, headers, body)
 }
 
 func (c *Client) GetConfig(registry, name string, manifest *ManifestV2) ([]byte, error) {
@@ -473,7 +473,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 
 	blobExists := func(digest string) bool {
 		u := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, name, digest)
-		resp, err := c.doAuthRequest("HEAD", u, nil, nil)
+		resp, err := c.doAuthRequest(context.Background(), "HEAD", u, nil, nil)
 		if err != nil {
 			return false
 		}
@@ -484,7 +484,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 	tryCrossMount := func(digest, sourceRepo string) bool {
 		mountURL := fmt.Sprintf("https://%s/v2/%s/blobs/uploads/?mount=%s&from=%s",
 			registry, name, digest, sourceRepo)
-		resp, err := c.doAuthRequest("POST", mountURL, nil, nil)
+		resp, err := c.doAuthRequest(context.Background(), "POST", mountURL, nil, nil)
 		if err != nil {
 			return false
 		}
@@ -494,7 +494,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 
 	uploadBlob := func(digest string, data []byte) error {
 		initURL := fmt.Sprintf("https://%s/v2/%s/blobs/uploads/", registry, name)
-		resp, err := c.doAuthRequest("POST", initURL, nil, nil)
+		resp, err := c.doAuthRequest(context.Background(), "POST", initURL, nil, nil)
 		if err != nil {
 			return fmt.Errorf("initiate upload: %w", err)
 		}
@@ -508,7 +508,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 		}
 
 		finalURL := fmt.Sprintf("%s&digest=%s", location, url.QueryEscape(digest))
-		uploadResp, err := c.doAuthRequest("PUT", finalURL, map[string]string{
+		uploadResp, err := c.doAuthRequest(context.Background(), "PUT", finalURL, map[string]string{
 			"Content-Type":   "application/octet-stream",
 			"Content-Length": fmt.Sprintf("%d", len(data)),
 		}, bytes.NewReader(data))
@@ -575,7 +575,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 	}
 	manifestURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, name, tag)
 	mediaType := "application/vnd.oci.image.manifest.v1+json"
-	resp, err := c.doAuthRequest("PUT", manifestURL, map[string]string{
+	resp, err := c.doAuthRequest(context.Background(), "PUT", manifestURL, map[string]string{
 		"Content-Type": mediaType,
 	}, bytes.NewReader(manifestJSON))
 	if err != nil {
@@ -605,7 +605,7 @@ func (c *Client) ResolveManifest(registry, name, reference string) (*ManifestV2,
 
 	u := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, name, reference)
 	headers := map[string]string{"Accept": accept}
-	resp, err := c.doAuthRequest("GET", u, headers, nil)
+	resp, err := c.doAuthRequest(context.Background(), "GET", u, headers, nil)
 	if err != nil {
 		return nil, "", err
 	}

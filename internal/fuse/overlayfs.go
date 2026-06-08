@@ -38,7 +38,12 @@ func (o *OverlayFS) Mount(lowerDirs []string, upperDir, target string) error {
 		return fmt.Errorf("ensure upper dir: %w", err)
 	}
 
-	workDir := filepath.Join(o.workDir, "work")
+	// BUG-05 fix: all overlay mounts shared the same work directory
+	// ("<workDir>/work"). The overlayfs kernel module and fuse-overlayfs
+	// both require each overlay mount to have its own dedicated work
+	// directory. Sharing a work directory causes mount failures or
+	// filesystem corruption.
+	workDir := filepath.Join(o.workDir, "work", filepath.Base(target))
 	if err := common.EnsureDir(workDir); err != nil {
 		return fmt.Errorf("ensure work dir: %w", err)
 	}
@@ -149,7 +154,9 @@ func PrepareRootfs(rootfs string, files map[string]string, user ...string) error
 		}
 
 		for dev, info := range devices {
-			mknod(dev, info[0], int(info[1]))
+			if err := mknod(dev, info[0], int(info[1])); err != nil {
+				return err
+			}
 		}
 
 		// Create symlinks.
@@ -226,7 +233,9 @@ func injectUser(rootfsDir, user string) error {
 	gf, err := os.OpenFile(groupPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
 		defer gf.Close()
-		gf.WriteString(fmt.Sprintf("%s:x:%d:\n", name, gid))
+		if _, err := gf.WriteString(fmt.Sprintf("%s:x:%d:\n", name, gid)); err != nil {
+			return fmt.Errorf("write group: %w", err)
+		}
 	}
 
 	return nil
@@ -338,15 +347,25 @@ func CopyDir(src, dst string) error {
 }
 
 // BindMount creates a bind mount.
+//
+// BUG-01 fix: the kernel ignores MS_RDONLY on the initial bind mount call.
+// Making a bind mount read-only requires a second, separate mount call with
+// MS_BIND | MS_REMOUNT | MS_RDONLY.
 func BindMount(source, target string, readOnly bool) error {
 	if err := common.EnsureDir(target); err != nil {
 		return err
 	}
-	flags := syscall.MS_BIND
-	if readOnly {
-		flags |= syscall.MS_RDONLY
+	flags := uintptr(syscall.MS_BIND)
+	if err := syscall.Mount(source, target, "", flags, ""); err != nil {
+		return fmt.Errorf("bind mount %s -> %s: %w", source, target, err)
 	}
-	return syscall.Mount(source, target, "", uintptr(flags), "")
+	if readOnly {
+		remountFlags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY)
+		if err := syscall.Mount("", target, "", remountFlags, ""); err != nil {
+			return fmt.Errorf("remount read-only %s: %w", target, err)
+		}
+	}
+	return nil
 }
 
 // TmpfsMount creates a tmpfs mount.

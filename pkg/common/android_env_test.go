@@ -164,25 +164,40 @@ func TestIsTermux(t *testing.T) {
 			}
 		}(k, old, had)
 	}
-	os.Unsetenv("TERMUX_VERSION")
-	os.Unsetenv("TERMUX__PREFIX")
-	os.Unsetenv("PREFIX")
-	if IsTermux() {
-		t.Error("IsTermux() = true with all vars unset, want false")
+	// On Termux, the filesystem check always returns true regardless of
+	// env vars, so the env-only assertions don't apply. Skip those on Termux.
+	if !PathExists("/data/data/com.termux") {
+		os.Unsetenv("TERMUX_VERSION")
+		os.Unsetenv("TERMUX__PREFIX")
+		os.Unsetenv("PREFIX")
+		resetTermuxForTest()
+		if IsTermux() {
+			t.Error("IsTermux() = true with all vars unset, want false")
+		}
+		os.Setenv("TERMUX_VERSION", "0.118.3")
+		resetTermuxForTest()
+		if !IsTermux() {
+			t.Error("IsTermux() = false with TERMUX_VERSION set, want true")
+		}
+		os.Unsetenv("TERMUX_VERSION")
+		os.Setenv("PREFIX", "/data/data/com.termux/files/usr")
+		resetTermuxForTest()
+		if !IsTermux() {
+			t.Error("IsTermux() = false with PREFIX=/data/data/com.termux, want true")
+		}
+		os.Unsetenv("PREFIX")
+		os.Setenv("TERMUX__PREFIX", "/data/data/com.termux/files/usr")
+		resetTermuxForTest()
+		if !IsTermux() {
+			t.Error("IsTermux() = false with TERMUX__PREFIX set, want true")
+		}
 	}
-	os.Setenv("TERMUX_VERSION", "0.118.3")
-	if !IsTermux() {
-		t.Error("IsTermux() = false with TERMUX_VERSION set, want true")
-	}
-	os.Unsetenv("TERMUX_VERSION")
-	os.Setenv("PREFIX", "/data/data/com.termux/files/usr")
-	if !IsTermux() {
-		t.Error("IsTermux() = false with PREFIX=/data/data/com.termux, want true")
-	}
-	os.Unsetenv("PREFIX")
-	os.Setenv("TERMUX__PREFIX", "/data/data/com.termux/files/usr")
-	if !IsTermux() {
-		t.Error("IsTermux() = false with TERMUX__PREFIX set, want true")
+	// Filesystem check: must be true on Termux.
+	if PathExists("/data/data/com.termux") {
+		resetTermuxForTest()
+		if !IsTermux() {
+			t.Error("IsTermux() = false on Termux filesystem, want true")
+		}
 	}
 }
 
@@ -209,6 +224,84 @@ func TestTermuxPrefix(t *testing.T) {
 	os.Setenv("TERMUX__PREFIX", "/custom/termux/prefix")
 	if got := TermuxPrefix(); got != "/custom/termux/prefix" {
 		t.Errorf("TermuxPrefix() with TERMUX__PREFIX = %q, want override", got)
+	}
+}
+
+func TestIsProotMode(t *testing.T) {
+	for _, k := range []string{"DOKI_PROOT", "PROOT_TMP_DIR"} {
+		old, had := os.LookupEnv(k)
+		defer func(k, old string, had bool) {
+			if had {
+				os.Setenv(k, old)
+			} else {
+				os.Unsetenv(k)
+			}
+		}(k, old, had)
+	}
+	os.Unsetenv("DOKI_PROOT")
+	os.Unsetenv("PROOT_TMP_DIR")
+	if IsProotMode() {
+		t.Error("IsProotMode() = true with no env, want false")
+	}
+	os.Setenv("DOKI_PROOT", "1")
+	if !IsProotMode() {
+		t.Error("IsProotMode() = false with DOKI_PROOT=1, want true")
+	}
+	os.Unsetenv("DOKI_PROOT")
+	os.Setenv("PROOT_TMP_DIR", "/data/data/com.termux/files/usr/tmp")
+	if !IsProotMode() {
+		t.Error("IsProotMode() = false with PROOT_TMP_DIR set, want true")
+	}
+	os.Unsetenv("PROOT_TMP_DIR")
+}
+
+func TestProotContainerIP(t *testing.T) {
+	for _, k := range []string{"DOKI_PROOT", "PROOT_TMP_DIR", "TERMUX_VERSION", "TERMUX__PREFIX", "PREFIX"} {
+		old, had := os.LookupEnv(k)
+		defer func(k, old string, had bool) {
+			if had {
+				os.Setenv(k, old)
+			} else {
+				os.Unsetenv(k)
+			}
+		}(k, old, had)
+	}
+	resetTermuxForTest()
+	os.Unsetenv("DOKI_PROOT")
+	os.Unsetenv("PROOT_TMP_DIR")
+	os.Unsetenv("TERMUX_VERSION")
+	os.Unsetenv("TERMUX__PREFIX")
+	os.Unsetenv("PREFIX")
+	// Force detection to false by temporarily renaming /data/data/com.termux
+	// is not safe; instead, just test the env-driven paths.
+	if got := ProotContainerIP("172.17.0.2"); got == "" {
+		t.Errorf("ProotContainerIP returned empty, want a string")
+	}
+	os.Setenv("DOKI_PROOT", "1")
+	if got := ProotContainerIP("172.17.0.2"); got != "127.0.0.1" {
+		t.Errorf("ProotContainerIP in proot = %q, want 127.0.0.1", got)
+	}
+	os.Unsetenv("DOKI_PROOT")
+}
+
+func TestUseProotHostNetworking(t *testing.T) {
+	resetTermuxForTest()
+	if !UseProotHostNetworking() {
+		// /data/data/com.termux exists on Termux; on a CI box without it
+		// the function would still return true when TERMUX_VERSION is set.
+		old, had := os.LookupEnv("TERMUX_VERSION")
+		defer func() {
+			if had {
+				os.Setenv("TERMUX_VERSION", old)
+			} else {
+				os.Unsetenv("TERMUX_VERSION")
+			}
+		}()
+		os.Setenv("TERMUX_VERSION", "0.118.3")
+		resetTermuxForTest()
+		if !UseProotHostNetworking() {
+			t.Error("UseProotHostNetworking() = false with TERMUX_VERSION set, want true")
+		}
 	}
 }
 

@@ -78,11 +78,10 @@ func DefaultProfile() *SeccompProfile {
 				Names:  defaultAllowSyscalls(),
 				Action: ActAllow,
 			},
-			{
-				Names:   []string{"ptrace"},
-				Action:  ActAllow,
-				Comment: "Allow ptrace for debugging",
-			},
+			// BUG-27 fix: ptrace is a container escape vector that allows
+			// tracing other processes, reading memory, and injecting code.
+			// Removed unconditional allow. Use AppArmor ptrace peer=
+			// restriction if debugging support is needed.
 		},
 	}
 }
@@ -316,7 +315,9 @@ func androidAllowSyscalls() []string {
 	// Android-specific syscalls in addition to default.
 	base := defaultAllowSyscalls()
 	android := []string{
-		"bpf", "clone3", "close_range", "faccessat2", "io_uring_setup",
+		"bpf", "clone3", "close_range", "faccessat2",
+		// BUG-09 fix: io_uring has dozens of kernel CVEs.
+		// "io_uring_setup",
 		"openat2", "pidfd_getfd", "pidfd_open", "process_madvise",
 		"quotactl_fd", "set_mempolicy_home_node", "cachestat",
 		"fchmodat2", "fstatat64", "map_shadow_stack",

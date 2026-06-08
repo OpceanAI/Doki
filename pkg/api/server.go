@@ -358,7 +358,11 @@ func (s *Server) Listen() error {
 
 	s.listener = listener
 	s.server = &http.Server{
-		Handler: s,
+		Handler:           s,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	return s.server.Serve(listener)
@@ -373,13 +377,6 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, data interface{}) 
 
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	s.writeJSON(w, status, map[string]string{"message": message})
-}
-
-func (s *Server) sendEvent(event *common.SystemEventsResponse) {
-	select {
-	case s.events <- event:
-	default:
-	}
 }
 
 // Shutdown stops the API server.
@@ -530,9 +527,13 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		creds.ServerAddress = "https://index.docker.io/v1/"
 	}
 
+	// Concurrency fix: protect authCreds writes with execMu to avoid
+	// data race with concurrent auth requests.
+	s.execMu.Lock()
 	s.authCreds.Username = creds.Username
 	s.authCreds.Password = creds.Password
 	s.authCreds.ServerAddress = creds.ServerAddress
+	s.execMu.Unlock()
 	s.image.SetRegistryAuth(creds.Username, creds.Password)
 
 	identityToken := "doki-token-" + common.GenerateID(16)
@@ -550,6 +551,7 @@ func (s *Server) handleSwarmNoop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleContainersList(w http.ResponseWriter, r *http.Request) {
 	all := r.URL.Query().Get("all") == "true"
+	filtersStr := r.URL.Query().Get("filters")
 
 	states, err := s.runtime.List()
 	if err != nil {
@@ -557,12 +559,81 @@ func (s *Server) handleContainersList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse filters.
+	var filters map[string][]string
+	if filtersStr != "" {
+		json.Unmarshal([]byte(filtersStr), &filters)
+	}
+
 	containers := make([]common.ContainerInfo, 0)
 	for _, state := range states {
 		if !all && state.Status != common.StateRunning {
 			continue
 		}
-		containers = append(containers, *s.stateToInfo(state))
+
+		info := s.stateToInfo(state)
+
+		// Apply filters.
+		if filters != nil {
+			skip := false
+			// Filter by status.
+			if statusFilters, ok := filters["status"]; ok {
+				match := false
+				for _, sf := range statusFilters {
+					if (sf == "running" && state.Status == common.StateRunning) ||
+						(sf == "exited" && state.Status == common.StateExited) ||
+						(sf == "created" && state.Status == common.StateCreated) ||
+						(sf == "paused" && state.Status == common.StatePaused) {
+						match = true
+						break
+					}
+				}
+				if !match {
+					skip = true
+				}
+			}
+			// Filter by name.
+			if nameFilters, ok := filters["name"]; ok && !skip {
+				match := false
+				containerName := ""
+				if state.Config != nil && state.Config.Annotations != nil {
+					containerName = state.Config.Annotations["doki.name"]
+				}
+				for _, nf := range nameFilters {
+					if containerName == nf || strings.Contains(state.ID, nf) {
+						match = true
+						break
+					}
+				}
+				if !match {
+					skip = true
+				}
+			}
+			// Filter by label.
+			if labelFilters, ok := filters["label"]; ok && !skip {
+				for _, lf := range labelFilters {
+					parts := strings.SplitN(lf, "=", 2)
+					key := parts[0]
+					val := ""
+					if len(parts) == 2 {
+						val = parts[1]
+					}
+					if state.Config == nil || state.Config.Labels == nil {
+						skip = true
+						break
+					}
+					if lv, ok := state.Config.Labels[key]; !ok || (val != "" && lv != val) {
+						skip = true
+						break
+					}
+				}
+			}
+			if skip {
+				continue
+			}
+		}
+
+		containers = append(containers, *info)
 	}
 
 	s.writeJSON(w, http.StatusOK, containers)
@@ -577,6 +648,9 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		Tty           bool               `json:"Tty"`
 		OpenStdin     bool               `json:"OpenStdin"`
 		WorkingDir    string             `json:"WorkingDir"`
+		Hostname      string             `json:"Hostname"`
+		Domainname    string             `json:"Domainname"`
+		User          string             `json:"User"`
 		HostConfig    *common.HostConfig `json:"HostConfig"`
 		Labels        map[string]string  `json:"Labels"`
 		ContainerName string             `json:"Name,omitempty"`
@@ -587,6 +661,31 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Docker also accepts ?name= query param, overriding the body name.
+	if queryName := r.URL.Query().Get("name"); queryName != "" {
+		req.ContainerName = queryName
+	}
+
+	if req.Image == "" {
+		s.writeError(w, http.StatusBadRequest, "Image is required")
+		return
+	}
+
+	// Check for duplicate container names
+	if req.ContainerName != "" {
+		states, err := s.runtime.List()
+		if err == nil {
+			for _, state := range states {
+				if state.Config != nil && state.Config.Annotations != nil {
+					if existingName := state.Config.Annotations["doki.name"]; existingName == req.ContainerName {
+						s.writeError(w, http.StatusConflict, "container name already in use")
+						return
+					}
+				}
+			}
+		}
+	}
+
 	// Pull image based on pull policy.
 	pullPolicy := r.URL.Query().Get("pull")
 	if pullPolicy == "" {
@@ -595,13 +694,13 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 	switch pullPolicy {
 	case "always":
 		if _, err := s.image.Pull(req.Image); err != nil {
-			s.writeError(w, http.StatusInternalServerError, "pull image: "+err.Error())
+			s.writeError(w, http.StatusInternalServerError, "pull image failed")
 			return
 		}
 	case "missing":
 		if req.Image != "" && !s.image.Exists(req.Image) {
 			if _, err := s.image.Pull(req.Image); err != nil {
-				s.writeError(w, http.StatusInternalServerError, "pull image: "+err.Error())
+				s.writeError(w, http.StatusInternalServerError, "pull image failed")
 				return
 			}
 		}
@@ -660,11 +759,13 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := &dokiruntime.Config{
-		ID:       containerID,
-		Args:     cmd,
-		Env:      req.Env,
-		Tty:      req.Tty,
-		ImageRef: req.Image,
+		ID:          containerID,
+		Args:        cmd,
+		Env:         req.Env,
+		Tty:         req.Tty,
+		ImageRef:    req.Image,
+		ImageDigest: imgRecord.ID,
+		Hostname:    req.Hostname,
 	}
 
 	// Copy user-provided labels.
@@ -677,8 +778,10 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		cfg.Cwd = imgRecord.Config.Config.WorkingDir
 	}
 
-	// Copy user from image config if not already set.
-	if imgRecord.Config != nil && imgRecord.Config.Config.User != "" {
+	// Copy user from request or image config.
+	if req.User != "" {
+		cfg.User = req.User
+	} else if imgRecord.Config != nil && imgRecord.Config.Config.User != "" {
 		cfg.User = imgRecord.Config.Config.User
 	}
 
@@ -896,10 +999,54 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Ensure we always write valid JSON.
-	data, err := json.Marshal(js)
+	// Marshal to map so we can rewrite State as a Docker-compatible object.
+	raw, err := json.Marshal(js)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "marshal: "+err.Error())
+		return
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "unmarshal: "+err.Error())
+		return
+	}
+
+	// Docker returns State as a nested object, not a plain string.
+	stateObj := map[string]interface{}{
+		"Status":     string(state.Status),
+		"Running":    state.Status == common.StateRunning,
+		"ExitCode":   state.ExitCode,
+		"Pid":        state.Pid,
+		"StartedAt":  "",
+		"FinishedAt": "",
+	}
+	if !state.Started.IsZero() {
+		stateObj["StartedAt"] = state.Started.UTC().Format(time.RFC3339Nano)
+	}
+	if !state.Finished.IsZero() {
+		stateObj["FinishedAt"] = state.Finished.UTC().Format(time.RFC3339Nano)
+	}
+	m["State"] = stateObj
+
+	// Ensure ImageID, ImageDigest, and Name are always present.
+	if state.Config != nil && state.Config.ImageDigest != "" {
+		m["ImageID"] = state.Config.ImageDigest
+	}
+	if _, ok := m["ImageDigest"]; !ok {
+		m["ImageDigest"] = ""
+	}
+	if state.Config != nil && state.Config.Annotations != nil {
+		if n, ok := state.Config.Annotations["doki.name"]; ok {
+			m["Name"] = "/" + n
+		}
+	}
+	if _, ok := m["Name"]; !ok {
+		m["Name"] = ""
+	}
+
+	data, err := json.Marshal(m)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "marshal2: "+err.Error())
 		return
 	}
 
@@ -910,7 +1057,13 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request, id string) {
 	if err := s.runtime.Start(id); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		if common.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+		} else if strings.Contains(err.Error(), "is in state") {
+			s.writeError(w, http.StatusConflict, err.Error())
+		} else {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	// Configure networking after start.
@@ -939,6 +1092,14 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request, id 
 		}
 	}
 
+	// Docker returns 304 Not Modified for stop on already-stopped container.
+	if state, err := s.runtime.State(id); err == nil && state != nil {
+		if state.Status != common.StateRunning && state.Status != common.StatePaused {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+
 	s.network.RemovePortForwardings(id)
 
 	if state, err := s.runtime.State(id); err == nil && state != nil && state.Config != nil {
@@ -952,7 +1113,13 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	if err := s.runtime.Stop(id, timeout); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		if common.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+		} else if strings.Contains(err.Error(), "not running") {
+			s.writeError(w, http.StatusConflict, err.Error())
+		} else {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -968,11 +1135,19 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request, 
 	s.network.RemovePortForwardings(id)
 
 	if err := s.runtime.Stop(id, timeout); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "stop: "+err.Error())
+		if common.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			s.writeError(w, http.StatusInternalServerError, "stop: "+err.Error())
+		}
 		return
 	}
 	if err := s.runtime.Start(id); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "start: "+err.Error())
+		if common.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			s.writeError(w, http.StatusInternalServerError, "start: "+err.Error())
+		}
 		return
 	}
 	// Reconfigure networking after restart.
@@ -1001,7 +1176,11 @@ func (s *Server) handleContainerKill(w http.ResponseWriter, r *http.Request, id 
 	s.network.RemovePortForwardings(id)
 
 	if err := s.runtime.Kill(id, sig); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		if common.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			s.writeError(w, http.StatusConflict, err.Error())
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1009,7 +1188,11 @@ func (s *Server) handleContainerKill(w http.ResponseWriter, r *http.Request, id 
 
 func (s *Server) handleContainerPause(w http.ResponseWriter, r *http.Request, id string) {
 	if err := s.runtime.Pause(id); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		if common.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1034,14 +1217,23 @@ func (s *Server) handleContainerWait(w http.ResponseWriter, r *http.Request, id 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		state, err = s.runtime.State(id)
-		if err != nil || state.Status == common.StateExited || state.Status == common.StateDead {
-			break
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			state, err = s.runtime.State(id)
+			if err != nil {
+				// BUG-09 fix: state may be nil if the container was deleted.
+				s.writeJSON(w, http.StatusOK, map[string]int{"StatusCode": -1})
+				return
+			}
+			if state.Status == common.StateExited || state.Status == common.StateDead {
+				s.writeJSON(w, http.StatusOK, map[string]int{"StatusCode": state.ExitCode})
+				return
+			}
 		}
 	}
-
-	s.writeJSON(w, http.StatusOK, map[string]int{"StatusCode": state.ExitCode})
 }
 
 func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id string) {
@@ -1093,15 +1285,16 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 	} else {
 		w.Header().Set("Content-Type", "application/vnd.docker.multiplexed-stream")
 	}
-	w.WriteHeader(http.StatusOK)
 
-	// Write initial logs.
+	// Open log file BEFORE writing header so we can return 404 if missing.
 	logFile, err := os.Open(state.LogPath)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, "no log file: "+err.Error())
+		s.writeError(w, http.StatusNotFound, "no log file available")
 		return
 	}
 	defer logFile.Close()
+
+	w.WriteHeader(http.StatusOK)
 
 	// Read existing content and write as multiplexed frames.
 	content, _ := io.ReadAll(logFile)
@@ -1216,11 +1409,12 @@ func (s *Server) writeLogLine(w io.Writer, line string, stdout, stderr bool, str
 	}
 
 	// Build multiplexed frame header.
+	data := line + "\n"
 	header := make([]byte, 8)
 	header[0] = streamType
-	binary.BigEndian.PutUint32(header[4:], uint32(len(line)))
+	binary.BigEndian.PutUint32(header[4:], uint32(len(data)))
 	w.Write(header)
-	w.Write([]byte(line))
+	w.Write([]byte(data))
 }
 
 func (s *Server) handleContainerDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -1229,7 +1423,13 @@ func (s *Server) handleContainerDelete(w http.ResponseWriter, r *http.Request, i
 	s.network.RemovePortForwardings(id)
 
 	if err := s.runtime.Delete(id, force); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		if common.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+		} else if strings.Contains(err.Error(), "is running") {
+			s.writeError(w, http.StatusConflict, err.Error())
+		} else {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1287,12 +1487,41 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 	}
 	defer conn.Close()
 	conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n"))
-	// Stream container output
-	rootfsDir := state.Config.RootfsReady
-	if rootfsDir != "" {
-		// Attach via proot exec to read container stdout
-		go io.Copy(conn, conn) // echo stdin back
+	
+	// Stream container logs
+	if state.LogPath != "" {
+		// Read existing logs
+		if data, err := os.ReadFile(state.LogPath); err == nil {
+			conn.Write(data)
+		}
+		
+		// Follow new logs
+		go func() {
+			file, err := os.Open(state.LogPath)
+			if err != nil {
+				return
+			}
+			defer file.Close()
+			
+			// Seek to end
+			file.Seek(0, io.SeekEnd)
+			
+			buf := make([]byte, 4096)
+			for {
+				n, err := file.Read(buf)
+				if n > 0 {
+					conn.Write(buf[:n])
+				}
+				if err != nil {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+			}
+		}()
 	}
+	
+	// Keep connection alive
+	io.Copy(io.Discard, conn)
 }
 
 // G5: handleContainerHealth returns health status for a container.
@@ -1343,7 +1572,7 @@ func (s *Server) handleContainerExport(w http.ResponseWriter, r *http.Request, i
 			return err
 		}
 		hdr.Name = rel
-		hdr.Mode &^= 0777 // mask permissions to 0777 (BUG 43)
+		// Preserve original file permissions (do not force 0777)
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
@@ -1395,6 +1624,12 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 		}
 		if req.RestartPolicy.Name != "" {
 			state.Config.RestartPolicy = common.RestartPolicy(req.RestartPolicy.Name)
+		}
+		
+		// Persist changes
+		if err := s.runtime.SaveState(state); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "failed to save state: "+err.Error())
+			return
 		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{"Warnings": []string{}})
@@ -1530,31 +1765,58 @@ func (s *Server) handleExecDispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID string) {
-	s.execMu.RLock()
+	s.execMu.Lock()
 	cfg, ok := s.execStore[execID]
-	s.execMu.RUnlock()
-
 	if !ok {
+		s.execMu.Unlock()
 		s.writeError(w, http.StatusNotFound, "exec instance not found")
 		return
 	}
-
 	if cfg.Running {
+		s.execMu.Unlock()
 		s.writeError(w, http.StatusConflict, "exec instance already started")
 		return
 	}
-
-	if err := s.runtime.Exec(cfg.ContainerID, cfg.Cmd, cfg.Env, cfg.WorkingDir, cfg.User); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "exec: "+err.Error())
-		return
-	}
-
-	s.execMu.Lock()
 	cfg.Running = true
 	s.execMu.Unlock()
 
+	stdout, stderr, err := s.runtime.Exec(cfg.ContainerID, cfg.Cmd, cfg.Env, cfg.WorkingDir, cfg.User)
+	if err != nil {
+		s.execMu.Lock()
+		cfg.Running = false
+		s.execMu.Unlock()
+		// Still write output even if command failed (exit code != 0)
+		if len(stdout) == 0 && len(stderr) == 0 {
+			s.writeError(w, http.StatusInternalServerError, "exec: "+err.Error())
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
 	w.WriteHeader(http.StatusOK)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	if len(stdout) > 0 {
+		header := make([]byte, 8)
+		header[0] = 1 // stdout
+		header[4] = byte(len(stdout) >> 24)
+		header[5] = byte(len(stdout) >> 16)
+		header[6] = byte(len(stdout) >> 8)
+		header[7] = byte(len(stdout))
+		w.Write(header)
+		w.Write(stdout)
+	}
+	if len(stderr) > 0 {
+		header := make([]byte, 8)
+		header[0] = 2 // stderr
+		header[4] = byte(len(stderr) >> 24)
+		header[5] = byte(len(stderr) >> 16)
+		header[6] = byte(len(stderr) >> 8)
+		header[7] = byte(len(stderr))
+		w.Write(header)
+		w.Write(stderr)
+	}
 }
 
 func (s *Server) handleImagesList(w http.ResponseWriter, r *http.Request) {
@@ -1643,7 +1905,36 @@ func (s *Server) handleImageInspect(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, record)
+	// Convert to Docker-compatible format with PascalCase fields
+	createdTime := time.Unix(record.Created, 0).UTC().Format(time.RFC3339)
+	dockerImage := map[string]interface{}{
+		"Id":           record.ID,
+		"RepoTags":     record.RepoTags,
+		"RepoDigests":  record.RepoDigests,
+		"Parent":       record.Parent,
+		"Created":      createdTime,
+		"Architecture": record.Architecture,
+		"Os":           record.OS,
+		"Size":         record.Size,
+	}
+	if record.Config != nil {
+		dockerConfig := map[string]interface{}{
+			"Entrypoint":  record.Config.Config.Entrypoint,
+			"Cmd":         record.Config.Config.Cmd,
+			"Env":         record.Config.Config.Env,
+			"WorkingDir":  record.Config.Config.WorkingDir,
+			"Labels":      record.Config.Config.Labels,
+			"Volumes":     record.Config.Config.Volumes,
+			"StopSignal":  record.Config.Config.StopSignal,
+			"User":        record.Config.Config.User,
+		}
+		if len(record.Config.Config.ExposedPorts) > 0 {
+			dockerConfig["ExposedPorts"] = record.Config.Config.ExposedPorts
+		}
+		dockerImage["Config"] = dockerConfig
+	}
+
+	s.writeJSON(w, http.StatusOK, dockerImage)
 }
 
 func (s *Server) handleImageHistory(w http.ResponseWriter, r *http.Request, id string) {
@@ -1717,7 +2008,11 @@ func (s *Server) handleImageTag(w http.ResponseWriter, r *http.Request, id strin
 
 func (s *Server) handleImageRemove(w http.ResponseWriter, r *http.Request, id string) {
 	if err := s.image.Remove(id); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		if common.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, fmt.Sprintf("No such image: %s", id))
+		} else {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1755,27 +2050,80 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "context query parameter required")
 		return
 	}
+
+	// Constrain the build context to a path inside the configured
+	// data directory. The previous implementation accepted any path
+	// the client sent, so a malicious request could read or build
+	// from /etc, $HOME, or another container's rootfs. We resolve
+	// symlinks before the prefix check to avoid trivial bypass.
+	allowedRoot := s.config.DataDir
+	if allowedRoot == "" {
+		allowedRoot = os.TempDir()
+	}
+	cleanCtx := filepath.Clean(contextDir)
+	realCtx, err := filepath.EvalSymlinks(cleanCtx)
+	if err == nil {
+		cleanCtx = realCtx
+	}
+	cleanRoot := filepath.Clean(allowedRoot)
+	if cleanCtx != cleanRoot &&
+		!strings.HasPrefix(cleanCtx, cleanRoot+string(os.PathSeparator)) {
+		s.writeError(w, http.StatusBadRequest, "build context outside allowed directory")
+		return
+	}
+
 	dockerfile := r.URL.Query().Get("dockerfile")
 	if dockerfile == "" {
 		dockerfile = r.URL.Query().Get("dokifile")
 	}
-	tag := r.URL.Query().Get("t")
-	_ = r.URL.Query().Get("nocache") == "true"
+	var tags []string
+	if t := r.URL.Query().Get("t"); t != "" {
+		tags = append(tags, t)
+	}
+	// Support multiple t= params.
+	if ts := r.URL.Query()["t"]; len(ts) > 1 {
+		tags = ts
+	}
+	nocache := r.URL.Query().Get("nocache") == "true"
+	_ = r.URL.Query().Get("pull") == "true" // pull is always true during build
+	buildArgs := make(map[string]string)
+	for _, ba := range r.URL.Query()["buildarg"] {
+		k, v, ok := strings.Cut(ba, "=")
+		if ok {
+			buildArgs[k] = v
+		}
+	}
 
 	if dockerfile == "" {
 		// Try default names.
 		for _, name := range []string{"Dokifile", "dokifile", "Dockerfile", "dockerfile"} {
-			if common.PathExists(filepath.Join(contextDir, name)) {
+			if common.PathExists(filepath.Join(cleanCtx, name)) {
 				dockerfile = name
 				break
 			}
 		}
 	}
 
-	// If dockerfile is an absolute path, use it directly.
+	// Reject traversal in the dockerfile name. A safe value is a
+	// bare filename; absolute paths are allowed but must also live
+	// inside the validated context directory.
 	dockerfilePath := dockerfile
 	if !filepath.IsAbs(dockerfile) {
-		dockerfilePath = filepath.Join(contextDir, dockerfile)
+		if strings.Contains(dockerfile, "..") {
+			s.writeError(w, http.StatusBadRequest, "invalid dockerfile name")
+			return
+		}
+		dockerfilePath = filepath.Join(cleanCtx, dockerfile)
+	} else {
+		realDP, derr := filepath.EvalSymlinks(dockerfilePath)
+		if derr == nil {
+			dockerfilePath = realDP
+		}
+		if dockerfilePath != cleanRoot &&
+			!strings.HasPrefix(dockerfilePath, cleanRoot+string(os.PathSeparator)) {
+			s.writeError(w, http.StatusBadRequest, "dockerfile outside allowed directory")
+			return
+		}
 	}
 
 	content, err := os.ReadFile(dockerfilePath)
@@ -1798,12 +2146,16 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 
 	b := builder.NewBuilder(s.image)
 
+	target := r.URL.Query().Get("target")
+
 	buildCfg := &builder.BuildConfig{
-		Context:  contextDir,
-		Dokifile: dockerfile,
-		Tags:     []string{tag},
-		Pull:     true,
-		NoCache:  r.URL.Query().Get("nocache") == "true",
+		Context:   cleanCtx,
+		Dokifile:  dockerfile,
+		Tags:      tags,
+		BuildArgs: buildArgs,
+		Pull:      true,
+		NoCache:   nocache,
+		Target:    target,
 	}
 
 	if err := b.Build(buildCfg); err != nil {
@@ -1813,8 +2165,12 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	tagName := "image"
+	if len(tags) > 0 {
+		tagName = tags[0]
+	}
 	json.NewEncoder(w).Encode(map[string]string{
-		"stream": fmt.Sprintf("Successfully built %s\n", tag),
+		"stream": fmt.Sprintf("Successfully built %s\n", tagName),
 	})
 }
 
@@ -1864,6 +2220,11 @@ func (s *Server) handleNetworkCreate(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "Name cannot be empty")
 		return
 	}
 
@@ -1950,7 +2311,11 @@ func (s *Server) handleNetworkDispatch(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case r.Method == "DELETE":
 		if err := s.network.RemoveNetwork(networkID); err != nil {
-			s.writeError(w, http.StatusInternalServerError, err.Error())
+			if common.IsNotFound(err) {
+				s.writeError(w, http.StatusNotFound, err.Error())
+			} else {
+				s.writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -2051,7 +2416,8 @@ func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.Containe
 
 	info := &common.ContainerInfo{
 		ID:      state.ID,
-		Names:   []string{"/" + common.ShortID(state.ID)},
+		Names:   []string{"/" + state.ID},
+		Name:    "/" + common.ShortID(state.ID),
 		Image:   "",
 		State:   state.Status,
 		Status:  status,
@@ -2064,6 +2430,7 @@ func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.Containe
 	if state.Config != nil && state.Config.Annotations != nil {
 		if name, ok := state.Config.Annotations["doki.name"]; ok {
 			info.Names = []string{"/" + name}
+			info.Name = "/" + name
 		}
 	}
 
@@ -2097,20 +2464,73 @@ func (s *Server) stateToJSON(state *dokiruntime.ContainerState) *common.Containe
 		cfg.Entrypoint = nil
 		cfg.Volumes = nil
 		cfg.Labels = state.Config.Labels
-		if state.Config.Annotations != nil {
-			if n, ok := state.Config.Annotations["doki.name"]; ok {
-				cfg.Hostname = n
+		cfg.Image = state.Config.ImageRef
+		cfg.Hostname = state.Config.Hostname
+	}
+	imageRef := ""
+	imageID := ""
+	if state.Config != nil {
+		imageRef = state.Config.ImageRef
+		imageID = state.Config.ImageDigest
+	}
+
+	// Build container name from annotations.
+	name := ""
+	if state.Config != nil && state.Config.Annotations != nil {
+		if n, ok := state.Config.Annotations["doki.name"]; ok {
+			name = "/" + n
+		}
+	}
+
+	// Build HostConfig from runtime config.
+	hostCfg := &common.HostConfig{}
+	if state.Config != nil {
+		hostCfg.NetworkMode = state.Config.NetworkMode
+		hostCfg.DNS = state.Config.DNS
+		hostCfg.DNSSearch = state.Config.DNSSearch
+		hostCfg.DNSOptions = state.Config.DNSOptions
+		hostCfg.ExtraHosts = state.Config.ExtraHosts
+		hostCfg.Init = state.Config.Init
+		hostCfg.ReadonlyRootfs = state.Config.ReadOnly
+		hostCfg.Privileged = state.Config.Privileged
+		if state.Config.RestartPolicy != "" {
+			hostCfg.RestartPolicy.Name = string(state.Config.RestartPolicy)
+			hostCfg.RestartPolicy.MaximumRetryCount = state.Config.RestartMaxRetries
+		}
+		if state.Config.Resources != nil {
+			hostCfg.Memory = state.Config.Resources.Memory
+			hostCfg.NanoCpus = state.Config.Resources.NanoCpus
+		}
+		// Reconstruct port bindings.
+		if len(state.Config.Ports) > 0 {
+			hostCfg.PortBindings = make(map[string][]common.PortBinding)
+			for _, p := range state.Config.Ports {
+				key := fmt.Sprintf("%d/%s", p.PrivatePort, p.Type)
+				hostCfg.PortBindings[key] = append(hostCfg.PortBindings[key], common.PortBinding{
+					HostIP:   p.IP,
+					HostPort: strconv.Itoa(int(p.PublicPort)),
+				})
+			}
+		}
+		// Reconstruct binds from mounts.
+		for _, m := range state.Config.Mounts {
+			if m.Type == common.MountBind {
+				bind := m.Source + ":" + m.Target
+				if m.ReadOnly {
+					bind += ":ro"
+				}
+				hostCfg.Binds = append(hostCfg.Binds, bind)
 			}
 		}
 	}
-	imageRef := ""
-	if state.Config != nil {
-		imageRef = state.Config.ImageRef
-	}
+
 	return &common.ContainerJSON{
 		ContainerInfo:   s.stateToInfo(state),
 		Config:          cfg,
+		HostConfig:      hostCfg,
 		Image:           imageRef,
+		ImageID:         imageID,
+		Name:            name,
 		Driver:          "doki",
 		Platform:        "linux",
 		LogPath:         state.LogPath,
@@ -2224,6 +2644,10 @@ func (s *Server) handleKubePlay(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, map[string]string{"message": "kube down: resources removed"})
 		return
 	}
+	// Bound the kube YAML body to 4 MiB. A typical pod manifest is
+	// only a few KiB, so this leaves plenty of headroom while
+	// preventing a malicious or buggy client from filling memory.
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "read body: "+err.Error())

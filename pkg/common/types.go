@@ -8,8 +8,8 @@ import (
 )
 
 // DokiVersion is the current version of the Doki engine.
-// Bumped to v0.9.2: bugfixes (DNS activation, slog, atomic state, 16KB page size).
-const DokiVersion = "0.9.2"
+// Bumped to v0.9.3: critical bug fixes (proot ENOSYS, deadlocks, security hardening, 80+ bugs fixed).
+const DokiVersion = "0.9.3"
 
 // DokiAPIVersion is the compatible Docker Engine API version.
 // Aligned with Docker Engine 29.5.x (May 2026) max API.
@@ -387,8 +387,8 @@ type HealthCheckResult struct {
 
 // SearchResult is returned from image search.
 type SearchResult struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string `json:"repo_name"`
+	Description string `json:"short_description"`
 	StarCount   int    `json:"star_count"`
 	IsOfficial  bool   `json:"is_official"`
 	IsAutomated bool   `json:"is_automated"`
@@ -498,7 +498,10 @@ type SystemInfo struct {
 type ContainerJSON struct {
 	*ContainerInfo
 	Config           *ContainerConfig   `json:"Config"`
+	HostConfig       *HostConfig        `json:"HostConfig"`
 	Image            string             `json:"Image"`
+	ImageID          string             `json:"ImageID"`
+	Name             string             `json:"Name"`
 	ResolvConfPath   string             `json:"ResolvConfPath"`
 	HostnamePath     string             `json:"HostnamePath"`
 	HostsPath        string             `json:"HostsPath"`

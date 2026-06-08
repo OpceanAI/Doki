@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
+	dokiruntime "github.com/OpceanAI/Doki/pkg/runtime"
 )
 
 // handleContainerResize handles POST /containers/{id}/resize.
@@ -67,12 +69,13 @@ func (s *Server) handleContainerArchive(w http.ResponseWriter, r *http.Request, 
 
 	// Resolve path inside container rootfs.
 	containerPath := resolveContainerPath(rootfs, path)
+	endsWithSlash := strings.HasSuffix(path, "/")
 
 	switch r.Method {
 	case "GET":
 		s.handleArchiveGet(w, r, rootfs, containerPath)
 	case "PUT":
-		s.handleArchivePut(w, r, rootfs, containerPath)
+		s.handleArchivePut(w, r, rootfs, containerPath, endsWithSlash)
 	default:
 		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -109,11 +112,15 @@ func (s *Server) handleArchiveGet(w http.ResponseWriter, r *http.Request, rootfs
 	}
 }
 
-func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, rootfs, containerPath string) {
-	// Ensure parent directory exists.
-	if err := os.MkdirAll(filepath.Dir(containerPath), 0755); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
+func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, rootfs, containerPath string, pathEndsWithSlash bool) {
+	destInfo, destStatErr := os.Stat(containerPath)
+	destIsDir := destStatErr == nil && destInfo.IsDir()
+
+	if !destIsDir && !pathEndsWithSlash {
+		if err := os.MkdirAll(filepath.Dir(containerPath), 0755); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	tr := tar.NewReader(r.Body)
@@ -127,11 +134,15 @@ func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, rootfs
 			return
 		}
 
-		target := filepath.Join(containerPath, hdr.Name)
-		// Path traversal protection.
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(containerPath)) {
-			s.writeError(w, http.StatusBadRequest, "invalid path in archive")
-			return
+		var target string
+		if destIsDir || pathEndsWithSlash {
+			target = filepath.Join(containerPath, hdr.Name)
+			if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(containerPath)+string(os.PathSeparator)) {
+				s.writeError(w, http.StatusBadRequest, "invalid path in archive")
+				return
+			}
+		} else {
+			target = containerPath
 		}
 
 		switch hdr.Typeflag {
@@ -143,8 +154,19 @@ func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, rootfs
 			if err != nil {
 				continue
 			}
-			io.Copy(f, tr)
+			const maxFileSize = 1 << 30 // 1 GB
+			n, err := io.Copy(f, io.LimitReader(tr, maxFileSize+1))
+			if err != nil {
+				f.Close()
+				s.writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 			f.Close()
+			if n > maxFileSize {
+				os.Remove(target)
+				s.writeError(w, http.StatusRequestEntityTooLarge, "file too large")
+				return
+			}
 		}
 	}
 
@@ -202,11 +224,16 @@ func (s *Server) handleContainerStatsStream(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
+	// BUG-01 fix (deep audit): the previous code used `default` in select,
+	// causing a 100% CPU spin for every connected stats client. Use a
+	// 1-second ticker instead.
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		default:
+		case <-ticker.C:
 		}
 
 		stats, _ := s.runtime.Stats(id)
@@ -299,6 +326,19 @@ func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
+	// Check if name already exists
+	states, err := s.runtime.List()
+	if err == nil {
+		for _, state := range states {
+			if state.Config != nil && state.Config.Annotations != nil {
+				if existingName := state.Config.Annotations["doki.name"]; existingName == newName && state.ID != id {
+					s.writeError(w, http.StatusConflict, "name already in use")
+					return
+				}
+			}
+		}
+	}
+
 	// Update container name in annotations.
 	state, err := s.runtime.State(id)
 	if err != nil {
@@ -306,11 +346,21 @@ func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	if state.Config != nil && state.Config.Annotations != nil {
-		state.Config.Annotations["doki.name"] = newName
+	if state.Config == nil {
+		state.Config = &dokiruntime.Config{}
+	}
+	if state.Config.Annotations == nil {
+		state.Config.Annotations = make(map[string]string)
+	}
+	state.Config.Annotations["doki.name"] = newName
+
+	// Persist changes
+	if err := s.runtime.SaveState(state); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to save state: "+err.Error())
+		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]string{})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleContainerExecResize handles POST /exec/{id}/resize.

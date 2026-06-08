@@ -342,3 +342,109 @@ Before v0.9.2: `ip link` would show dozens of `veth*` interfaces after running a
 - `pkg/network/android_dns.go` — Android DNS discovery
 - `pkg/network/rootless.go` — pasta integration
 - `pkg/common/resolv.go` — resolv.conf parsing
+- `pkg/netlink/proxy.go` — TCP forwarder (replaces socat)
+- `pkg/netlink/udp.go` — UDP forwarder with session map
+- `pkg/netlink/keys.go` — install identity, Ed25519 + ECDSA P-256
+- `pkg/netlink/crypto.go` — TLS 1.3 and NaCl secretbox wrappers
+- `pkg/netlink/peer.go` — peer record and trust store
+- `pkg/netlink/mesh.go` — gossip protocol, peer registry, mesh router
+- `pkg/netlink/discovery_static.go` — `peers.json` loader
+- `pkg/netlink/discovery_mdns_{on,off}.go` — mDNS service (opt-in)
+
+## DokiLink-Lite (Multi-Host Mesh)
+
+Doki 0.9.3 introduces **DokiLink-Lite**: a TCP/UDP proxy + mesh
+discovery layer that lets you forward a container's published port to
+another Doki instance on the same LAN (or beyond, if you configure
+static peers manually). It is intentionally minimal: no gVisor, no
+full WireGuard stack, no NAT traversal, no relay server.
+
+### Encryption Layers
+
+| Layer | When | Library | Notes |
+|:------|:-----|:--------|:------|
+| L0 (none) | loopback-only | — | default on Android/Termux |
+| L1 (TLS 1.3) | any inter-host | `crypto/tls` stdlib | default, signed by per-install CA |
+| L2 (secretbox) | payload-only | `golang.org/x/crypto/nacl/secretbox` | opt-in via `DOKI_LINK_PAYLOAD_ENC=1`, key derived from both peers' Ed25519 pubkeys |
+
+### Architecture
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant DokiA as Doki (A)
+    participant TLS as TLS 1.3
+    participant Box as secretbox
+    participant DokiB as Doki (B)
+    participant Container
+
+    Client->>DokiA: dial :9090
+    DokiA->>TLS: WrapServer (L1)
+    TLS->>Box: WrapServer (L2, opt-in)
+    Box->>DokiB: TCP forward
+    DokiB->>Container: dial :8080
+    Container-->>DokiB: response
+    DokiB-->>Box: forward back
+    Box-->>TLS: forward back
+    TLS-->>DokiA: forward back
+    DokiA-->>Client: response
+```
+
+### Peer Discovery
+
+```mermaid
+flowchart LR
+    A[Install identity] --> B{Discovery}
+    B -->|static| P[peers.json]
+    B -->|mDNS| M[mdns browser]
+    P --> T[TrustStore]
+    M --> T
+    T --> Mesh[Mesh registry]
+    Mesh --> G[Gossip every 15s]
+    G --> Containers[Container announcements]
+```
+
+### CLI
+
+```bash
+# Inspect the local install identity.
+doki mesh status
+# install id:    fndwnv3mn7dt
+# public key:    K0dm12xvxzUTBZ3lJkOcOyBrGPPNlCWpTJhcEv0BQys=
+# ca fingerprint: cc4165e0ef4c
+# ca expires:    2027-06-07
+
+# Add a static peer.
+doki link add mybuddy 192.168.1.42:7432 --pub "$(doki mesh status | awk '/public key/ {print $3}')"
+
+# List peers.
+doki mesh ls
+# PEER ID    NAME       ADDRESS            LAST SEEN
+# mybuddy    mybuddy    192.168.1.42:7432  2s
+
+# Remove a peer.
+doki link rm mybuddy
+```
+
+### Limitations (read before deploying)
+
+1. **No NAT traversal, no relay**: DokiLink only works when both
+   peers can reach each other on the gossip port (default `:7432`).
+   For cross-NAT setups, run a Tailscale / Nebula overlay first.
+2. **mDNS is LAN-only**: built with `-tags netlink_mdns`. Default
+   builds include a stub. Use static peers for cross-VLAN.
+3. **Per-datagram secretbox framing** has a 24-byte nonce + 16-byte
+   overhead — UDP-heavy workloads pay a fixed per-packet cost.
+4. **No DHT, no auto-discovery beyond mDNS / static JSON**: the
+   `peers.json` is the single source of truth for cross-network
+   peers.
+5. **Container sees host network** in proot+Termux mode: DokiLink
+   forwarding is a TCP/UDP relay on the host loopback, not a
+   network-namespace bridge. Containers in `proot` mode can already
+   reach any service on the host, so the proxy does not add a
+   security boundary in that mode.
+6. **Wire protocol is JSON, capped at 4 KiB per message**: gRPC /
+   protobuf is a future v0.11+ feature.
+7. **CA lifetime is 365 days, link certs 90 days**: re-issue with
+   `doki mesh status` to confirm expiry. Rotation tooling is planned
+   for v0.10.

@@ -164,6 +164,9 @@ func convertCPUSharesToV2Value(shares uint64) uint64 {
 	if shares == 0 {
 		return 100
 	}
+	if shares < 2 {
+		shares = 2
+	}
 	return 1 + ((shares-2)*9999)/262142
 }
 

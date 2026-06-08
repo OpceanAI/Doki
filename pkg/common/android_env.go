@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // AndroidEnv returns the safe defaults injected into every container's
@@ -25,9 +26,31 @@ func AndroidEnv() []string {
 }
 
 // IsTermux reports whether the current process is running inside Termux.
-// Detection is purely environment-based so it works for both the Termux app
-// and derivative builds (F-Droid, GitHub, NDK variants).
+// Detection uses three signals in order:
+//  1. Cached result (TERMUX detection must survive UnsetProotKillers,
+//     which strips TERMUX_VERSION from the process env before launching
+//     proot). The cache is populated at first call via sync.Once.
+//  2. Environment variables (TERMUX_VERSION, PREFIX, TERMUX__PREFIX).
+//  3. Filesystem markers (/data/data/com.termux symlink, /system/build.prop,
+//     /system/app, /apex/com.android.runtime).
+//
+// The filesystem check is the authoritative signal: env vars may be stripped
+// by UnsetProotKillers or other tooling, but the presence of /data/data/com.termux
+// is structural to a Termux install.
+var (
+	termuxOnce   sync.Once
+	termuxResult bool
+)
+
 func IsTermux() bool {
+	termuxOnce.Do(func() {
+		termuxResult = detectTermux()
+	})
+	return termuxResult
+}
+
+func detectTermux() bool {
+	// 1. Environment (fast path)
 	if v := strings.TrimSpace(os.Getenv("TERMUX_VERSION")); v != "" {
 		return true
 	}
@@ -37,7 +60,24 @@ func IsTermux() bool {
 	if p := os.Getenv("TERMUX__PREFIX"); p != "" {
 		return true
 	}
+	// 2. Filesystem (authoritative)
+	if PathExists("/data/data/com.termux") {
+		return true
+	}
+	if PathExists("/system/build.prop") && PathExists("/apex/com.android.runtime") {
+		// Android, but might be a non-Termux install. The presence of
+		// /data/data/com.termux is the most reliable Termux marker.
+		return false
+	}
 	return false
+}
+
+// resetTermuxForTest clears the IsTermux cache so tests that mutate the
+// process environment can re-evaluate the detection logic. NOT for
+// production use; tests that need this must call it in their setup.
+func resetTermuxForTest() {
+	termuxOnce = sync.Once{}
+	termuxResult = false
 }
 
 // TermuxPrefix returns the absolute path of the Termux $PREFIX, falling back
@@ -84,4 +124,51 @@ func TermuxVersion() string {
 		return v
 	}
 	return "unknown"
+}
+
+// IsProotMode reports whether the current process is running under proot.
+// Detection uses three signals in order:
+//  1. DOKI_PROOT=1 (explicit override, set by proot runners)
+//  2. PROOT_TMP_DIR (libtermux-exec sets this when entering proot)
+//  3. Termux + missing /proc/self/cgroup namespace marker (heuristic)
+func IsProotMode() bool {
+	if os.Getenv("DOKI_PROOT") == "1" {
+		return true
+	}
+	if os.Getenv("PROOT_TMP_DIR") != "" {
+		return true
+	}
+	if !IsTermux() {
+		return false
+	}
+	if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {
+		if strings.Contains(string(data), "proot") {
+			return true
+		}
+	}
+	return false
+}
+
+// UseProotHostNetworking reports whether DokiLink should use host-loopback
+// (127.0.0.1) port forwards instead of bridge IPs. In proot mode the
+// container shares the host netns, so bridge IPs (e.g. 172.17.0.2) are
+// unreachable from the host; loopback works because proot fakes it.
+func UseProotHostNetworking() bool {
+	termux := IsTermux()
+	proot := IsProotMode()
+	// Avoid being optimized away.
+	if termux || proot {
+		return true
+	}
+	return false
+}
+
+// ProotContainerIP resolves a logical Docker bridge IP (e.g. 172.17.0.2)
+// to the address the host should use to reach the container. In proot+Termux
+// mode this is always 127.0.0.1; elsewhere the original IP is returned.
+func ProotContainerIP(logicalIP string) string {
+	if UseProotHostNetworking() {
+		return "127.0.0.1"
+	}
+	return logicalIP
 }

@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/OpceanAI/Doki/internal/proot"
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/image"
 )
@@ -78,12 +80,12 @@ func (b *Builder) executeInstructionReal(stage *Stage, inst *Instruction, ctxDir
 
 func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir string) error {
 	if len(inst.Args) == 0 {
-		return nil
+		return fmt.Errorf("RUN requires a command")
 	}
 
 	cmdStr := strings.Join(inst.Args, " ")
 	if cmdStr == "" {
-		return nil
+		return fmt.Errorf("RUN requires a command")
 	}
 
 	// Check build cache
@@ -115,10 +117,22 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 		}
 	}()
 
-	// Build environment for the command
-	env := os.Environ()
+	// Build environment for the command.
+	// Clear LD_PRELOAD family in the parent process so exec.Command does not
+	// propagate libtermux-exec.so to the proot child. Then strip host env
+	// (Termux/Android vars) so the guest does not inherit host paths.
+	if prootBin := findProotBinary(); prootBin != "" {
+		proot.UnsetProotKillers()
+	}
+	env := common.StripHostEnv(os.Environ())
 	for k, v := range b.envMap {
 		env = append(env, k+"="+v)
+	}
+
+	// Determine shell to use (SHELL instruction overrides default).
+	shell := []string{"/bin/sh", "-c"}
+	if len(stage.ImageConfig.Shell) > 0 {
+		shell = stage.ImageConfig.Shell
 	}
 
 	var cmd *exec.Cmd
@@ -134,18 +148,29 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 			"-b", "/dev",
 			"--kill-on-exit",
 			"--link2symlink",
-			"/bin/sh", "-c", cmdStr,
 		}
+		prootArgs = append(prootArgs, shell...)
+		prootArgs = append(prootArgs, cmdStr)
 		cmd = exec.Command(prootBin, prootArgs...)
 		cmd.Dir = "/"
 	} else {
 		// Fallback: run directly on host (works for native/namespace modes)
-		cmd = exec.Command("/bin/sh", "-c", cmdStr)
+		args := append(shell, cmdStr)
+		cmd = exec.Command(args[0], args[1:]...)
 		cmd.Dir = workDir
 	}
 	cmd.Env = env
+	// Discard stdin to prevent proot from blocking on input
+	cmd.Stdin = nil
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	// Add a timeout to prevent indefinite hangs (10 minutes)
+	timer := time.AfterFunc(10*time.Minute, func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	})
+	defer timer.Stop()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("run command: %w", err)
 	}
@@ -206,6 +231,14 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 	if fromStage != "" {
 		if dir, ok := b.stageDirs[fromStage]; ok {
 			sourceDir = dir
+		} else if idx, err := strconv.Atoi(fromStage); err == nil && idx >= 0 && idx < len(b.stages) {
+			// Support numeric stage index (COPY --from=0, COPY --from=1, etc.)
+			stageName := b.stages[idx].Name
+			if dir, ok := b.stageDirs[stageName]; ok {
+				sourceDir = dir
+			} else {
+				return fmt.Errorf("stage index %d (name %q) has no build directory", idx, stageName)
+			}
 		} else {
 			return fmt.Errorf("stage %q not found for --from", fromStage)
 		}
@@ -224,10 +257,14 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 
 	// Determine destination path
 	var dstPath string
+	dstIsDir := strings.HasSuffix(dst, "/") || strings.HasSuffix(dst, string(os.PathSeparator))
 	if filepath.IsAbs(dst) {
 		dstPath = filepath.Join(rootDir, dst)
 	} else {
 		dstPath = filepath.Join(rootDir, dst)
+	}
+	if dstIsDir {
+		common.EnsureDir(dstPath)
 	}
 
 	// Handle glob patterns in source
@@ -238,6 +275,20 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 	}
 
 	for _, match := range matches {
+		// BUG fix (symlink path traversal): resolve symlinks on the source
+		// path and verify the resolved path is still under the source
+		// directory. Without this, a symlink like "src -> /etc" in the
+		// build context could cause COPY to read files from outside the
+		// context (e.g., /etc/passwd).
+		resolved, err := filepath.EvalSymlinks(match)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(resolved, filepath.Clean(sourceDir)+string(os.PathSeparator)) &&
+			resolved != filepath.Clean(sourceDir) {
+			return fmt.Errorf("copy source %s resolves outside build context", src)
+		}
+
 		fi, err := os.Stat(match)
 		if err != nil {
 			continue
@@ -264,16 +315,21 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 				}
 			}
 		} else {
-			common.EnsureDir(filepath.Dir(dstPath))
+			target := dstPath
+			// When destination is an existing directory, place the file inside it.
+			if fiDest, err := os.Stat(dstPath); err == nil && fiDest.IsDir() {
+				target = filepath.Join(dstPath, filepath.Base(match))
+			}
+			common.EnsureDir(filepath.Dir(target))
 			data, err := os.ReadFile(match)
 			if err != nil {
 				return fmt.Errorf("copy %s: %w", src, err)
 			}
-			if err := os.WriteFile(dstPath, data, fi.Mode()); err != nil {
+			if err := os.WriteFile(target, data, fi.Mode()); err != nil {
 				return fmt.Errorf("write %s: %w", dst, err)
 			}
 			if chown != "" || chmod != "" {
-				applyChowChmod(dstPath, chown, chmod)
+				applyChowChmod(target, chown, chmod)
 			}
 		}
 	}
@@ -290,11 +346,16 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 
 func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir string) error {
 	args := inst.Args
-	var src, dst, chown, chmod string
+	var src, dst, fromStage, chown, chmod string
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--from" && i+1 < len(args):
+			i++
+			fromStage = args[i]
+		case strings.HasPrefix(a, "--from="):
+			fromStage = strings.TrimPrefix(a, "--from=")
 		case a == "--chown" && i+1 < len(args):
 			i++
 			chown = args[i]
@@ -318,12 +379,42 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 		return nil
 	}
 
+	// Apply .dockerignore filtering for context copies
+	if fromStage == "" && b.dockerignore != nil {
+		if b.dockerignore.Matches(src) {
+			return nil
+		}
+	}
+
+	// Determine source directory for --from
+	var sourceDir string
+	if fromStage != "" {
+		if dir, ok := b.stageDirs[fromStage]; ok {
+			sourceDir = dir
+		} else if idx, err := strconv.Atoi(fromStage); err == nil && idx >= 0 && idx < len(b.stages) {
+			stageName := b.stages[idx].Name
+			if dir, ok := b.stageDirs[stageName]; ok {
+				sourceDir = dir
+			} else {
+				return fmt.Errorf("stage index %d (name %q) has no build directory", idx, stageName)
+			}
+		} else {
+			return fmt.Errorf("stage %q not found for --from", fromStage)
+		}
+	} else {
+		sourceDir = ctxDir
+	}
+
 	// Determine destination path
 	var dstPath string
+	dstIsDir := strings.HasSuffix(dst, "/") || strings.HasSuffix(dst, string(os.PathSeparator))
 	if filepath.IsAbs(dst) {
 		dstPath = filepath.Join(rootDir, dst)
 	} else {
 		dstPath = filepath.Join(rootDir, dst)
+	}
+	if dstIsDir {
+		common.EnsureDir(dstPath)
 	}
 	common.EnsureDir(filepath.Dir(dstPath))
 
@@ -349,13 +440,17 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+			target := dstPath
+			if dstIsDir {
+				target = filepath.Join(dstPath, filepath.Base(src))
+			}
+			if err := os.WriteFile(target, data, 0644); err != nil {
 				return err
 			}
 		}
 	} else {
 		// Local file - handle glob
-		srcPath := filepath.Join(ctxDir, src)
+		srcPath := filepath.Join(sourceDir, src)
 		matches, err := filepath.Glob(srcPath)
 		if err != nil || len(matches) == 0 {
 			matches = []string{srcPath}
@@ -375,7 +470,11 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 				if err != nil {
 					return fmt.Errorf("add %s: %w", src, err)
 				}
-				if err := os.WriteFile(dstPath, data, fi.Mode()); err != nil {
+				target := dstPath
+				if dstIsDir {
+					target = filepath.Join(dstPath, filepath.Base(match))
+				}
+				if err := os.WriteFile(target, data, fi.Mode()); err != nil {
 					return fmt.Errorf("write %s: %w", dst, err)
 				}
 				// Auto-extract local tar archives
@@ -438,7 +537,7 @@ func (b *Builder) downloadAdd(url, destPath string) error {
 	}
 	defer f.Close()
 
-	_, err = io.Copy(f, resp.Body)
+	_, err = io.Copy(f, io.LimitReader(resp.Body, 1<<30))
 	return err
 }
 
@@ -517,24 +616,36 @@ func (b *Builder) executeEnv(stage *Stage, inst *Instruction) error {
 	if stage.ImageConfig == nil {
 		stage.ImageConfig = &image.ImageConfig{}
 	}
-	for _, arg := range inst.Args {
+	args := inst.Args
+	i := 0
+	for i < len(args) {
+		arg := args[i]
 		parts := strings.SplitN(arg, "=", 2)
+		var key, val string
 		if len(parts) == 2 {
-			b.envMap[parts[0]] = parts[1]
-			// Update image config
-			envEntry := parts[0] + "=" + parts[1]
-			found := false
-			for j, existing := range stage.ImageConfig.Env {
-				if strings.HasPrefix(existing, parts[0]+"=") {
-					stage.ImageConfig.Env[j] = envEntry
-					found = true
-					break
-				}
-			}
-			if !found {
-				stage.ImageConfig.Env = append(stage.ImageConfig.Env, envEntry)
+			key = parts[0]
+			val = parts[1]
+		} else {
+			key = arg
+			if i+1 < len(args) {
+				i++
+				val = args[i]
 			}
 		}
+		b.envMap[key] = val
+		envEntry := key + "=" + val
+		found := false
+		for j, existing := range stage.ImageConfig.Env {
+			if strings.HasPrefix(existing, key+"=") {
+				stage.ImageConfig.Env[j] = envEntry
+				found = true
+				break
+			}
+		}
+		if !found {
+			stage.ImageConfig.Env = append(stage.ImageConfig.Env, envEntry)
+		}
+		i++
 	}
 	return nil
 }
@@ -598,11 +709,26 @@ func (b *Builder) executeLabel(stage *Stage, inst *Instruction) error {
 	return nil
 }
 
+func isShellForm(raw string) bool {
+	upper := strings.ToUpper(raw)
+	for _, prefix := range []string{"CMD ", "ENTRYPOINT "} {
+		if strings.HasPrefix(upper, prefix) {
+			rest := strings.TrimSpace(raw[len(prefix):])
+			return !strings.HasPrefix(rest, "[")
+		}
+	}
+	return false
+}
+
 func (b *Builder) executeCmd(stage *Stage, inst *Instruction) error {
 	if stage.ImageConfig == nil {
 		stage.ImageConfig = &image.ImageConfig{}
 	}
-	stage.ImageConfig.Cmd = inst.Args
+	if isShellForm(inst.Raw) {
+		stage.ImageConfig.Cmd = []string{"/bin/sh", "-c", strings.Join(inst.Args, " ")}
+	} else {
+		stage.ImageConfig.Cmd = inst.Args
+	}
 	return nil
 }
 
@@ -610,7 +736,11 @@ func (b *Builder) executeEntrypoint(stage *Stage, inst *Instruction) error {
 	if stage.ImageConfig == nil {
 		stage.ImageConfig = &image.ImageConfig{}
 	}
-	stage.ImageConfig.Entrypoint = inst.Args
+	if isShellForm(inst.Raw) {
+		stage.ImageConfig.Entrypoint = []string{"/bin/sh", "-c", strings.Join(inst.Args, " ")}
+	} else {
+		stage.ImageConfig.Entrypoint = inst.Args
+	}
 	return nil
 }
 
@@ -720,7 +850,10 @@ func (b *Builder) executeArg(stage *Stage, inst *Instruction) error {
 	for _, arg := range inst.Args {
 		kv := strings.SplitN(arg, "=", 2)
 		if len(kv) == 2 {
-			b.argDefaults[kv[0]] = kv[1]
+			// Only set default if build arg was not provided externally.
+			if _, exists := b.argDefaults[kv[0]]; !exists {
+				b.argDefaults[kv[0]] = kv[1]
+			}
 		} else {
 			// ARG without default - mark as present
 			if _, exists := b.argDefaults[arg]; !exists {
@@ -732,12 +865,20 @@ func (b *Builder) executeArg(stage *Stage, inst *Instruction) error {
 }
 
 func (b *Builder) executeOnbuild(stage *Stage, inst *Instruction) error {
-	// Store type|raw for later replay
+	// Store type|raw for later replay (append with ;; separator)
+	// inst.Type is "ONBUILD", the actual instruction is in inst.Args[0]
+	if len(inst.Args) == 0 {
+		return fmt.Errorf("ONBUILD requires a sub-instruction")
+	}
 	if stage.Metadata == nil {
 		stage.Metadata = make(map[string]string)
 	}
-	stage.Metadata["onbuild_type"] = inst.Type
-	stage.Metadata["onbuild"] = strings.Join(inst.Args, " ")
+	entry := inst.Args[0] + "|" + strings.Join(inst.Args[1:], " ")
+	if existing, ok := stage.Metadata["onbuild"]; ok && existing != "" {
+		stage.Metadata["onbuild"] = existing + ";;" + entry
+	} else {
+		stage.Metadata["onbuild"] = entry
+	}
 	return nil
 }
 
@@ -824,7 +965,11 @@ func ExtractTar(r io.Reader, dest string) error {
 			}
 			if filepath.IsAbs(hdr.Linkname) {
 				resolved := filepath.Clean(hdr.Linkname)
-				if !strings.HasPrefix(resolved, cleanDest+string(os.PathSeparator)) && resolved != cleanDest {
+				// Only block absolute symlinks that try to escape via ".."
+				// traversal. Legitimate rootfs images (Alpine, Debian, etc.)
+				// contain absolute symlinks like "bin/arch -> /bin/busybox"
+				// that point to other paths within the rootfs.
+				if strings.HasPrefix(resolved, "..") || strings.Contains(resolved, "/../") {
 					return fmt.Errorf("tar: symlink traversal (absolute): %s -> %s", hdr.Name, hdr.Linkname)
 				}
 			} else {
@@ -907,8 +1052,13 @@ func CreateTar(dir string, writer io.Writer) error {
 func CompressGzip(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	w := gzip.NewWriter(&buf)
-	w.Write(data)
-	w.Close()
+	if _, err := w.Write(data); err != nil {
+		w.Close()
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
 	return buf.Bytes(), nil
 }
 

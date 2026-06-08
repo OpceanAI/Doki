@@ -153,8 +153,8 @@ func TestSnapshotManager(t *testing.T) {
 	d, _ := NewVFSDriver(dir)
 	sm := NewSnapshotManager(dir, d)
 
-	// Create a source layer.
-	srcDir := filepath.Join(dir, "source-layer")
+	// Create a source layer at the correct path (under "layers/").
+	srcDir := filepath.Join(dir, "layers", "source-layer")
 	os.MkdirAll(srcDir, 0755)
 	os.WriteFile(filepath.Join(srcDir, "test.txt"), []byte("hello"), 0644)
 
@@ -192,7 +192,7 @@ func TestSnapshotManager(t *testing.T) {
 	if err := sm.Restore(snap.ID, "restored-layer"); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "restored-layer", "test.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "layers", "restored-layer", "test.txt")); err != nil {
 		t.Fatalf("restored file: %v", err)
 	}
 
