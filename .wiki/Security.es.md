@@ -1,6 +1,6 @@
 # Seguridad
 
-Doki toma un enfoque defense-in-depth: seccomp + AppArmor + capabilities + user namespaces + TLS + verificación de imágenes + rate limiting. La versión v0.9.2 no añadió nuevas features de seguridad pero arregló varios bugs a nivel de regresión en el stack subyacente.
+Doki toma un enfoque defense-in-depth: seccomp + AppArmor + capabilities + user namespaces + TLS + verificación de imágenes + rate limiting. v0.9.3 añadió DokiLink-Lite con encriptación TLS 1.3 para tráfico mesh.
 
 ## Modelo de amenaza
 

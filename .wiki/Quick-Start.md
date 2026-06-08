@@ -12,10 +12,10 @@ This tutorial takes ~5 minutes and walks you through: install → start daemon �
 ```bash
 $ doki version
 Client: Doki
- Version:    0.9.2
+ Version:    0.9.3
  API version: 1.48
- GitCommit:  907ae45
- Built:      2026-06-04
+ GitCommit:  faab400
+ Built:      2026-06-08
 ```
 
 If you see the version banner, you're good. If `dokid` is also installed, the same command shows daemon info too.
@@ -249,5 +249,5 @@ Continue to [Architecture](Architecture) to understand each subsystem in depth.
 - [Installation](Installation) — per-platform install
 - [Architecture](Architecture) — how Doki works under the hood
 - [Isolation Levels](Isolation-Levels) — pick the right runtime for your workload
-- [CLI Reference](CLI-Reference) — all 108 commands
+- [CLI Reference](CLI-Reference) — all 244 commands
 - [Configuration](Configuration) — `config.json` and env vars

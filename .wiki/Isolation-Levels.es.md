@@ -1,6 +1,6 @@
 # Niveles de aislamiento
 
-Doki v0.9.2 soporta **12 niveles de aislamiento** — desde un sandbox WASM sin syscalls hasta microVMs a nivel de hardware. El registro de runners en `pkg/runtime/registry.go` prueba el host y elige el modo más fuerte que funcione. También puedes forzar un modo específico con `doki run --runtime <mode>`.
+Doki v0.9.3 soporta **12 niveles de aislamiento** — desde un sandbox WASM sin syscalls hasta microVMs a nivel de hardware. El registro de runners en `pkg/runtime/registry.go` prueba el host y elige el modo más fuerte que funcione. También puedes forzar un modo específico con `doki run --runtime <mode>`.
 
 ## Árbol de decisión
 
