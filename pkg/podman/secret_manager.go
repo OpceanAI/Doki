@@ -40,7 +40,7 @@ func (sm *SecretManager) Create(name string, data []byte, driver string, labels 
 		return nil, fmt.Errorf("secret %q already exists", name)
 	}
 	for _, s := range sm.secrets {
-		if s.Name == name {
+		if s.Spec.Name == name {
 			return nil, fmt.Errorf("secret %q already exists", name)
 		}
 	}
@@ -52,11 +52,9 @@ func (sm *SecretManager) Create(name string, data []byte, driver string, labels 
 
 	secret := &Secret{
 		ID:      generateID(),
-		Name:    name,
+		Spec:    SecretSpec{Name: name, Labels: labels, Driver: driver},
 		Created: time.Now(),
 		Updated: time.Now(),
-		Labels:  labels,
-		Driver:  driver,
 	}
 
 	if err := os.WriteFile(filepath.Join(sm.store, secret.ID+".enc"), encrypted, 0600); err != nil {
@@ -82,7 +80,7 @@ func (sm *SecretManager) Get(nameOrID string) (*Secret, error) {
 		return s, nil
 	}
 	for _, s := range sm.secrets {
-		if s.Name == nameOrID {
+		if s.Spec.Name == nameOrID {
 			return s, nil
 		}
 	}
@@ -98,7 +96,7 @@ func (sm *SecretManager) GetData(nameOrID string) ([]byte, error) {
 		secret = s
 	} else {
 		for _, s := range sm.secrets {
-			if s.Name == nameOrID {
+			if s.Spec.Name == nameOrID {
 				secret = s
 				break
 			}
@@ -136,7 +134,7 @@ func (sm *SecretManager) Remove(nameOrID string) error {
 		secret = s
 	} else {
 		for _, s := range sm.secrets {
-			if s.Name == nameOrID {
+			if s.Spec.Name == nameOrID {
 				secret = s
 				break
 			}
@@ -148,7 +146,7 @@ func (sm *SecretManager) Remove(nameOrID string) error {
 
 	_ = os.Remove(filepath.Join(sm.store, secret.ID+".enc"))
 	_ = os.Remove(filepath.Join(sm.store, secret.ID+".json"))
-	_ = os.Remove(filepath.Join(sm.store, "names", secret.Name))
+	_ = os.Remove(filepath.Join(sm.store, "names", secret.Spec.Name))
 	delete(sm.secrets, secret.ID)
 	return nil
 }
@@ -161,7 +159,7 @@ func (sm *SecretManager) Exists(nameOrID string) bool {
 		return true
 	}
 	for _, s := range sm.secrets {
-		if s.Name == nameOrID {
+		if s.Spec.Name == nameOrID {
 			return true
 		}
 	}

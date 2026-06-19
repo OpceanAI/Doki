@@ -126,13 +126,17 @@ type PortBinding struct {
 	HostPort int    `json:"host_port"`
 }
 
+type SecretSpec struct {
+	Name   string            `json:"Name"`
+	Labels map[string]string `json:"Labels,omitempty"`
+	Driver string            `json:"Driver,omitempty"`
+}
+
 type Secret struct {
-	ID        string            `json:"ID"`
-	Name      string            `json:"Spec"`
-	Created   time.Time         `json:"CreatedAt"`
-	Updated   time.Time         `json:"UpdatedAt"`
-	Labels    map[string]string `json:"Spec,omitempty"`
-	Driver    string            `json:"Driver,omitempty"`
+	ID        string     `json:"ID"`
+	Spec      SecretSpec `json:"Spec"`
+	Created   time.Time  `json:"CreatedAt"`
+	Updated   time.Time  `json:"UpdatedAt"`
 }
 
 type ManifestList struct {
