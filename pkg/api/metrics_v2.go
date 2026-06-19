@@ -3,9 +3,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,7 +34,6 @@ type MetricsCollector struct {
 	containersRunning atomic.Int64
 	containersPaused  atomic.Int64
 	imagesCount       atomic.Int64
-	goroutines        atomic.Int64
 
 	// Histograms (simplified as counters)
 	requestDurationSum   atomic.Uint64
@@ -42,7 +41,6 @@ type MetricsCollector struct {
 
 	// Info
 	startTime time.Time
-	mu        sync.RWMutex
 }
 
 // NewMetricsCollector creates a new metrics collector.
@@ -244,19 +242,21 @@ func HealthHandlerV2(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		slog.Warn("encode", "err", err)
+	}
 }
 
 func writeCounter(w http.ResponseWriter, name string, value uint64, help string) {
-	w.Write([]byte("# HELP " + name + " " + help + "\n"))
-	w.Write([]byte("# TYPE " + name + " counter\n"))
-	w.Write([]byte(name + " " + formatUint64(value) + "\n"))
+	_, _ = w.Write([]byte("# HELP " + name + " " + help + "\n"))
+	_, _ = w.Write([]byte("# TYPE " + name + " counter\n"))
+	_, _ = w.Write([]byte(name + " " + formatUint64(value) + "\n"))
 }
 
 func writeGauge(w http.ResponseWriter, name string, value int64, help string) {
-	w.Write([]byte("# HELP " + name + " " + help + "\n"))
-	w.Write([]byte("# TYPE " + name + " gauge\n"))
-	w.Write([]byte(name + " " + formatInt64(value) + "\n"))
+	_, _ = w.Write([]byte("# HELP " + name + " " + help + "\n"))
+	_, _ = w.Write([]byte("# TYPE " + name + " gauge\n"))
+	_, _ = w.Write([]byte(name + " " + formatInt64(value) + "\n"))
 }
 
 func formatUint64(v uint64) string {

@@ -50,7 +50,7 @@ func main() {
 		filepath.Join(dataDir, "runtimes"),
 		filepath.Join(dataDir, "networks"),
 	} {
-		common.EnsureDir(dir)
+		_ = common.EnsureDir(dir)
 	}
 	fmt.Printf("  ✓ Data dir: %s\n", dataDir)
 	fmt.Println()

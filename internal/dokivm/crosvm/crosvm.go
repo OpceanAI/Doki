@@ -142,7 +142,7 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 
 	// Monitor process.
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 		v.mu.Lock()
 		if vm, ok := v.vms[vmID]; ok {
 			vm.State = dokivm.VMStateStopped
@@ -164,7 +164,7 @@ func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) erro
 		return nil
 	}
 	proc, _ := os.FindProcess(vm.PID)
-	proc.Signal(syscall.SIGTERM)
+	_ = proc.Signal(syscall.SIGTERM)
 	// Wait for graceful shutdown.
 	deadline := time.After(timeout)
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -172,7 +172,7 @@ func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) erro
 	for {
 		select {
 		case <-deadline:
-			proc.Signal(syscall.SIGKILL)
+			_ = proc.Signal(syscall.SIGKILL)
 			vm.State = dokivm.VMStateStopped
 			return nil
 		case <-ticker.C:
@@ -194,7 +194,7 @@ func (v *VMM) Kill(ctx context.Context, vmID string) error {
 		return nil
 	}
 	proc, _ := os.FindProcess(vm.PID)
-	proc.Signal(syscall.SIGKILL)
+	_ = proc.Signal(syscall.SIGKILL)
 	vm.State = dokivm.VMStateStopped
 	return nil
 }
@@ -229,11 +229,11 @@ func (v *VMM) Cleanup(ctx context.Context, vmID string) error {
 		return nil
 	}
 	if vm.TapDevice != "" {
-		exec.Command("ip", "link", "del", vm.TapDevice).Run()
+		_ = exec.Command("ip", "link", "del", vm.TapDevice).Run()
 	}
 	delete(v.vms, vmID)
 	delete(v.configs, vmID)
-	os.RemoveAll(filepath.Join(v.cfg.WorkDir, vmID))
+	_ = os.RemoveAll(filepath.Join(v.cfg.WorkDir, vmID))
 	return nil
 }
 

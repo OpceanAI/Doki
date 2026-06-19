@@ -1,0 +1,266 @@
+% 03-architecture.tex
+\chapter{System Architecture}
+\label{ch:architecture}
+
+\section{Overview}
+\label{sec:arch-overview}
+
+Doki's architecture follows a client-server model with three primary
+layers: the CLI client (\texttt{doki}), the daemon (\texttt{dokid}),
+and the container runtime. The CLI communicates with the daemon over
+a Unix domain socket (or TCP on Android), and the daemon manages
+container lifecycle operations through a pluggable runtime system.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.5cm,
+    every node/.style={font=\sffamily\footnotesize},
+  ]
+    % User layer
+    \node[comp, minimum width=3cm] (cli) {doki CLI};
+
+    % API layer
+    \node[compAlt, below=0.6cm of cli] (api) {REST API\\{\scriptsize\color{textgray} Unix Socket / TCP}};
+
+    % Daemon layer
+    \node[comp, below=0.6cm of api] (daemon) {dokid Daemon\\{\scriptsize\color{textgray} State Management + DNS}};
+
+    % Runtime layer
+    \node[compTeal, below left=0.6cm and 0.3cm of daemon] (proot) {proot\\{\scriptsize\color{textgray} ptrace}};
+    \node[compTeal, below right=0.6cm and 0.3cm of daemon] (ns) {Namespaces\\{\scriptsize\color{textgray} unshare}};
+
+    % Kernel
+    \node[compPurple, below=0.6cm of daemon] (kernel) {Linux Kernel\\{\scriptsize\color{textgray} syscalls + cgroups}};
+
+    % Arrows
+    \draw[arr] (cli) -- (api);
+    \draw[arr] (api) -- (daemon);
+    \draw[arrThick] (daemon) -| (proot);
+    \draw[arrThick] (daemon) -| (ns);
+    \draw[arrDash] (proot) -- (kernel);
+    \draw[arrDash] (ns) -- (kernel);
+
+    % Regions
+    \node[region, fit=(cli)(api), label={[annotBold]above:User Space}] {};
+    \node[region, fit=(daemon), label={[annotBold]right:Daemon}] {};
+    \node[region, fit=(proot)(ns), label={[annotBold]below:Runtime Selection}] {};
+  \end{tikzpicture}
+  \caption{Doki system architecture. The daemon selects the appropriate
+    runtime based on available host capabilities.}
+  \label{fig:architecture}
+\end{figure}
+
+\section{Daemon Architecture}
+\label{sec:daemon}
+
+The \texttt{dokid} daemon is the central component of the Doki system.
+It runs as a background process and manages all container lifecycle
+operations. The daemon is implemented in Go and uses the standard
+\texttt{net/http} package for its REST API.
+
+\subsection{Startup Sequence}
+\label{sec:startup-sequence}
+
+When \texttt{dokid} starts, it performs the following initialization
+steps:
+
+\begin{enumerate}[leftmargin=*, itemsep=3pt]
+  \item Load configuration from \texttt{\$DOKI\_DATA\_DIR/config.json}
+  \item Initialize the container state store (JSON-based persistence)
+  \item Set up the internal DNS server on \texttt{127.0.0.11:8053}
+        (Android) or \texttt{127.0.0.11:53} (Linux)
+  \item Probe host capabilities and select strongest isolation runtime
+  \item Initialize DokiLink-Lite mesh (Ed25519 keypair + CA generation)
+  \item Register container state with the DNS server
+  \item Start the REST API listener
+\end{enumerate}
+
+\subsection{State Management}
+\label{sec:state-management}
+
+Container state is persisted as JSON files in the
+\texttt{\$DOKI\_DATA\_DIR/containers/} directory. Each container has
+its own state file containing:
+
+\begin{itemize}[leftmargin=*, itemsep=2pt]
+  \item Container ID (SHA-256 hash of configuration)
+  \item Name, image, and command
+  \item Current state (created, running, stopped, exited)
+  \item Network configuration (IP address, veth pair names)
+  \item PID of the container process
+  \item Exit code and timestamps
+  \item Mount points and volume mappings
+\end{itemize}
+
+The daemon uses a \texttt{signal(0)} polling mechanism to detect
+process termination, replacing the earlier \texttt{ExitChan} approach
+that suffered from channel disconnect races.
+
+\section{CLI Architecture}
+\label{sec:cli}
+
+The \texttt{doki} CLI is a single binary that provides 244 commands
+across 9 categories. It communicates with the daemon via the REST API
+and handles user input parsing, output formatting, and error reporting.
+
+\subsection{Command Structure}
+\label{sec:command-structure}
+
+Doki's CLI follows a hierarchical command structure:
+
+\begin{codebox}[title={CLI command hierarchy}]{text}
+doki <command> [subcommand] [flags] [arguments]
+
+doki container create   --name web --image alpine:3.18
+doki container ls       --format "table {{.ID}}\t{{.Names}}"
+doki image pull         nginx:latest
+doki compose up         -d --build
+doki mesh status
+doki link add           mypeer 192.168.1.42:7432
+\end{codebox}
+
+\subsection{Flag Parsing}
+\label{sec:flag-parsing}
+
+Doki uses a two-pass flag parsing system. Global flags (such as
+\texttt{-d}, \texttt{-q}, \texttt{-f}, \texttt{-p}, and
+\texttt{--profile}) are recognized both before and after the
+subcommand. This allows natural command ordering:
+
+\begin{codebox}[title={Equivalent flag positions}]{text}
+doki compose -f docker-compose.yml -d up
+doki compose up -f docker-compose.yml -d
+\end{codebox}
+
+The \texttt{flagsWithValue} map tracks flags that consume the next
+argument as their value. Ambiguous single-letter flags (\texttt{-f},
+\texttt{-t}, \texttt{-s}) are excluded from this map to prevent
+conflicts with container IDs and other positional arguments.
+
+\section{Communication Protocol}
+\label{sec:protocol}
+
+The CLI and daemon communicate over a REST API using HTTP/1.1. The
+API follows RESTful conventions with standard HTTP methods and status
+codes.
+
+\begin{table}[htbp]
+  \centering
+  \caption{API endpoint examples and their HTTP methods.}
+  \label{tab:api-endpoints}
+  \begin{tabularx}{\textwidth}{l l X}
+    \toprule
+    \textbf{Method} & \textbf{Endpoint} & \textbf{Description} \\
+    \midrule
+    GET    & \texttt{/containers/json}       & List all containers \\
+    POST   & \texttt{/containers/create}     & Create a new container \\
+    GET    & \texttt{/containers/\{id\}/json} & Inspect a container \\
+    POST   & \texttt{/containers/\{id\}/start} & Start a container \\
+    POST   & \texttt{/containers/\{id\}/stop}  & Stop a container \\
+    DELETE & \texttt{/containers/\{id\}}     & Remove a container \\
+    POST   & \texttt{/containers/\{id\}/exec} & Execute command in container \\
+    GET    & \texttt{/images/json}           & List all images \\
+    POST   & \texttt{/images/create}         & Pull or build an image \\
+    GET    & \texttt{/\_ping}                & Health check \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Container Lifecycle}
+\label{sec:lifecycle}
+
+A container in Doki follows a well-defined state machine with four
+primary states: \texttt{created}, \texttt{running},
+\texttt{stopped}, and \texttt{exited}. The transitions between
+states are managed by the daemon and triggered by CLI commands.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=2.2cm,
+    on grid, auto,
+    every state/.style={
+      rectangle, rounded corners=4pt,
+      draw=nodeblue!70, fill=fillblue,
+      minimum width=2.2cm, minimum height=0.9cm,
+      font=\sffamily\footnotesize, text=textdark,
+      align=center, inner sep=5pt
+    },
+    initial/.style={
+      initial text={},
+      initial distance=1.5cm
+    },
+    accepting/.style={
+      accepting by double,
+      double distance=2pt,
+      inner sep=1pt
+    },
+    every edge/.style={
+      draw=textdark!70,
+      line width=0.5pt,
+      -{Stealth[length=2.5mm, width=2mm]},
+      font=\sffamily\tiny,
+      node distance=1cm
+    }
+  ]
+    \node[state, initial] (created) {created};
+    \node[state, right=of created] (running) {running};
+    \node[state, below=of running] (stopped) {stopped};
+    \node[state, accepting, left=of stopped] (exited) {exited};
+
+    \path[->]
+      (created) edge node {start} (running)
+      (running) edge node {stop} (stopped)
+      (running) edge[bend left=20] node {kill} (exited)
+      (stopped) edge node {start} (running)
+      (stopped) edge node {rm} (exited);
+  \end{tikzpicture}
+  \caption{Container lifecycle state machine. States are shown as
+    rectangles; transitions are labeled with the triggering command.}
+  \label{fig:lifecycle}
+\end{figure}
+
+\section{Isolation Runtime Selection}
+\label{sec:runtime-selection}
+
+Doki supports 12 isolation levels, implemented as separate runtime
+modules in \texttt{pkg/runtime/runners/}. At startup, the daemon's
+\texttt{RuntimeRegistry} probes the host system to determine which
+runtimes are available and selects the strongest one.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.35cm,
+    every node/.style={font=\sffamily\footnotesize},
+  ]
+    % Isolation levels (bottom = strongest)
+    \node[rectangle, rounded corners=2pt, draw=nodepurple!60, fill=nodepurple!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L1) at (0, 0.65) {microVM};
+    \node[rectangle, rounded corners=2pt, draw=nodelteal!60, fill=nodelteal!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L2) at (0, 1.30) {gVisor};
+    \node[rectangle, rounded corners=2pt, draw=nodeblue!60, fill=nodeblue!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L3) at (0, 1.95) {Namespaces};
+    \node[rectangle, rounded corners=2pt, draw=nodeorange!60, fill=nodeorange!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L4) at (0, 2.60) {Chroot};
+    \node[rectangle, rounded corners=2pt, draw=nodeblue!60, fill=nodeblue!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L5) at (0, 3.25) {Proot};
+    \node[rectangle, rounded corners=2pt, draw=nodelteal!60, fill=nodelteal!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L6) at (0, 3.90) {PKdroid};
+    \node[rectangle, rounded corners=2pt, draw=nodeorange!60, fill=nodeorange!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L7) at (0, 4.55) {QEMU-user};
+    \node[rectangle, rounded corners=2pt, draw=nodepurple!60, fill=nodepurple!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L8) at (0, 5.20) {FEX-Emu};
+    \node[rectangle, rounded corners=2pt, draw=nodeblue!60, fill=nodeblue!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L9) at (0, 5.85) {Legacy32};
+    \node[rectangle, rounded corners=2pt, draw=nodelteal!60, fill=nodelteal!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L10) at (0, 6.50) {Sysbox};
+    \node[rectangle, rounded corners=2pt, draw=nodeorange!60, fill=nodeorange!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L11) at (0, 7.15) {WASM};
+    \node[rectangle, rounded corners=2pt, draw=nodepurple!60, fill=nodepurple!10, minimum width=6cm, minimum height=0.55cm, text=textdark, align=center, inner sep=3pt] (L12) at (0, 7.80) {Native};
+
+    % Side annotation
+    \draw[arrThick] ([xshift=-5mm]L1.west) -- ([xshift=-5mm]L12.north)
+      node[midway, left, font=\sffamily\tiny, text=textgray, rotate=90]
+        {Security $\rightarrow$};
+
+    % Selection arrow
+    \draw[arrBlock, nodeblue] ([xshift=5mm]L5.east) -- ++(1.5,0)
+      node[right, font=\sffamily\footnotesize\bfseries, text=nodeblue]
+        {Typical on Android};
+  \end{tikzpicture}
+  \caption{The 12 isolation levels available in Doki, ordered from
+    strongest (microVM) to weakest (native). The daemon automatically
+    selects the strongest available level.}
+  \label{fig:isolation-levels}
+\end{figure}

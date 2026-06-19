@@ -210,7 +210,7 @@ func (c *Client) getToken(realm, service, scope string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("token request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -278,7 +278,7 @@ func (c *Client) doAuthRequest(ctx context.Context, method, urlStr string, heade
 		}
 
 		if authHeader != "" {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 
 			// Buffer body for retry in case it was already consumed
 			var buf []byte
@@ -341,7 +341,7 @@ func (c *Client) Ping(registry string) error {
 	if err != nil {
 		return fmt.Errorf("ping %s: %w", registry, err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized {
 		return nil
 	}
@@ -354,7 +354,7 @@ func (c *Client) GetTags(registry, repository string) (*TagList, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("list tags: status %d", resp.StatusCode)
 	}
@@ -379,7 +379,7 @@ func (c *Client) GetManifest(registry, name, reference string) (*ManifestV2, str
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -402,7 +402,7 @@ func (c *Client) DownloadBlob(registry, name, digest string, writer io.Writer) e
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("download blob %s: status %d: %s", digest, resp.StatusCode, string(body))
@@ -434,7 +434,7 @@ func (c *Client) HeadBlob(registry, name, digest string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("blob %s not found: %d", digest, resp.StatusCode)
 	}
@@ -447,7 +447,7 @@ func (c *Client) GetBlob(registry, name, digest string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("get blob %s: %d: %s", digest, resp.StatusCode, string(body))
@@ -477,7 +477,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}
 
@@ -488,7 +488,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusAccepted
 	}
 
@@ -499,7 +499,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 			return fmt.Errorf("initiate upload: %w", err)
 		}
 		location := resp.Header.Get("Location")
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
 			return fmt.Errorf("initiate upload: status %d", resp.StatusCode)
 		}
@@ -515,7 +515,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 		if err != nil {
 			return fmt.Errorf("upload blob: %w", err)
 		}
-		uploadResp.Body.Close()
+		_ = uploadResp.Body.Close()
 		if uploadResp.StatusCode != http.StatusCreated {
 			return fmt.Errorf("upload blob: status %d", uploadResp.StatusCode)
 		}
@@ -581,7 +581,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 	if err != nil {
 		return fmt.Errorf("put manifest: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("put manifest: status %d body=%s", resp.StatusCode, string(body))
@@ -609,7 +609,7 @@ func (c *Client) ResolveManifest(registry, name, reference string) (*ManifestV2,
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

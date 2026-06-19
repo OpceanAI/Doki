@@ -1,0 +1,136 @@
+% 01-resumen.tex — Executive Summary (2 pages)
+\chapter{Executive Summary}
+\label{ch:summary}
+
+\section{What is Doki?}
+\label{sec:what-is-doki}
+
+Doki is an open-source container ecosystem designed for Android and
+Linux environments. Unlike traditional container runtimes that require
+root access and specialized kernel features, Doki operates entirely in
+user space using \texttt{proot} for syscall interception and filesystem
+virtualization. The system consists of four binaries---\texttt{doki}
+(CLI), \texttt{dokid} (daemon), \texttt{doki-compose} (orchestration),
+and \texttt{doki-init} (initialization)---that together provide a
+complete container lifecycle management solution in approximately
+28.3\,MB of statically linked Go binaries.
+
+\section{The Problem}
+\label{sec:problem}
+
+Android presents unique challenges for containerization. The Linux
+kernel underlying Android restricts access to critical system calls,
+the \texttt{iptables} subsystem is typically unavailable without root,
+and SELinux policies block common networking operations such as binding
+to port 53. Traditional container runtimes like Docker and containerd
+are designed for server environments and cannot operate under these
+constraints.
+
+The mobile development community lacks a tool that provides Docker-like
+functionality on Android devices. Developers working with containers
+on phones and tablets must either use simplified chroot environments
+or rely on cloud-based solutions that introduce latency and connectivity
+dependencies.
+
+\section{Key Achievements}
+\label{sec:achievements}
+
+Doki v0.9.3 delivers the following capabilities:
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{12 isolation levels} --- from WASM sandboxes to
+        hardware-level microVMs, with automatic detection of the
+        strongest mode available on the host.
+  \item \textbf{244 CLI commands} --- covering container management,
+        image operations, networking, orchestration, and mesh
+        connectivity.
+  \item \textbf{DokiLink-Lite mesh networking} --- peer-to-peer
+        encrypted communication using TLS 1.3 with optional NaCl
+        secretbox payload encryption.
+  \item \textbf{Rootless operation} --- full functionality without
+        root access, using \texttt{proot} for syscall interception
+        and \texttt{fuse-overlayfs} for filesystem virtualization.
+  \item \textbf{Docker Compose compatibility} --- support for
+        Dockerfile syntax, Docker Compose files, and BuildKit-style
+        multi-stage builds.
+  \item \textbf{Multi-architecture support} --- ARM64 and ARMv7
+        binaries for Android, Linux, and macOS (Darwin).
+\end{itemize}
+
+\section{Impact}
+\label{sec:impact}
+
+Doki enables developers to run containerized workloads on Android
+devices without root access, cloud connectivity, or specialized
+hardware. This opens new possibilities for:
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{Mobile development environments} --- running
+        compilers, linters, and test suites directly on phones.
+  \item \textbf{Edge computing} --- deploying containerized services
+        on mobile devices at the network edge.
+  \item \textbf{Education} --- teaching container concepts using
+        widely available Android hardware.
+  \item \textbf{Field operations} --- running isolated tools in
+        environments without traditional server infrastructure.
+\end{itemize}
+
+\section{Document Structure}
+\label{sec:doc-structure}
+
+This report is organized as follows. \cref{ch:architecture} describes
+the overall system architecture. \cref{ch:components} details the
+individual subsystems. \cref{ch:isolation} covers the 12 isolation
+levels. \cref{ch:networking} explains the networking stack and
+DokiLink-Lite. \cref{ch:storage} describes image storage and layer
+management. \cref{ch:build} covers the build system and Dockerfile
+support. \cref{ch:metrics} presents performance benchmarks.
+\cref{ch:roadmap} outlines future development plans.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.5cm,
+    comp/.style={
+      rectangle, rounded corners=3pt,
+      draw=nodeblue!60, fill=fillblue,
+      minimum width=2.8cm, minimum height=1.1cm,
+      font=\sffamily\small, text=textdark,
+      align=center, inner sep=5pt
+    },
+    compAlt/.style={
+      comp, draw=nodeorange!60, fill=fillorange
+    },
+    compTeal/.style={
+      comp, draw=nodelteal!60, fill=fillteal
+    },
+    arr/.style={
+      -{Stealth[length=3mm, width=2mm]},
+      draw=nodeblue!60, line width=0.7pt
+    }
+  ]
+    % Top row
+    \node[comp] (cli) {doki\\{\scriptsize\color{textgray} CLI Client}};
+    \node[comp, right=2cm of cli] (daemon) {dokid\\{\scriptsize\color{textgray} Daemon}};
+    \node[compAlt, right=2cm of daemon] (compose) {doki-compose\\{\scriptsize\color{textgray} Orchestration}};
+
+    % Bottom row
+    \node[compTeal, below=1cm of daemon] (runtime) {Runtime\\{\scriptsize\color{textgray} 12 Isolation Levels}};
+    \node[comp, below=1cm of runtime] (kernel) {Linux Kernel\\{\scriptsize\color{textgray} / proot}};
+
+    % Arrows
+    \draw[arr] (cli) -- (daemon);
+    \draw[arr] (daemon) -- (compose);
+    \draw[arr] (daemon) -- (runtime);
+    \draw[arr] (runtime) -- (kernel);
+
+    % Region labels
+    \node[annot, above=0.2cm of cli.north west] {\textbf{User Space}};
+    \node[annot, above=0.2cm of daemon.north] {\textbf{Daemon}};
+    \node[annot, above=0.2cm of runtime.north] {\textbf{Runtime}};
+  \end{tikzpicture}
+  \caption{High-level overview of the Doki ecosystem components.}
+  \label{fig:overview}
+\end{figure}
+
+\clearpage

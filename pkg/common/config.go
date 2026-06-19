@@ -127,10 +127,6 @@ func isMacOS() bool {
 	return goruntime.GOOS == "darwin"
 }
 
-func isLinux() bool {
-	return goruntime.GOOS == "linux"
-}
-
 // AppDataDir returns the platform-specific data directory.
 func AppDataDir() string {
 	if isMacOS() {

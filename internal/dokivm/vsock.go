@@ -39,7 +39,7 @@ func (v *VsockClient) Exec(ctx context.Context, cmd []string, env []string, cwd 
 	if err != nil {
 		return fmt.Errorf("vsock dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	msg := &VsockMessage{
 		Type: "exec",
@@ -65,11 +65,11 @@ func (v *VsockClient) Exec(ctx context.Context, cmd []string, env []string, cwd 
 		switch resp.Type {
 		case "stdout":
 			if stdout != nil {
-				stdout.Write([]byte(string(resp.Data)))
+				_, _ = stdout.Write([]byte(string(resp.Data)))
 			}
 		case "stderr":
 			if stderr != nil {
-				stderr.Write([]byte(string(resp.Data)))
+				_, _ = stderr.Write([]byte(string(resp.Data)))
 			}
 		case "exit":
 			if resp.Code != 0 {
@@ -87,7 +87,7 @@ func (v *VsockClient) Signal(ctx context.Context, sig string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	msg := &VsockMessage{Type: "signal", Sig: sig}
 	return json.NewEncoder(conn).Encode(msg)
@@ -99,7 +99,7 @@ func (v *VsockClient) HealthCheck(ctx context.Context) (string, error) {
 	if err != nil {
 		return "unhealthy", err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	msg := &VsockMessage{Type: "health"}
 	if err := json.NewEncoder(conn).Encode(msg); err != nil {

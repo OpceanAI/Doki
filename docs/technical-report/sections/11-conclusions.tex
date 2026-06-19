@@ -1,0 +1,139 @@
+% 11-conclusions.tex
+\chapter{Conclusions}
+\label{ch:conclusions}
+
+This report has presented Doki, a complete container ecosystem designed
+for Android and Linux environments. Doki addresses the fundamental
+challenge of running containers on mobile devices by using proot-based
+syscall interception, filesystem detection probes, and adaptive
+networking to operate within the constraints of Android's restricted
+kernel.
+
+\section{Summary of Contributions}
+\label{sec:contributions-summary}
+
+The key contributions of this work include:
+
+\begin{enumerate}[leftmargin=*, itemsep=4pt]
+  \item \textbf{Twelve-level isolation framework.}
+        (\cref{sec:isolation-levels}) A runtime registry that
+        automatically selects the strongest available isolation
+        mechanism, from hardware-enforced microVMs to lightweight
+        syscall interception via proot. The framework provides both
+        security and compatibility across diverse hardware
+        capabilities.
+
+  \item \textbf{DokiLink-Lite mesh networking.}
+        (\cref{sec:dokilink}) A peer-to-peer mesh networking protocol
+        with TLS~1.3 encryption and optional NaCl secretbox payload
+        encryption, enabling secure inter-device communication without
+        centralized infrastructure.
+
+  \item \textbf{Docker-compatible build and orchestration.}
+        (\cref{ch:build}) A build system and Compose engine
+        that accepts standard Dockerfile syntax and Compose YAML,
+        lowering the barrier to adoption for developers familiar with
+        the Docker ecosystem.
+
+  \item \textbf{Empirical evaluation.}
+        (\cref{ch:metrics}) A comprehensive performance analysis
+        demonstrating that proot-based container isolation adds
+        acceptable overhead (100--150\,ms startup, 15\,MB memory per
+        container) for development, education, and edge computing use
+        cases.
+\end{enumerate}
+
+\section{Key Metrics}
+\label{sec:key-metrics}
+
+The following table summarizes the key metrics achieved by Doki v0.9.3:
+
+\begin{table}[htbp]
+  \centering
+  \caption{Summary of Doki v0.9.3 key metrics.}
+  \label{tab:summary-metrics}
+  \begin{tabularx}{\textwidth}{l X}
+    \toprule
+    \textbf{Metric} & \textbf{Value} \\
+    \midrule
+    CLI commands          & 244 across 9 categories \\
+    Isolation levels      & 12 (microVM to native) \\
+    Binary size           & 28.3\,MB total (4 statically linked binaries) \\
+    Startup overhead      & 100--150\,ms vs.\ Docker on server \\
+    Memory per container  & 15\,MB additional overhead \\
+    Network encryption    & TLS 1.3 + optional NaCl secretbox \\
+    Architectures         & ARM64, ARMv7 (Android, Linux, macOS) \\
+    Test coverage         & 14 test packages, all assertions passing \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Limitations}
+\label{sec:limitations}
+
+Doki has several known limitations that should be considered:
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{Performance overhead.} The proot-based syscall
+        interception adds measurable overhead compared to
+        server-class Docker. Container startup times are 2--3x slower,
+        and memory usage is approximately 15\,MB higher per container.
+
+  \item \textbf{Isolation constraints.} Without root access, Doki
+        cannot provide kernel-level namespace isolation on most Android
+        devices. The proot runtime relies on \texttt{ptrace()}, which
+        is slower than native namespaces and does not provide full
+        process isolation.
+
+  \item \textbf{Networking limitations.} The absence of
+        \texttt{iptables} on Android requires fallback to socat-based
+        port forwarding, which is less efficient than kernel-level NAT.
+        Port 53 is unavailable due to SELinux restrictions.
+
+  \item \textbf{Health check execution.} Compose
+        \texttt{service\_healthy} conditions are parsed but not yet
+        executed by the container runtime. This limits the
+        reliability of multi-service deployments.
+
+  \item \textbf{Platform dependency.} Doki relies on
+        \texttt{proot}~\cite{proot2024} as its primary isolation
+        mechanism. If proot becomes unavailable or incompatible with
+        future Android versions, alternative isolation backends would
+        need to be developed.
+\end{itemize}
+
+\section{Future Impact}
+\label{sec:future-impact}
+
+The container ecosystem on mobile devices remains an emerging field.
+Doki demonstrates that Docker-like functionality is achievable without
+root access, kernel modifications, or cloud connectivity. As mobile
+hardware continues to gain processing power and memory, the demand
+for local containerization will grow.
+
+Potential applications of Doki include:
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{Mobile development environments} --- running
+        compilers, linters, and test suites directly on Android
+        devices, eliminating the need for cloud-based CI/CD for
+        quick iterations.
+
+  \item \textbf{Edge computing} --- deploying containerized services
+        on mobile devices at the network edge, enabling low-latency
+        processing for IoT and sensor data.
+
+  \item \textbf{Education} --- teaching container concepts using
+        widely available Android hardware, making cloud-native
+        technologies accessible to students without server access.
+
+  \item \textbf{Field operations} --- running isolated tools in
+        environments without traditional server infrastructure,
+        such as remote sensing, disaster response, and military
+        operations.
+\end{itemize}
+
+Doki provides a foundation for these use cases. Future development
+will focus on strengthening isolation (gVisor integration), improving
+networking (WireGuard mesh, NAT traversal), and enabling ecosystem
+integration (Kubernetes CRI compliance).

@@ -220,7 +220,7 @@ func (f *FirewallManager) ensureChains() error {
 func (f *FirewallManager) addNftablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
 	args := []string{
 		"add", "rule", "ip", "nat", "DOKI",
-		fmt.Sprintf("%s", proto), "dport", fmt.Sprintf("%d", hostPort),
+		proto, "dport", fmt.Sprintf("%d", hostPort),
 		"dnat", "to", fmt.Sprintf("%s:%d", containerIP, containerPort),
 	}
 	if err := exec.Command("nft", args...).Run(); err != nil {
@@ -228,7 +228,7 @@ func (f *FirewallManager) addNftablesPortMapping(containerIP string, hostPort, c
 	}
 	outArgs := []string{
 		"add", "rule", "ip", "nat", "DOKI_OUTPUT",
-		fmt.Sprintf("%s", proto), "dport", fmt.Sprintf("%d", hostPort),
+		proto, "dport", fmt.Sprintf("%d", hostPort),
 		"dnat", "to", fmt.Sprintf("%s:%d", containerIP, containerPort),
 	}
 	return exec.Command("nft", outArgs...).Run()

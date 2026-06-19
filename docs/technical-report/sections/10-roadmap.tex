@@ -1,0 +1,170 @@
+% 10-roadmap.tex
+\chapter{Future Work and Roadmap}
+\label{ch:roadmap}
+
+This chapter outlines the planned development trajectory for Doki
+across three time horizons. Each milestone is driven by user feedback,
+emerging platform capabilities, and the evolving container ecosystem.
+
+\section{Short-term (v0.10)}
+\label{sec:roadmap-short}
+
+The v0.10 release focuses on closing functional gaps and improving
+the developer experience for existing features.
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{Health check execution.} Implement runtime execution
+        of health check commands for Compose \texttt{service\_healthy}
+        conditions. Currently, the condition is parsed but not executed
+        by the container runtime. This will enable proper readiness and
+        liveness probes in multi-service deployments.
+
+  \item \textbf{Certificate rotation tooling.} Automate the rotation
+        of DokiLink CA and link certificates. CA lifetime is currently
+        365 days; link certificates expire after 90 days. A built-in
+        rotation command will prevent certificate expiration from
+        disrupting mesh connectivity.
+
+  \item \textbf{Overlay2 on rootless Android.} Investigate kernel
+        overlay support on rooted Android devices to improve storage
+        performance beyond fuse-overlayfs. Native overlay2 would reduce
+        I/O overhead by approximately 10\% based on preliminary
+        benchmarks.
+
+  \item \textbf{Compose profiles UI.} Improve the Compose profile
+        experience with explicit profile activation feedback,
+        dependency visualization, and a \texttt{doki compose profiles}
+        command that lists available profiles and their services.
+\end{itemize}
+
+\section{Medium-term (v0.11)}
+\label{sec:roadmap-medium}
+
+The v0.11 release introduces advanced security features and protocol
+upgrades.
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{Noise protocol (L3).} Implement the Noise protocol
+        framework~\cite{noise2015} for DokiLink encryption,
+        providing forward secrecy and post-quantum resistance. This
+        replaces the current static key exchange with ephemeral
+        Diffie-Hellman.
+
+  \item \textbf{Wire protocol upgrade.} Replace the JSON gossip
+        protocol with gRPC/protobuf for improved performance and
+        type safety. Benchmarking shows protobuf serialization is
+        3--5x faster than JSON for the peer discovery message format.
+
+  \item \textbf{gVisor integration.} Enable the gVisor user-space
+        kernel~\cite{gvisor2024} as an isolation option on
+        Android devices with sufficient resources. gVisor provides
+        stronger syscall filtering than proot while remaining
+        rootless.
+
+  \item \textbf{Image signing.} Implement OCI image signature
+        verification using Sigstore/cosign integration. This enables
+        supply chain security for images pulled from public registries.
+\end{itemize}
+
+\section{Long-term (v1.0)}
+\label{sec:roadmap-long}
+
+The v1.0 release targets production-grade features and ecosystem
+integration.
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{WireGuard mesh.} Full WireGuard integration for
+        encrypted point-to-point tunnels between Doki instances.
+        WireGuard provides kernel-level encryption with minimal
+        overhead compared to userspace TLS.
+
+  \item \textbf{NAT traversal.} Implement STUN/TURN hole-punching
+        for peer discovery across NAT boundaries. This enables
+        DokiLink connectivity between devices on different networks
+        without static IP addresses.
+
+  \item \textbf{DHT peer discovery.} Distributed hash table for
+        decentralized peer discovery without static configuration.
+        This eliminates the need for manually adding peers via
+        \texttt{doki link add}.
+
+  \item \textbf{Kubernetes compatibility.} Full CRI (Container
+        Runtime Interface) compliance for Kubernetes node integration.
+        This would enable Doki to serve as a runtime for Kubernetes
+        pods on Android devices.
+\end{itemize}
+
+\section{Feature Priority Matrix}
+\label{sec:priority-matrix}
+
+The following table summarizes planned features with their estimated
+impact and implementation complexity.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Feature priority matrix for the Doki roadmap.}
+  \label{tab:roadmap-priorities}
+  \begin{tabularx}{\textwidth}{l l c c X}
+    \toprule
+    \textbf{Feature} & \textbf{Version} & \textbf{Impact} & \textbf{Complexity} & \textbf{Rationale} \\
+    \midrule
+    Health checks     & v0.10 & High   & Low    & Unblocks Compose service\_healthy \\
+    Cert rotation     & v0.10 & Medium & Low    & Prevents mesh connectivity loss \\
+    Overlay2          & v0.10 & Medium & High   & Requires kernel investigation \\
+    Noise protocol    & v0.11 & High   & Medium & Forward secrecy for DokiLink \\
+    gVisor            & v0.11 & High   & High   & Strongest rootless isolation \\
+    Image signing     & v0.11 & Medium & Medium & Supply chain security \\
+    WireGuard mesh    & v1.0  & High   & High   & Production-grade networking \\
+    NAT traversal     & v1.0  & High   & High   & Cross-network connectivity \\
+    K8s CRI           & v1.0  & High   & Very High & Ecosystem integration \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Development Timeline}
+\label{sec:timeline}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.5cm,
+    every node/.style={font=\sffamily\footnotesize},
+    milestone/.style={
+      rectangle, rounded corners=3pt,
+      draw=nodeblue!60, fill=fillblue,
+      minimum width=2.2cm, minimum height=0.7cm,
+      text=textdark, align=center, inner sep=4pt
+    },
+    phase/.style={
+      rectangle, rounded corners=2pt,
+      draw=nodeorange!50, fill=fillorange!30,
+      minimum width=1.8cm, minimum height=0.6cm,
+      text=textdark, align=center, inner sep=3pt,
+      font=\sffamily\scriptsize\bfseries
+    }
+  ]
+    % Timeline axis
+    \draw[linegray, thick] (0,0) -- (12,0);
+
+    % Phase markers
+    \node[phase] at (1.5, 0.8) {v0.9.3};
+    \node[phase] at (4.5, 0.8) {v0.10};
+    \node[phase] at (8, 0.8) {v0.11};
+    \node[phase] at (11, 0.8) {v1.0};
+
+    % Current
+    \fill[nodeblue] (1.5,0) circle (3pt);
+    \node[below=0.3cm, font=\sffamily\tiny\bfseries, text=nodeblue] at (1.5,0) {Current};
+
+    % Features
+    \node[milestone, below=0.6cm] at (4.5,0) (h1) {Health checks};
+    \node[milestone, below=0.6cm] at (8,0) (n1) {Noise protocol};
+    \node[milestone, below=0.6cm] at (11,0) (w1) {WireGuard mesh};
+
+    \draw[->, nodeorange, dashed, line width=0.6pt] (1.5,0) -- (4.5,0);
+    \draw[->, nodeorange, dashed, line width=0.6pt] (4.5,0) -- (8,0);
+    \draw[->, nodeorange, dashed, line width=0.6pt] (8,0) -- (11,0);
+  \end{tikzpicture}
+  \caption{Doki development roadmap timeline with key milestones.}
+  \label{fig:roadmap-timeline}
+\end{figure}

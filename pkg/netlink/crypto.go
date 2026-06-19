@@ -69,14 +69,14 @@ type TLSWrapper struct {
 // NewTLSWrapper builds a wrapper from a *tls.Config. The same config
 // is used for both WrapServer and WrapClient; whether the resulting
 // conn behaves as server or client is decided by the handshake.
-func NewTLSWrapper(cfg *tls.Config) *TLSWrapper {
+func NewTLSWrapper(cfg *tls.Config) (*TLSWrapper, error) {
 	if cfg == nil {
-		panic("netlink: NewTLSWrapper with nil config")
+		return nil, errors.New("netlink: NewTLSWrapper with nil config")
 	}
 	if cfg.MinVersion == 0 {
 		cfg.MinVersion = tls.VersionTLS13
 	}
-	return &TLSWrapper{cfg: cfg}
+	return &TLSWrapper{cfg: cfg}, nil
 }
 
 // WrapServer wraps the server-side (host) of a connection. The returned
@@ -121,7 +121,6 @@ func (t *TLSWrapper) WrapClient(ctx context.Context, c net.Conn) (net.Conn, erro
 type SecretboxWrapper struct {
 	key    [32]byte
 	mu     sync.Mutex
-	tcpCnt uint64
 	udpCnt uint64
 }
 

@@ -293,7 +293,7 @@ func (d *DNSServer) serve() {
 	go func() {
 		<-d.stopCh
 		if d.listener != nil {
-			d.listener.Close()
+			_ = d.listener.Close()
 		}
 	}()
 
@@ -334,7 +334,7 @@ func (d *DNSServer) serveTCP() {
 
 // handleTCPConn processes a single TCP DNS query.
 func (d *DNSServer) handleTCPConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	d.tcpQueries.Add(1)
 	d.queriesServed.Add(1)
@@ -521,7 +521,7 @@ func (d *DNSServer) tryUpstream(network, upstream string, query []byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	_ = client.SetDeadline(time.Now().Add(d.queryTimeout))
 	if _, err := client.Write(query); err != nil {
 		return nil, err
@@ -539,7 +539,7 @@ func (d *DNSServer) tryUpstreamTCP(upstream string, query []byte) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	_ = client.SetDeadline(time.Now().Add(d.queryTimeout))
 	// TCP DNS: 2-byte length prefix (RFC 1035 §4.2.2).
 	var length [2]byte

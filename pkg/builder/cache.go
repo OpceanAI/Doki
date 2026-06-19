@@ -56,7 +56,9 @@ func NewBuildCache(root string, maxSize int64) *BuildCache {
 		index:   make(map[string]*CacheEntry),
 		maxSize: maxSize,
 	}
-	os.MkdirAll(root, 0755)
+	if err := os.MkdirAll(root, 0755); err != nil {
+		c.log.Warn("create cache dir failed", "path", root, "error", err)
+	}
 	c.loadIndex()
 	return c
 }
@@ -184,7 +186,9 @@ func (c *BuildCache) Delete(key string) {
 	if !ok {
 		return
 	}
-	os.Remove(entry.LayerPath)
+	if err := os.Remove(entry.LayerPath); err != nil {
+		c.log.Warn("remove cache entry failed", "path", entry.LayerPath, "error", err)
+	}
 	c.curSize -= entry.Size
 	if c.curSize < 0 {
 		c.curSize = 0
@@ -203,7 +207,9 @@ func (c *BuildCache) Purge() error {
 		return err
 	}
 	for _, entry := range entries {
-		os.Remove(filepath.Join(c.root, entry.Name()))
+		if err := os.Remove(filepath.Join(c.root, entry.Name())); err != nil {
+			c.log.Warn("remove cached file failed", "name", entry.Name(), "error", err)
+		}
 	}
 	c.index = make(map[string]*CacheEntry)
 	c.curSize = 0
@@ -270,7 +276,7 @@ func (c *BuildCache) hashFile(path string) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	size, err := io.Copy(h, f)
@@ -291,13 +297,17 @@ func (c *BuildCache) copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	out, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		if err := out.Close(); err != nil {
+			c.log.Warn("close output file failed", "path", dst, "error", err)
+		}
+	}()
 
 	_, err = io.Copy(out, in)
 	return err
@@ -315,7 +325,9 @@ func (c *BuildCache) evict() {
 			}
 		}
 		if oldest != nil {
-			os.Remove(oldest.LayerPath)
+			if err := os.Remove(oldest.LayerPath); err != nil {
+				c.log.Warn("remove evicted cache entry failed", "path", oldest.LayerPath, "error", err)
+			}
 			c.curSize -= oldest.Size
 			delete(c.index, oldestKey)
 			c.log.Debug("evicted cache entry", "key", oldestKey, "size", oldest.Size)
@@ -344,5 +356,7 @@ indexPath := filepath.Join(c.root, "index.json")
 	if err != nil {
 		return
 	}
-	os.WriteFile(indexPath, data, 0644)
+	if err := os.WriteFile(indexPath, data, 0644); err != nil {
+		c.log.Warn("write cache index failed", "path", indexPath, "error", err)
+	}
 }

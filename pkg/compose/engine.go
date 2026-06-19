@@ -186,7 +186,6 @@ type Engine struct {
 	projectDir  string
 	envVars     map[string]string
 	netCreated  map[string]bool
-	noBuild     bool
 }
 
 // NewEngine creates a new compose engine.
@@ -944,12 +943,28 @@ func (e *Engine) Down() error {
 	}
 
 	for svcName := range e.file.Services {
-		containerName := e.containerName(svcName)
-		if err := e.runtime.Stop(containerName, 10); err != nil {
-			slog.Warn("stop", "service", svcName, "err", err)
+		svc := e.file.Services[svcName]
+
+		scale := svc.Scale
+		if scale <= 0 {
+			scale = 1
 		}
-		if err := e.runtime.Delete(containerName, true); err != nil {
-			slog.Warn("delete", "service", svcName, "err", err)
+
+		timeout := 10
+		if svc.StopGracePeriod != "" {
+			if d, err := parseDuration(svc.StopGracePeriod); err == nil {
+				timeout = int(d.Seconds())
+			}
+		}
+
+		for i := 1; i <= scale; i++ {
+			containerName := e.containerNameN(svcName, i)
+			if err := e.runtime.Stop(containerName, timeout); err != nil {
+				slog.Warn("stop", "service", svcName, "instance", i, "err", err)
+			}
+			if err := e.runtime.Delete(containerName, true); err != nil {
+				slog.Warn("delete", "service", svcName, "instance", i, "err", err)
+			}
 		}
 	}
 

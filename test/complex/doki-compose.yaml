@@ -1,0 +1,178 @@
+# ============================================================
+# Complex Doki Compose Stack
+# Multi-service with networks, volumes, depends_on, env_file
+# ============================================================
+
+# Services
+services:
+  # --- Database ---
+  db:
+    image: alpine:3.19
+    container_name: test-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=testdb
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=secret123
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./data:/docker-entrypoint-initdb.d:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "echo", "db-ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # --- Cache ---
+  redis:
+    image: alpine:3.19
+    container_name: test-redis
+    restart: unless-stopped
+    command: ["echo", "redis-placeholder"]
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "echo", "redis-ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # --- API Server ---
+  api:
+    build:
+      context: .
+      dockerfile: Dokifile
+      target: runtime
+      args:
+        APP_VERSION: "2.0.0"
+        BUILD_ENV: production
+    image: test-api:latest
+    container_name: test-api
+    restart: unless-stopped
+    environment:
+      - APP_ENV=production
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=info
+    ports:
+      - "127.0.0.1:3000:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+      - frontend
+    volumes:
+      - app-data:/opt/app/data
+    healthcheck:
+      test: ["CMD", "echo", "api-ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Web Server ---
+  web:
+    image: alpine:3.19
+    container_name: test-web
+    restart: unless-stopped
+    command: ["echo", "web-placeholder"]
+    environment:
+      - NGINX_HOST=web
+      - API_URL=http://api:8080
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD", "echo", "web-ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # --- Worker ---
+  worker:
+    image: alpine:3.19
+    container_name: test-worker
+    restart: unless-stopped
+    command: ["echo", "worker-placeholder"]
+    environment:
+      - WORKER_CONCURRENCY=4
+      - QUEUE_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # --- Monitoring ---
+  prometheus:
+    image: alpine:3.19
+    container_name: test-prometheus
+    restart: unless-stopped
+    command: ["echo", "prometheus-placeholder"]
+    volumes:
+      - prometheus-data:/prometheus
+    networks:
+      - monitoring
+      - backend
+
+  # --- Dashboard ---
+  grafana:
+    image: alpine:3.19
+    container_name: test-grafana
+    restart: unless-stopped
+    command: ["echo", "grafana-placeholder"]
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring
+
+# Networks
+networks:
+  frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+  backend:
+    driver: bridge
+    internal: false
+  monitoring:
+    driver: bridge
+
+# Volumes
+volumes:
+  db-data:
+    driver: local
+  app-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+# Secrets (reference only, not mounted)
+secrets:
+  db_password:
+    environment: POSTGRES_PASSWORD

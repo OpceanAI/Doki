@@ -1,0 +1,184 @@
+% 07-storage.tex
+\chapter{Storage}
+\label{ch:storage}
+
+\section{Storage Drivers}
+\label{sec:storage-drivers}
+
+Doki supports 5 storage drivers, auto-detected by
+\texttt{DetectBestDriver()}. The driver selection depends on the
+kernel version, filesystem type, and whether root access is available.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Storage driver comparison.}
+  \label{tab:storage-drivers}
+  \begin{tabularx}{\textwidth}{l l l l X}
+    \toprule
+    \textbf{Driver} & \textbf{Root?} & \textbf{Performance} & \textbf{Status} & \textbf{Use case} \\
+    \midrule
+    overlay2       & Yes & Best   & Tested & Linux servers with kernel overlay \\
+    fuse-overlayfs & No  & 90\%   & Tested & Rootless, Termux, Android \\
+    aufs           & Yes & Good   & Tested & Legacy Linux systems \\
+    vfs            & No  & Slow   & Tested & Fallback, debugging \\
+    devmapper      & Yes & Good   & Tested & Enterprise, thin provisioning \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Overlay Filesystem}
+\label{sec:overlay}
+
+The overlay filesystem is the primary storage mechanism for container
+images. It combines multiple read-only layers into a single unified
+view using copy-on-write semantics.
+
+\subsection{Layer Structure}
+\label{sec:layer-structure}
+
+An OCI image consists of multiple layers, each representing a set of
+filesystem changes. When a container is created, a thin writable layer
+(\texttt{upperdir}) is placed on top of the read-only image layers.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.3cm,
+    every node/.style={font=\sffamily\footnotesize},
+  ]
+    % Layers (bottom to top)
+    \node[rectangle, draw=nodeblue!50, fill=nodeblue!8,
+      minimum width=6cm, minimum height=0.8cm,
+      text=textdark, align=center, inner sep=3pt]
+      (base) at (0,0) {Base Layer (alpine:3.18)};
+
+    \node[rectangle, draw=nodelteal!50, fill=nodelteal!8,
+      minimum width=6cm, minimum height=0.8cm,
+      text=textdark, align=center, inner sep=3pt]
+      (layer1) at (0,1.1) {Layer 1: apt-get install dependencies};
+
+    \node[rectangle, draw=nodeorange!50, fill=nodeorange!8,
+      minimum width=6cm, minimum height=0.8cm,
+      text=textdark, align=center, inner sep=3pt]
+      (layer2) at (0,2.2) {Layer 2: COPY app /opt/app};
+
+    \node[rectangle, draw=nodepurple!50, fill=nodepurple!8,
+      minimum width=6cm, minimum height=0.8cm,
+      text=textdark, align=center, inner sep=3pt]
+      (layer3) at (0,3.3) {Layer 3: RUN go build -o /app};
+
+    \node[rectangle, draw=nodecoral!50, fill=nodecoral!12,
+      minimum width=6cm, minimum height=0.8cm,
+      text=textdark, align=center, inner sep=3pt]
+      (writable) at (0,4.4) {Writable Layer (container)};
+
+    % Annotations
+    \node[annot, right=0.3cm of base.east] {read-only};
+    \node[annot, right=0.3cm of layer1.east] {read-only};
+    \node[annot, right=0.3cm of layer2.east] {read-only};
+    \node[annot, right=0.3cm of layer3.east] {read-only};
+    \node[annotBold, right=0.3cm of writable.east] {read-write};
+
+    % Bracket
+    \draw[decorate, decoration={brace, amplitude=5pt, mirror},
+      linegray, thick]
+      ([xshift=-0.2cm]base.north west) -- ([xshift=-0.2cm]writable.south west)
+      node[midway, left=8pt, font=\sffamily\tiny, text=textgray, rotate=90]
+        {Image Layers};
+
+    % Merge arrow
+    \draw[arrThick, nodeblue] ([xshift=3.5cm]writable.north east)
+      -- ++(0.8,0) node[right, font=\sffamily\footnotesize, text=nodeblue]
+        {merged view};
+  \end{tikzpicture}
+  \caption{Overlay filesystem layer structure. Multiple read-only
+    image layers are merged with a writable container layer.}
+  \label{fig:overlay-layers}
+\end{figure}
+
+\section{Image Layer Management}
+\label{sec:layer-management}
+
+Layers are stored as content-addressable blobs identified by their
+SHA-256 digest. The \texttt{ImageStore} preserves full layer IDs
+without truncation, while the CLI truncates IDs for display purposes.
+
+\subsection{Layer Deduplication}
+\label{sec:layer-dedup}
+
+When pulling images, Doki tracks already-pulled layers in a map to
+avoid duplicate downloads. If a layer already exists in the local
+store, it is skipped during the pull process.
+
+\section{Volume Management}
+\label{sec:volume-management}
+
+Doki supports named volumes that persist beyond container lifecycle.
+Volumes are stored under \texttt{\$DOKI\_DATA\_DIR/volumes/} and can
+be mounted into containers at any path.
+
+\subsection{Volume Types}
+\label{sec:volume-types}
+
+Doki supports three volume types:
+
+\begin{description}[leftmargin=*, style=nextline, font=\sffamily\bfseries]
+  \item[Named volumes.]
+    Managed by Doki with automatic lifecycle management. Data persists
+    across container restarts and removals.
+
+  \item[Bind mounts.]
+    Direct mapping of host directories into the container. Useful for
+    development where files need to be shared between host and
+    container.
+
+  \item[tmpfs mounts.]
+    In-memory filesystems for sensitive data that should not persist
+    to disk. Limited by available RAM.
+\end{description}
+
+\begin{codebox}[title={Volume mount syntax}]{bash}
+doki run -v mydata:/data alpine:3.18 sh
+doki run -v /host/path:/container/path alpine:3.18 sh
+doki run --tmpfs /tmp:rw,size=100m alpine:3.18 sh
+\end{codebox}
+
+\section{Filesystem Probes}
+\label{sec:filesystem-probes}
+
+Doki detects its execution environment by probing the filesystem
+rather than relying on \texttt{runtime.GOOS}, which returns
+\texttt{linux} on both Android and standard Linux:
+
+\begin{codebox}[title={Environment detection logic}]{go}
+func IsTermux() bool \{
+    \_, err := os.Stat("/data/data/com.termux")
+    return err == nil
+\}
+\end{codebox}
+
+\subsection{Detection Probes}
+\label{sec:detection-probes}
+
+The following filesystem paths are probed to determine the execution
+environment:
+
+\begin{table}[htbp]
+  \centering
+  \caption{Filesystem probes and their detected environments.}
+  \label{tab:fs-probes}
+  \begin{tabularx}{\textwidth}{l X}
+    \toprule
+    \textbf{Path} & \textbf{Environment} \\
+    \midrule
+    \texttt{/data/data/com.termux} & Android/Termux \\
+    \texttt{/proc/self/status}     & Standard Linux (always present) \\
+    \texttt{/proc/1/cgroup}        & Container detection \\
+    \texttt{/.dockerenv}           & Docker container \\
+    \texttt{/run/.containerenv}    & Podman container \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+This approach enables environment-specific behavior (such as DNS port
+selection and proot optimization) without compile-time restrictions.

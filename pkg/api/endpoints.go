@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
 	dokiruntime "github.com/OpceanAI/Doki/pkg/runtime"
@@ -97,10 +96,10 @@ func (s *Server) handleArchiveGet(w http.ResponseWriter, r *http.Request, rootfs
 	w.Header().Set("Container-Path-Stat", encodePathStat(info))
 
 	tw := tar.NewWriter(w)
-	defer tw.Close()
+	defer func() { _ = tw.Close() }()
 
 	if info.IsDir() {
-		filepath.Walk(containerPath, func(path string, fi os.FileInfo, err error) error {
+		_ = filepath.Walk(containerPath, func(path string, fi os.FileInfo, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -108,7 +107,7 @@ func (s *Server) handleArchiveGet(w http.ResponseWriter, r *http.Request, rootfs
 			return addFileToTar(tw, path, relPath, fi)
 		})
 	} else {
-		addFileToTar(tw, containerPath, filepath.Base(containerPath), info)
+		_ = addFileToTar(tw, containerPath, filepath.Base(containerPath), info)
 	}
 }
 
@@ -147,9 +146,9 @@ func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, rootfs
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			os.MkdirAll(target, os.FileMode(hdr.Mode))
+			_ = os.MkdirAll(target, os.FileMode(hdr.Mode))
 		case tar.TypeReg:
-			os.MkdirAll(filepath.Dir(target), 0755)
+			_ = os.MkdirAll(filepath.Dir(target), 0755)
 			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, os.FileMode(hdr.Mode))
 			if err != nil {
 				continue
@@ -157,13 +156,13 @@ func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, rootfs
 			const maxFileSize = 1 << 30 // 1 GB
 			n, err := io.Copy(f, io.LimitReader(tr, maxFileSize+1))
 			if err != nil {
-				f.Close()
+				_ = f.Close()
 				s.writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			f.Close()
+			_ = f.Close()
 			if n > maxFileSize {
-				os.Remove(target)
+				_ = os.Remove(target)
 				s.writeError(w, http.StatusRequestEntityTooLarge, "file too large")
 				return
 			}
@@ -171,145 +170,6 @@ func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, rootfs
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]string{})
-}
-
-// handleContainerResizeExec handles POST /exec/{id}/resize.
-func (s *Server) handleContainerResizeExec(w http.ResponseWriter, r *http.Request, execID string) {
-	q := r.URL.Query()
-	height, _ := strconv.Atoi(q.Get("h"))
-	width, _ := strconv.Atoi(q.Get("w"))
-
-	if height <= 0 || width <= 0 {
-		s.writeError(w, http.StatusBadRequest, "invalid height or width")
-		return
-	}
-
-	// Exec resize is a no-op but we return success for compatibility.
-	s.writeJSON(w, http.StatusOK, map[string]string{})
-}
-
-// handleContainerStatsStream handles streaming stats for GET /containers/{id}/stats.
-func (s *Server) handleContainerStatsStream(w http.ResponseWriter, r *http.Request, id string) {
-	q := r.URL.Query()
-	stream := q.Get("stream") == "1" || q.Get("stream") == "true"
-
-	state, err := s.runtime.State(id)
-	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
-
-	stats, _ := s.runtime.Stats(id)
-
-	if !stream {
-		// Single snapshot.
-		containerStats := map[string]interface{}{
-			"id":        id,
-			"read":      state.Started.Format("2006-01-02T15:04:05.999999999Z"),
-			"cpu_stats": stats,
-			"networks":  map[string]interface{}{},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(containerStats)
-		return
-	}
-
-	// Streaming mode.
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		s.writeError(w, http.StatusInternalServerError, "streaming not supported")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	// BUG-01 fix (deep audit): the previous code used `default` in select,
-	// causing a 100% CPU spin for every connected stats client. Use a
-	// 1-second ticker instead.
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-		}
-
-		stats, _ := s.runtime.Stats(id)
-		containerStats := map[string]interface{}{
-			"id":        id,
-			"read":      state.Started.Format("2006-01-02T15:04:05.999999999Z"),
-			"cpu_stats": stats,
-			"networks":  map[string]interface{}{},
-		}
-		json.NewEncoder(w).Encode(containerStats)
-		flusher.Flush()
-	}
-}
-
-// handleVolumesListPaginated handles GET /volumes with pagination.
-func (s *Server) handleVolumesListPaginated(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	limit, err := strconv.Atoi(q.Get("limit"))
-	if err != nil {
-		limit = 0
-	}
-	offset, err := strconv.Atoi(q.Get("offset"))
-	if err != nil {
-		offset = 0
-	}
-
-	volumes := s.volumes.List()
-
-	// Apply pagination.
-	total := len(volumes)
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > total {
-		offset = total
-	}
-	end := total
-	if limit > 0 && offset+limit < end {
-		end = offset + limit
-	}
-	paged := volumes[offset:end]
-
-	response := map[string]interface{}{
-		"Volumes":  paged,
-		"Warnings": []string{},
-	}
-	if limit > 0 {
-		response["Total"] = total
-		response["Offset"] = offset
-		response["Limit"] = limit
-	}
-
-	s.writeJSON(w, http.StatusOK, response)
-}
-
-// handleImageTagMulti handles POST /images/{name}/tag with multiple tags.
-func (s *Server) handleImageTagMulti(w http.ResponseWriter, r *http.Request, id string) {
-	q := r.URL.Query()
-	repo := q.Get("repo")
-	tag := q.Get("tag")
-
-	if repo == "" {
-		s.writeError(w, http.StatusBadRequest, "repo parameter required")
-		return
-	}
-	if tag == "" {
-		tag = "latest"
-	}
-
-	fullRef := repo + ":" + tag
-	if err := s.image.Tag(id, fullRef); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	s.writeJSON(w, http.StatusCreated, map[string]string{})
 }
 
 // handleContainerRename handles POST /containers/{id}/rename.
@@ -431,7 +291,7 @@ func addFileToTar(tw *tar.Writer, fullPath, relPath string, info os.FileInfo) er
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = io.Copy(tw, f)
 	return err
 }

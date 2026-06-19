@@ -169,10 +169,10 @@ func main() {
 	}
 
 	if profileFlag != "" {
-		os.Setenv("COMPOSE_PROFILES", profileFlag)
+		_ = os.Setenv("COMPOSE_PROFILES", profileFlag)
 	}
 	if envFileFlag != "" {
-		os.Setenv("COMPOSE_ENV_FILE", envFileFlag)
+		_ = os.Setenv("COMPOSE_ENV_FILE", envFileFlag)
 	}
 
 	switch command {

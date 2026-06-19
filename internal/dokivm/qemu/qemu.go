@@ -94,7 +94,7 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 	vm.StartedAt = time.Now()
 
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 		v.mu.Lock()
 		if vm, ok := v.vms[vmID]; ok {
 			vm.State = dokivm.VMStateStopped
@@ -113,10 +113,10 @@ func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) erro
 		return nil
 	}
 	proc, _ := os.FindProcess(vm.PID)
-	proc.Signal(syscall.SIGTERM)
+	_ = proc.Signal(syscall.SIGTERM)
 	select {
 	case <-time.After(timeout):
-		proc.Signal(syscall.SIGKILL)
+		_ = proc.Signal(syscall.SIGKILL)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -132,7 +132,7 @@ func (v *VMM) Kill(ctx context.Context, vmID string) error {
 		return nil
 	}
 	proc, _ := os.FindProcess(vm.PID)
-	proc.Signal(syscall.SIGKILL)
+	_ = proc.Signal(syscall.SIGKILL)
 	vm.State = dokivm.VMStateStopped
 	return nil
 }
@@ -157,7 +157,7 @@ func (v *VMM) Cleanup(ctx context.Context, vmID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.vms, vmID)
-	os.RemoveAll(filepath.Join(v.cfg.WorkDir, vmID))
+	_ = os.RemoveAll(filepath.Join(v.cfg.WorkDir, vmID))
 	return nil
 }
 

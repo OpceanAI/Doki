@@ -319,13 +319,15 @@ func (c *DokiCLI) Run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("create container: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Id       string   `json:"Id"`
 		Warnings []string `json:"Warnings"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 	containerID = result.Id
 
 	for _, w := range result.Warnings {
@@ -348,13 +350,13 @@ func (c *DokiCLI) Run(args []string) error {
 	if !flags.Interactive {
 		c.waitContainer(containerID)
 	}
-	c.logs(containerID, false, 0, false)
+	_ = c.logs(containerID, false, 0, false)
 	fmt.Println() // Add trailing newline after logs
 
 	exitCode, _ := c.Wait(containerID)
 
 	if flags.RM {
-		c.doAPI("DELETE", "/containers/"+containerID+"?force=true", nil)
+		_, _ = c.doAPI("DELETE", "/containers/"+containerID+"?force=true", nil)
 	}
 
 	os.Exit(exitCode)
@@ -381,10 +383,12 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var containers []common.ContainerInfo
-	json.NewDecoder(resp.Body).Decode(&containers)
+	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	sort.Slice(containers, func(i, j int) bool {
 		return containers[i].Created < containers[j].Created
@@ -413,10 +417,10 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
-	fmt.Fprintln(w, "CONTAINER ID\tIMAGE\tCOMMAND\tCREATED\tSTATUS\tPORTS\tNAMES")
+	_, _ = fmt.Fprintln(w, "CONTAINER ID\tIMAGE\tCOMMAND\tCREATED\tSTATUS\tPORTS\tNAMES")
 
 	if len(containers) == 0 {
-		w.Flush()
+		_ = w.Flush()
 		return nil
 	}
 
@@ -430,7 +434,7 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 		if cmd == "" {
 			cmd = "-"
 		}
-		created := formatDuration(time.Now().Sub(time.Unix(c.Created, 0)))
+		created := formatDuration(time.Since(time.Unix(c.Created, 0)))
 		status := c.Status
 		ports := formatPorts(c.Ports)
 		names := ""
@@ -438,9 +442,9 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 			names = strings.TrimPrefix(c.Names[0], "/")
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, img, cmd, created, status, ports, names)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, img, cmd, created, status, ports, names)
 	}
-	w.Flush()
+	_ = w.Flush()
 
 	return nil
 }
@@ -688,13 +692,15 @@ func (c *DokiCLI) Create(image string, cmd []string, opts *RunFlags) (string, er
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Id       string   `json:"Id"`
 		Warnings []string `json:"Warnings"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
 	for _, w := range result.Warnings {
 		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
@@ -723,10 +729,12 @@ func (c *DokiCLI) Exec(containerID string, cmd []string, tty, detach, interactiv
 	if err != nil {
 		return fmt.Errorf("exec create: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var execResult struct{ Id string }
-	json.NewDecoder(resp.Body).Decode(&execResult)
+	if err := json.NewDecoder(resp.Body).Decode(&execResult); err != nil {
+		return fmt.Errorf("decode exec response: %w", err)
+	}
 
 	startBody := map[string]interface{}{
 		"Detach": detach,
@@ -736,12 +744,12 @@ func (c *DokiCLI) Exec(containerID string, cmd []string, tty, detach, interactiv
 	if err != nil {
 		return fmt.Errorf("exec start: %w", err)
 	}
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 
 	if !detach {
 		if tty {
 			// TTY mode: raw stream, no demux needed
-			io.Copy(os.Stdout, resp2.Body)
+			_, _ = io.Copy(os.Stdout, resp2.Body)
 		} else {
 			// Non-TTY: multiplexed stream, need demux
 			demuxStream(resp2.Body, os.Stdout, os.Stderr)
@@ -772,11 +780,11 @@ func demuxStream(r io.Reader, stdout, stderr io.Writer) {
 		}
 		switch streamType {
 		case 1: // stdout
-			stdout.Write(data)
+			_, _ = stdout.Write(data)
 		case 2: // stderr
-			stderr.Write(data)
+			_, _ = stderr.Write(data)
 		default:
-			stdout.Write(data)
+			_, _ = stdout.Write(data)
 		}
 	}
 }
@@ -801,7 +809,7 @@ func (c *DokiCLI) logs(containerID string, follow bool, tail int, timestamps boo
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Logs use multiplexed stream format
 	demuxStream(resp.Body, os.Stdout, os.Stderr)
@@ -823,8 +831,12 @@ func (c *DokiCLI) Stats(containerIDs []string, noStream bool) error {
 			continue
 		}
 		var stats map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&stats)
-		resp.Body.Close()
+		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			fmt.Fprintf(os.Stderr, "decode stats for %s: %v\n", common.ShortID(id), err)
+			_ = resp.Body.Close()
+			continue
+		}
+		_ = resp.Body.Close()
 
 		cpuUsage := "N/A"
 		memUsage := "N/A"
@@ -846,31 +858,22 @@ func (c *DokiCLI) Top(containerID string, psArgs string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var top struct {
 		Titles    []string   `json:"Titles"`
 		Processes [][]string `json:"Processes"`
 	}
-	json.NewDecoder(resp.Body).Decode(&top)
-	w := tabwriter.NewWriter(os.Stdout, 10, 0, 1, ' ', 0)
-	fmt.Fprintln(w, strings.Join(top.Titles, "\t"))
-	for _, proc := range top.Processes {
-		fmt.Fprintln(w, strings.Join(proc, "\t"))
+	if err := json.NewDecoder(resp.Body).Decode(&top); err != nil {
+		return fmt.Errorf("decode response: %w", err)
 	}
-	w.Flush()
+	w := tabwriter.NewWriter(os.Stdout, 10, 0, 1, ' ', 0)
+	_, _ = fmt.Fprintln(w, strings.Join(top.Titles, "\t"))
+	for _, proc := range top.Processes {
+		_, _ = fmt.Fprintln(w, strings.Join(proc, "\t"))
+	}
+	_ = w.Flush()
 	return nil
-}
-
-// inspectContainer is a flattened view of the container inspect
-// response suitable for Go templates. Nested maps are preserved so
-// that {{.State.Status}} works.
-type inspectContainer struct {
-	ID    string                 `json:"Id"`
-	Name  string                 `json:"Name"`
-	Image string                 `json:"Image"`
-	State map[string]interface{} `json:"State"`
-	// Include common fields at the top level too.
 }
 
 func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
@@ -879,13 +882,13 @@ func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
 		resp, err := c.doAPI("GET", "/containers/"+id+"/json", nil)
 		if err != nil || resp.StatusCode == 404 {
 			if resp != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			// Try images
 			resp, err = c.doAPI("GET", "/images/"+id+"/json", nil)
 			if err != nil || resp.StatusCode == 404 {
 				if resp != nil {
-					resp.Body.Close()
+					_ = resp.Body.Close()
 				}
 				fmt.Fprintf(os.Stderr, "Error: no such object: %s\n", id)
 				hadError = true
@@ -893,7 +896,7 @@ func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
 			}
 		}
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if format != "" {
 			tmpl, err := template.New("inspect").Parse(format)
 			if err != nil {
@@ -941,10 +944,12 @@ func (c *DokiCLI) Commit(containerID, repo, tag, author, message string, pause b
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct{ Id string }
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 	fmt.Println(result.Id[:12])
 	return nil
 }
@@ -954,13 +959,15 @@ func (c *DokiCLI) Diff(containerID string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var changes []struct {
 		Path string `json:"Path"`
 		Kind int    `json:"Kind"`
 	}
-	json.NewDecoder(resp.Body).Decode(&changes)
+	if err := json.NewDecoder(resp.Body).Decode(&changes); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	for _, ch := range changes {
 		kind := "C"
@@ -980,10 +987,12 @@ func (c *DokiCLI) Port(containerID, privatePort string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var js common.ContainerJSON
-	json.NewDecoder(resp.Body).Decode(&js)
+	if err := json.NewDecoder(resp.Body).Decode(&js); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	if js.NetworkSettings != nil {
 		for _, ep := range js.NetworkSettings.Networks {
@@ -1009,7 +1018,7 @@ func (c *DokiCLI) Update(containerID string, flags *RunFlags) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -1018,10 +1027,12 @@ func (c *DokiCLI) Wait(containerID string) (int, error) {
 	if err != nil {
 		return -1, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct{ StatusCode int }
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return -1, fmt.Errorf("decode response: %w", err)
+	}
 	return result.StatusCode, nil
 }
 
@@ -1030,7 +1041,7 @@ func (c *DokiCLI) Export(containerID string, output string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var out io.Writer = os.Stdout
 	if output != "" {
@@ -1038,10 +1049,10 @@ func (c *DokiCLI) Export(containerID string, output string) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		out = f
 	}
-	io.Copy(out, resp.Body)
+	_, _ = io.Copy(out, resp.Body)
 	return nil
 }
 
@@ -1051,7 +1062,7 @@ func (c *DokiCLI) Cp(containerID, srcPath, destPath string, followLink, copyUIDG
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1061,7 +1072,7 @@ func (c *DokiCLI) Cp(containerID, srcPath, destPath string, followLink, copyUIDG
 	// Response is a tar archive - extract it
 	if destPath == "" || destPath == "-" {
 		// Write raw tar to stdout
-		io.Copy(os.Stdout, resp.Body)
+		_, _ = io.Copy(os.Stdout, resp.Body)
 		return nil
 	}
 
@@ -1090,16 +1101,16 @@ func (c *DokiCLI) Cp(containerID, srcPath, destPath string, followLink, copyUIDG
 		}
 		
 		if hdr.Typeflag == tar.TypeDir {
-			os.MkdirAll(target, os.FileMode(hdr.Mode))
+			_ = os.MkdirAll(target, os.FileMode(hdr.Mode))
 		} else if hdr.Typeflag == tar.TypeReg {
-			os.MkdirAll(filepath.Dir(target), 0755)
+			_ = os.MkdirAll(filepath.Dir(target), 0755)
 			f, err := os.Create(target)
 			if err != nil {
 				return fmt.Errorf("create %s: %w", target, err)
 			}
-			io.Copy(f, tr)
-			f.Close()
-			os.Chmod(target, os.FileMode(hdr.Mode))
+			_, _ = io.Copy(f, tr)
+			_ = f.Close()
+			_ = os.Chmod(target, os.FileMode(hdr.Mode))
 		}
 	}
 	return nil
@@ -1117,7 +1128,7 @@ func (c *DokiCLI) CpToContainer(containerID, srcPath, destPath string, followLin
 
 	if fi.IsDir() {
 		// Add directory contents to tar
-		filepath.Walk(srcPath, func(path string, info os.FileInfo, err error) error {
+		_ = filepath.Walk(srcPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -1130,14 +1141,14 @@ func (c *DokiCLI) CpToContainer(containerID, srcPath, destPath string, followLin
 				return err
 			}
 			hdr.Name = relPath
-			tw.WriteHeader(hdr)
+			_ = tw.WriteHeader(hdr)
 			if !info.IsDir() {
 				f, err := os.Open(path)
 				if err != nil {
 					return err
 				}
-				io.Copy(tw, f)
-				f.Close()
+				_, _ = io.Copy(tw, f)
+				_ = f.Close()
 			}
 			return nil
 		})
@@ -1148,22 +1159,22 @@ func (c *DokiCLI) CpToContainer(containerID, srcPath, destPath string, followLin
 			return fmt.Errorf("tar header: %w", err)
 		}
 		hdr.Name = filepath.Base(srcPath)
-		tw.WriteHeader(hdr)
+		_ = tw.WriteHeader(hdr)
 		f, err := os.Open(srcPath)
 		if err != nil {
 			return fmt.Errorf("open source: %w", err)
 		}
-		io.Copy(tw, f)
-		f.Close()
+		_, _ = io.Copy(tw, f)
+		_ = f.Close()
 	}
-	tw.Close()
+	_ = tw.Close()
 
 	path := "/containers/" + containerID + "/archive?path=" + url.QueryEscape(destPath)
 	resp, err := c.doAPI("PUT", path, &buf)
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("cp to container failed: %s", resp.Status)
 	}
@@ -1175,7 +1186,7 @@ func (c *DokiCLI) Rename(containerID, newName string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -1185,7 +1196,7 @@ func (c *DokiCLI) Start(ids []string) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1200,7 +1211,7 @@ func (c *DokiCLI) Stop(ids []string, timeout int) error {
 		if err != nil {
 			return fmt.Errorf("stop %s: %w", id, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1215,7 +1226,7 @@ func (c *DokiCLI) Restart(ids []string, timeout int) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1230,7 +1241,7 @@ func (c *DokiCLI) Kill(ids []string, signal string) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1241,7 +1252,7 @@ func (c *DokiCLI) Pause(ids []string) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1252,7 +1263,7 @@ func (c *DokiCLI) Unpause(ids []string) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1281,7 +1292,7 @@ func (c *DokiCLI) Rm(ids []string, force, volumes, link bool) error {
 		// 404 means the container is already gone: treat as success when
 		// --force is set, otherwise surface the error.
 		if resp.StatusCode == http.StatusNotFound {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if !force {
 				if firstErr == nil {
 					firstErr = fmt.Errorf("container %s not found", common.ShortID(id))
@@ -1292,13 +1303,13 @@ func (c *DokiCLI) Rm(ids []string, force, volumes, link bool) error {
 		}
 		if resp.StatusCode >= 400 {
 			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if firstErr == nil {
 				firstErr = fmt.Errorf("error removing %s: %s", id, strings.TrimSpace(string(body)))
 			}
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		fmt.Println(common.ShortID(id))
 	}
 	return firstErr
@@ -1309,8 +1320,8 @@ func (c *DokiCLI) Attach(containerID string, detachKeys, sigProxy string) error 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -1320,13 +1331,15 @@ func (c *DokiCLI) Prune(all bool, filter string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		ContainersDeleted []string `json:"ContainersDeleted"`
 		SpaceReclaimed    int64    `json:"SpaceReclaimed"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 	for _, id := range result.ContainersDeleted {
 		fmt.Println(id)
 	}
@@ -1352,7 +1365,7 @@ func (c *DokiCLI) Pull(imageName string, allTags, quiet bool) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !quiet {
 		dec := json.NewDecoder(resp.Body)
@@ -1379,7 +1392,7 @@ func (c *DokiCLI) Pull(imageName string, allTags, quiet bool) error {
 		}
 	}
 	// Drain remaining body to prevent keep-alive deadlock
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
@@ -1392,7 +1405,7 @@ func (c *DokiCLI) Push(imageName string, allTags, quiet bool) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("push failed (%s): %s", resp.Status, string(body))
@@ -1432,18 +1445,17 @@ func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var images []common.ImageInfo
-	json.NewDecoder(resp.Body).Decode(&images)
+	if err := json.NewDecoder(resp.Body).Decode(&images); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	if quiet {
 		for _, img := range images {
 			id := img.ID
-			// Strip sha256: prefix
-			if strings.HasPrefix(id, "sha256:") {
-				id = id[7:]
-			}
+			id = strings.TrimPrefix(id, "sha256:")
 			if !noTrunc && len(id) > 12 {
 				id = id[:12]
 			}
@@ -1453,21 +1465,18 @@ func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 12, 0, 1, ' ', 0)
-	fmt.Fprintln(w, "REPOSITORY\tTAG\tIMAGE ID\tCREATED\tSIZE")
+	_, _ = fmt.Fprintln(w, "REPOSITORY\tTAG\tIMAGE ID\tCREATED\tSIZE")
 
-	for _, img := range images {
-		created := formatDuration(time.Now().Sub(time.Unix(img.Created, 0)))
-		size := formatSize(img.Size)
-		id := img.ID
-		// Strip sha256: prefix for display
-		if strings.HasPrefix(id, "sha256:") {
-			id = id[7:]
-		}
+for _, img := range images {
+	created := formatDuration(time.Since(time.Unix(img.Created, 0)))
+	size := formatSize(img.Size)
+	id := img.ID
+	id = strings.TrimPrefix(id, "sha256:")
 		if !noTrunc && len(id) > 12 {
 			id = id[:12]
 		}
 		if len(img.RepoTags) == 0 {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", "-", "-", id, created, size)
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", "-", "-", id, created, size)
 		} else {
 			for _, repoTag := range img.RepoTags {
 				parts := strings.SplitN(repoTag, ":", 2)
@@ -1478,11 +1487,11 @@ func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 				}
 				// Strip sha256: prefix from repository name.
 				repo = strings.TrimPrefix(repo, "sha256:")
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", repo, tag, id, created, size)
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", repo, tag, id, created, size)
 			}
 		}
 	}
-	w.Flush()
+	_ = w.Flush()
 	return nil
 }
 
@@ -1497,7 +1506,7 @@ func (c *DokiCLI) Rmi(ids []string, force, noPrune bool) error {
 			fmt.Fprintf(os.Stderr, "Error removing image %s: %v\n", id, err)
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		fmt.Printf("Deleted: %s\n", id)
 	}
 	return nil
@@ -1513,7 +1522,7 @@ func (c *DokiCLI) Tag(source, target string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -1522,7 +1531,7 @@ func (c *DokiCLI) History(imageName string, noTrunc, quiet bool) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var history []struct {
 		Id        string `json:"Id"`
@@ -1531,7 +1540,9 @@ func (c *DokiCLI) History(imageName string, noTrunc, quiet bool) error {
 		Size      int64  `json:"Size"`
 		Comment   string `json:"comment"`
 	}
-	json.NewDecoder(resp.Body).Decode(&history)
+	if err := json.NewDecoder(resp.Body).Decode(&history); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	for _, h := range history {
 		id := common.ShortID(h.Id)
@@ -1553,7 +1564,7 @@ func (c *DokiCLI) Save(imageNames []string, output string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	out := os.Stdout
 	if output != "" {
@@ -1561,10 +1572,10 @@ func (c *DokiCLI) Save(imageNames []string, output string) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		out = f
 	}
-	io.Copy(out, resp.Body)
+	_, _ = io.Copy(out, resp.Body)
 	return nil
 }
 
@@ -1575,16 +1586,16 @@ func (c *DokiCLI) Load(input string, quiet bool) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		in = f
 	}
 	resp, err := c.doAPI("POST", "/images/load", io.NopCloser(in))
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if !quiet {
-		io.Copy(os.Stdout, resp.Body)
+		_, _ = io.Copy(os.Stdout, resp.Body)
 	}
 	return nil
 }
@@ -1601,8 +1612,8 @@ func (c *DokiCLI) Import(source, repo, tag string, changes []string, message str
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -1645,13 +1656,13 @@ func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs ma
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
 func (c *DokiCLI) Search(term string, limit int, noTrunc bool, filterStars int) error {
-	path := "/images/search?term=" + term
+	path := "/images/search?term=" + url.QueryEscape(term)
 	if limit > 0 {
 		path += "&limit=" + strconv.Itoa(limit)
 	}
@@ -1659,17 +1670,19 @@ func (c *DokiCLI) Search(term string, limit int, noTrunc bool, filterStars int) 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var results []common.SearchResult
-	json.NewDecoder(resp.Body).Decode(&results)
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	w := tabwriter.NewWriter(os.Stdout, 20, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tDESCRIPTION\tSTARS\tOFFICIAL\tAUTOMATED")
+	_, _ = fmt.Fprintln(w, "NAME\tDESCRIPTION\tSTARS\tOFFICIAL\tAUTOMATED")
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%v\t%v\n", r.Name, r.Description, r.StarCount, r.IsOfficial, r.IsAutomated)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%v\t%v\n", r.Name, r.Description, r.StarCount, r.IsOfficial, r.IsAutomated)
 	}
-	w.Flush()
+	_ = w.Flush()
 	return nil
 }
 
@@ -1679,8 +1692,8 @@ func (c *DokiCLI) ImagesPrune(all bool, filter string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -1691,17 +1704,19 @@ func (c *DokiCLI) NetworkLs(quiet bool, noTrunc bool, filter, format string) err
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var networks []common.NetworkInfo
-	json.NewDecoder(resp.Body).Decode(&networks)
+	if err := json.NewDecoder(resp.Body).Decode(&networks); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
-	fmt.Fprintln(w, "NETWORK ID\tNAME\tDRIVER\tSCOPE")
+	_, _ = fmt.Fprintln(w, "NETWORK ID\tNAME\tDRIVER\tSCOPE")
 	for _, nw := range networks {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", common.ShortID(nw.ID), nw.Name, nw.Driver, nw.Scope)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", common.ShortID(nw.ID), nw.Name, nw.Driver, nw.Scope)
 	}
-	w.Flush()
+	_ = w.Flush()
 	return nil
 }
 
@@ -1722,10 +1737,12 @@ func (c *DokiCLI) NetworkCreate(name, driver string, internal, ipv6 bool, subnet
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var nw common.NetworkInfo
-	json.NewDecoder(resp.Body).Decode(&nw)
+	if err := json.NewDecoder(resp.Body).Decode(&nw); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 	shortID := nw.ID
 	if len(shortID) > 12 {
 		shortID = shortID[:12]
@@ -1740,7 +1757,7 @@ func (c *DokiCLI) NetworkRm(ids []string) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1768,7 +1785,7 @@ func (c *DokiCLI) NetworkConnect(networkID, containerID string, aliases []string
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -1778,7 +1795,7 @@ func (c *DokiCLI) NetworkDisconnect(networkID, containerID string, force bool) e
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -1787,8 +1804,8 @@ func (c *DokiCLI) NetworkPrune(filter string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -1799,19 +1816,21 @@ func (c *DokiCLI) VolumeLs(quiet bool, filter string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Volumes []common.VolumeInfo `json:"Volumes"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	w := tabwriter.NewWriter(os.Stdout, 10, 0, 1, ' ', 0)
-	fmt.Fprintln(w, "DRIVER\tVOLUME NAME")
+	_, _ = fmt.Fprintln(w, "DRIVER\tVOLUME NAME")
 	for _, vol := range result.Volumes {
-		fmt.Fprintf(w, "%s\t%s\n", vol.Driver, vol.Name)
+		_, _ = fmt.Fprintf(w, "%s\t%s\n", vol.Driver, vol.Name)
 	}
-	w.Flush()
+	_ = w.Flush()
 	return nil
 }
 
@@ -1826,10 +1845,12 @@ func (c *DokiCLI) VolumeCreate(name, driver string, opts, labels map[string]stri
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var vol common.VolumeInfo
-	json.NewDecoder(resp.Body).Decode(&vol)
+	if err := json.NewDecoder(resp.Body).Decode(&vol); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 	fmt.Println(vol.Name)
 	return nil
 }
@@ -1840,7 +1861,7 @@ func (c *DokiCLI) VolumeRm(ids []string, force bool) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -1862,8 +1883,8 @@ func (c *DokiCLI) VolumePrune(filter string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -1874,8 +1895,8 @@ func (c *DokiCLI) SystemInfo() error {
 	if err != nil {
 		return printOfflineVersion()
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -1893,18 +1914,18 @@ func (c *DokiCLI) SystemEvents(since, until, filter string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		<-sig
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		os.Exit(0)
 	}()
 
-	io.Copy(os.Stdout, resp.Body)
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -1913,8 +1934,8 @@ func (c *DokiCLI) SystemDf(verbose bool) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -1935,18 +1956,18 @@ func (c *DokiCLI) SystemPrune(all, volumes bool, filter string) error {
 
 	resp, err := c.doAPI("POST", "/containers/prune", nil)
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	resp, err = c.doAPI("POST", "/images/prune", nil)
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	if volumes {
 		resp, err = c.doAPI("POST", "/volumes/prune", nil)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 	}
 	fmt.Println("Total reclaimed space: 0B")
@@ -1969,13 +1990,15 @@ func (c *DokiCLI) Login(server, username, password string) error {
 	if err != nil {
 		return fmt.Errorf("login: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Status        string `json:"Status"`
 		IdentityToken string `json:"IdentityToken"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 	fmt.Println("Login Succeeded")
 	return nil
 }
@@ -1995,10 +2018,12 @@ func (c *DokiCLI) PodCreate(name string, labels map[string]string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct{ Id string }
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
 	return result.Id, nil
 }
 
@@ -2007,8 +2032,8 @@ func (c *DokiCLI) PodPs() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -2022,7 +2047,7 @@ func (c *DokiCLI) PodRm(ids []string, force bool) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -2033,7 +2058,7 @@ func (c *DokiCLI) PodStart(ids []string) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -2044,7 +2069,7 @@ func (c *DokiCLI) PodStop(ids []string) error {
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	return nil
 }
@@ -2058,8 +2083,8 @@ func (c *DokiCLI) GenerateKube(containerID string, service bool) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -2068,8 +2093,8 @@ func (c *DokiCLI) AutoUpdate() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -2096,9 +2121,11 @@ func (c *DokiCLI) VerifyImageSignature(imageName string) error {
 		fmt.Fprintf(os.Stderr, "WARNING: Could not verify signature for %s: %v\n", ref.Name+":"+ref.Tag, err)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var result struct{ Signed bool `json:"signed"` }
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 	if !result.Signed {
 		fmt.Fprintf(os.Stderr, "WARNING: No image signature found for %s. The image is not signed.\n", ref.Name+":"+ref.Tag)
 	} else {
@@ -2120,10 +2147,12 @@ func (c *DokiCLI) Healthcheck(containerID string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var js common.ContainerJSON
-	json.NewDecoder(resp.Body).Decode(&js)
+	if err := json.NewDecoder(resp.Body).Decode(&js); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
 
 	if js.State == common.StateRunning {
 		fmt.Println("healthy")
@@ -2148,8 +2177,8 @@ func (c *DokiCLI) KubePlay(file string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -2162,7 +2191,7 @@ func (c *DokiCLI) KubeDown(file string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -2172,8 +2201,8 @@ func (c *DokiCLI) KubeGenerate(what string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -2186,8 +2215,8 @@ func (c *DokiCLI) Apply(file string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
@@ -2223,8 +2252,11 @@ func (c *DokiCLI) doAPI(method, path string, body interface{}) (*http.Response, 
 
 	if resp.StatusCode >= 400 {
 		var apiErr struct{ Message string }
-		json.NewDecoder(resp.Body).Decode(&apiErr)
-		resp.Body.Close()
+		if err := json.NewDecoder(resp.Body).Decode(&apiErr); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("decode error response: %w", err)
+		}
+		_ = resp.Body.Close()
 		if apiErr.Message != "" {
 			return nil, fmt.Errorf("%s", apiErr.Message)
 		}
@@ -2243,15 +2275,13 @@ func (c *DokiCLI) listContainers(all bool) ([]common.ContainerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var containers []common.ContainerInfo
-	json.NewDecoder(resp.Body).Decode(&containers)
+	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
 	return containers, nil
-}
-
-func (c *DokiCLI) attach(containerID string) {
-	fmt.Fprintf(os.Stderr, "attach: not yet implemented\n")
 }
 
 func (c *DokiCLI) waitContainer(containerID string) {
@@ -2263,8 +2293,11 @@ func (c *DokiCLI) waitContainer(containerID string) {
 			return
 		}
 		var js common.ContainerJSON
-		json.NewDecoder(resp.Body).Decode(&js)
-		resp.Body.Close()
+		if err := json.NewDecoder(resp.Body).Decode(&js); err != nil {
+			_ = resp.Body.Close()
+			continue
+		}
+		_ = resp.Body.Close()
 		if js.ContainerInfo == nil || js.ContainerInfo.State != common.StateRunning {
 			return
 		}
@@ -2276,23 +2309,14 @@ func (c *DokiCLI) Ping() error {
 	if err != nil {
 		return fmt.Errorf("cannot connect to daemon: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	fmt.Println("OK")
 	return nil
 }
 
 func (c *DokiCLI) streamResponse(body io.ReadCloser) {
-	defer body.Close()
-	io.Copy(os.Stdout, body)
-}
-
-func (c *DokiCLI) printTable(headers []string, rows [][]string) {
-	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
-	fmt.Fprintln(w, strings.Join(headers, "\t"))
-	for _, row := range rows {
-		fmt.Fprintln(w, strings.Join(row, "\t"))
-	}
-	w.Flush()
+	defer func() { _ = body.Close() }()
+	_, _ = io.Copy(os.Stdout, body)
 }
 
 func firstTag(imageID string) string {
@@ -2912,22 +2936,16 @@ func parseMemory(s string) int64 {
 		s = s[:len(s)-2]
 	case strings.HasSuffix(s, "GB") || strings.HasSuffix(s, "G"):
 		multiplier = 1024 * 1024 * 1024
-		s = s[:len(s)-1]
-		if strings.HasSuffix(s, "G") {
-			s = s[:len(s)-1]
-		}
+		s = strings.TrimSuffix(s, "GB")
+		s = strings.TrimSuffix(s, "G")
 	case strings.HasSuffix(s, "MB") || strings.HasSuffix(s, "M"):
 		multiplier = 1024 * 1024
-		s = s[:len(s)-1]
-		if strings.HasSuffix(s, "M") {
-			s = s[:len(s)-1]
-		}
+		s = strings.TrimSuffix(s, "MB")
+		s = strings.TrimSuffix(s, "M")
 	case strings.HasSuffix(s, "KB") || strings.HasSuffix(s, "K"):
 		multiplier = 1024
-		s = s[:len(s)-1]
-		if strings.HasSuffix(s, "K") {
-			s = s[:len(s)-1]
-		}
+		s = strings.TrimSuffix(s, "KB")
+		s = strings.TrimSuffix(s, "K")
 	}
 
 	val, _ := strconv.ParseFloat(s, 64)

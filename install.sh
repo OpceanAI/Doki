@@ -64,7 +64,7 @@ OS=$(uname -s)
 case "$ARCH" in
     aarch64|arm64) ARCH_LABEL="android-arm64" ;;
     armv7*|armv8l)  ARCH_LABEL="linux-armv7" ;;
-    x86_64|amd64)  ARCH_LABEL="linux-arm64" ;;
+    x86_64|amd64)  ARCH_LABEL="linux-amd64" ;;
     *) fail "Unsupported architecture: $ARCH" ;;
 esac
 ok "Platform: ${OS} ${ARCH_LABEL}"

@@ -90,7 +90,7 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 
 func (r *Runner) Stop(_ context.Context, id string, timeout time.Duration) error {
 	if timeout > 0 {
-		exec.Command("runsc", "kill", "--signal", "TERM", id).Run()
+		_ = exec.Command("runsc", "kill", "--signal", "TERM", id).Run()
 		time.Sleep(timeout)
 	}
 	return exec.Command("runsc", "kill", "--signal", "KILL", id).Run()
@@ -123,7 +123,7 @@ func (r *Runner) Wait(_ context.Context, id string) (int, error) {
 		return -1, err
 	}
 	code := 0
-	fmt.Sscanf(string(out), "%d", &code)
+	_, _ = fmt.Sscanf(string(out), "%d", &code)
 	return code, nil
 }
 
@@ -144,7 +144,7 @@ func (r *Runner) Inspect(_ context.Context, id string) (*rt.ContainerJSON, error
 }
 
 func (r *Runner) Cleanup(_ context.Context, id string) error {
-	exec.Command("runsc", "delete", id).Run()
+	_ = exec.Command("runsc", "delete", id).Run()
 	return os.RemoveAll(filepath.Join(r.root, "containers", id))
 }
 

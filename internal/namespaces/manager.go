@@ -176,7 +176,7 @@ func createNamespaceTracked(path string, nsType Type) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	f.Close()
+	_ = f.Close()
 
 	var flags uintptr
 	switch nsType {
@@ -204,7 +204,7 @@ func createNamespaceTracked(path string, nsType Type) (int, error) {
 
 	nsProcPath := fmt.Sprintf("/proc/%d/ns/%s", cmd.Process.Pid, nsType)
 	if err := exec.Command("mount", "--bind", nsProcPath, path).Run(); err != nil {
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 		return 0, fmt.Errorf("bind-mount namespace: %w", err)
 	}
 
@@ -253,7 +253,7 @@ func writeIDMappings(pid int, uidMaps, gidMaps []IDMap) error {
 	}
 
 	setgroupsPath := fmt.Sprintf("/proc/%d/setgroups", pid)
-	os.WriteFile(setgroupsPath, []byte("deny"), 0644)
+	_ = os.WriteFile(setgroupsPath, []byte("deny"), 0644)
 
 	gidData := formatIDMaps(gidMaps)
 	if err := os.WriteFile(gidMapPath, []byte(gidData), 0644); err != nil {
@@ -277,7 +277,7 @@ func JoinNamespace(nsType Type, path string) error {
 	if err != nil {
 		return fmt.Errorf("open namespace %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	flag, ok := cloneFlags[nsType]
 	if !ok {
@@ -327,13 +327,13 @@ func NamespacePath(pid int, nsType Type) string {
 func CreatePersistentNamespace(targetPath string, pid int, nsType Type) error {
 	nsPath := NamespacePath(pid, nsType)
 
-	os.Remove(targetPath)
+	_ = os.Remove(targetPath)
 
 	f, err := os.Create(targetPath)
 	if err != nil {
 		return err
 	}
-	f.Close()
+	_ = f.Close()
 
 	return exec.Command("mount", "--bind", nsPath, targetPath).Run()
 }
@@ -342,7 +342,7 @@ func CreatePersistentNamespace(targetPath string, pid int, nsType Type) error {
 func (m *Manager) DeletePersistentNamespace(containerID string) error {
 	if pids, ok := m.nsPids[containerID]; ok {
 		for _, pid := range pids {
-			syscall.Kill(pid, syscall.SIGKILL)
+			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 		delete(m.nsPids, containerID)
 	}
@@ -359,11 +359,11 @@ func (m *Manager) DeletePersistentNamespace(containerID string) error {
 
 	for _, entry := range entries {
 		path := filepath.Join(nsDir, entry.Name())
-		exec.Command("umount", path).Run()
-		os.Remove(path)
+		_ = exec.Command("umount", path).Run()
+		_ = os.Remove(path)
 	}
 
-	os.Remove(nsDir)
+	_ = os.Remove(nsDir)
 	return nil
 }
 

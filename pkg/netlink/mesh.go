@@ -188,7 +188,7 @@ func (m *Mesh) Stop() error {
 		m.listener.close()
 	}
 	if m.mdns != nil {
-		m.mdns.Stop()
+		_ = m.mdns.Stop()
 	}
 	return nil
 }
@@ -405,7 +405,7 @@ func splitHostPort(addr string) (host string, port int, err error) {
 		return "", 0, errors.New("empty addr")
 	}
 	if addr[0] == ':' {
-		fmt.Sscanf(addr[1:], "%d", &port)
+		_, _ = fmt.Sscanf(addr[1:], "%d", &port)
 		return "", port, nil
 	}
 	var p int
@@ -416,6 +416,6 @@ func splitHostPort(addr string) (host string, port int, err error) {
 	if i < 0 {
 		return addr, 0, nil
 	}
-	fmt.Sscanf(addr[i+1:], "%d", &p)
+	_, _ = fmt.Sscanf(addr[i+1:], "%d", &p)
 	return addr[:i], p, nil
 }

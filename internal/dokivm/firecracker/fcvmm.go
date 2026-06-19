@@ -73,9 +73,9 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 
 	// Create API socket path.
 	workDir := filepath.Join(v.cfg.WorkDir, vmID)
-	os.MkdirAll(workDir, 0755)
+	_ = os.MkdirAll(workDir, 0755)
 	apiSock := filepath.Join(workDir, "api.sock")
-	os.Remove(apiSock)
+	_ = os.Remove(apiSock)
 
 	// Start Firecracker.
 	cmd := exec.CommandContext(ctx, v.binary, "--api-sock", apiSock)
@@ -129,7 +129,7 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 
 	// Monitor.
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 		v.mu.Lock()
 		if vm, ok := v.vms[vmID]; ok {
 			vm.State = dokivm.VMStateStopped
@@ -159,7 +159,7 @@ func (v *VMM) configureMachine(client *http.Client) error {
 	if err != nil {
 		return fmt.Errorf("send machine config: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("machine config: status %d", resp.StatusCode)
 	}
@@ -184,7 +184,7 @@ func (v *VMM) configureBootSource(client *http.Client, vmID string) error {
 	if err != nil {
 		return fmt.Errorf("send boot source: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("boot source: status %d", resp.StatusCode)
 	}
@@ -215,7 +215,7 @@ func (v *VMM) configureDrives(client *http.Client, vmID string) error {
 	if err != nil {
 		return fmt.Errorf("send drive config: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("drive config: status %d", resp.StatusCode)
 	}
@@ -245,7 +245,7 @@ func (v *VMM) configureNetwork(client *http.Client, vmID string) error {
 	if err != nil {
 		return fmt.Errorf("send network config: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("network config: status %d", resp.StatusCode)
 	}
@@ -269,7 +269,7 @@ func (v *VMM) sendAction(client *http.Client, action string) error {
 	if err != nil {
 		return fmt.Errorf("send action: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("action %s: status %d", action, resp.StatusCode)
 	}
@@ -292,7 +292,7 @@ func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) erro
 	}
 	select {
 	case <-time.After(timeout):
-		proc.Signal(syscall.SIGKILL)
+		_ = proc.Signal(syscall.SIGKILL)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -338,7 +338,7 @@ func (v *VMM) Cleanup(ctx context.Context, vmID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.vms, vmID)
-	os.RemoveAll(filepath.Join(v.cfg.WorkDir, vmID))
+	_ = os.RemoveAll(filepath.Join(v.cfg.WorkDir, vmID))
 	return nil
 }
 

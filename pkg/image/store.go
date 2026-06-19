@@ -128,10 +128,10 @@ type ImageRecord struct {
 
 // NewStore creates a new image store.
 func NewStore(root string) (*Store, error) {
-	common.EnsureDir(root)
-	common.EnsureDir(filepath.Join(root, "blobs"))
-	common.EnsureDir(filepath.Join(root, "manifests"))
-	common.EnsureDir(filepath.Join(root, "layers"))
+	_ = common.EnsureDir(root)
+	_ = common.EnsureDir(filepath.Join(root, "blobs"))
+	_ = common.EnsureDir(filepath.Join(root, "manifests"))
+	_ = common.EnsureDir(filepath.Join(root, "layers"))
 
 	return &Store{
 		root:          root,
@@ -291,7 +291,7 @@ func (s *Store) downloadLayer(registryHost, name string, layer registry.Manifest
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	return s.registry.DownloadBlob(registryHost, name, layer.Digest, f)
 }
@@ -329,7 +329,7 @@ func realSize(store *Store, record *ImageRecord) int64 {
 }
 
 func (s *Store) SaveRecord(record *ImageRecord) error {
-	common.EnsureDir(s.manifestPath(record.ID))
+	_ = common.EnsureDir(s.manifestPath(record.ID))
 
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -516,12 +516,12 @@ func (s *Store) Remove(idOrTag string) error {
 		record = r
 	}
 
-	os.RemoveAll(s.manifestPath(record.ID))
+	_ = os.RemoveAll(s.manifestPath(record.ID))
 
 	// Clean up layer blobs not shared with other images
 	if otherRecords, _ := s.listRecords(); len(otherRecords) <= 1 {
 		for _, layer := range record.Layers {
-			os.Remove(s.layerPath(layer))
+			_ = os.Remove(s.layerPath(layer))
 		}
 	} else {
 		// Check which layers are unique to this image
@@ -536,7 +536,7 @@ func (s *Store) Remove(idOrTag string) error {
 		}
 		for _, layer := range record.Layers {
 			if !shared[layer] {
-				os.Remove(s.layerPath(layer))
+				_ = os.Remove(s.layerPath(layer))
 			}
 		}
 	}
@@ -555,10 +555,10 @@ func (s *Store) Prune() ([]string, error) {
 
 	var removed []string
 	for _, record := range records {
-		os.RemoveAll(s.manifestPath(record.ID))
+		_ = os.RemoveAll(s.manifestPath(record.ID))
 		// Prune: delete ALL layer blobs since we're removing all images
 		for _, layer := range record.Layers {
-			os.Remove(s.layerPath(layer))
+			_ = os.Remove(s.layerPath(layer))
 		}
 		shortID := record.ID
 		if len(shortID) > 12 {
@@ -638,7 +638,7 @@ func (s *Store) Search(term string, limit int) ([]SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var hubResult struct {
 		Results []dockerHubSearchResult `json:"results"`
@@ -664,11 +664,11 @@ func (s *Store) Search(term string, limit int) ([]SearchResult, error) {
 
 // SearchResult represents a Docker Hub search result.
 type SearchResult struct {
-	Name        string `json:"Name"`
-	Description string `json:"Description"`
-	StarCount   int    `json:"StarCount"`
-	IsOfficial  bool   `json:"IsOfficial"`
-	IsAutomated bool   `json:"IsAutomated"`
+	Name        string `json:"repo_name"`
+	Description string `json:"short_description"`
+	StarCount   int    `json:"star_count"`
+	IsOfficial  bool   `json:"is_official"`
+	IsAutomated bool   `json:"is_automated"`
 }
 
 // dockerHubSearchResult is the raw Docker Hub API response format.
@@ -688,7 +688,7 @@ func (s *Store) Export(idOrTag string, writer io.Writer) error {
 	}
 
 	tw := tar.NewWriter(writer)
-	defer tw.Close()
+	defer func() { _ = tw.Close() }()
 
 	digestToHex := func(d string) string {
 		return strings.TrimPrefix(d, "sha256:")
@@ -754,14 +754,14 @@ func (s *Store) Export(idOrTag string, writer io.Writer) error {
 			Size: fi.Size(),
 			Mode: 0644,
 		}); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
 		if _, err := io.Copy(tw, f); err != nil {
-			f.Close()
+			_ = f.Close()
 			return err
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	return nil
@@ -836,7 +836,7 @@ func (s *Store) Import(reader io.Reader) (*ImageRecord, error) {
 
 	// Write config blob.
 	configPath := filepath.Join(s.root, "blobs", configDigest)
-	common.EnsureDir(filepath.Dir(configPath))
+	_ = common.EnsureDir(filepath.Dir(configPath))
 	if configData == nil {
 		configData = []byte("{}")
 	}
@@ -870,14 +870,14 @@ func (s *Store) Import(reader io.Reader) (*ImageRecord, error) {
 		}
 
 		blobPath := filepath.Join(s.root, "blobs", digest)
-		common.EnsureDir(filepath.Dir(blobPath))
+		_ = common.EnsureDir(filepath.Dir(blobPath))
 		if err := os.WriteFile(blobPath, blobData, 0644); err != nil {
 			return nil, fmt.Errorf("write blob %s: %w", digest, err)
 		}
 
 		// Also save as layer.
 		layerPath := s.layerPath(digest)
-		common.EnsureDir(filepath.Dir(layerPath))
+		_ = common.EnsureDir(filepath.Dir(layerPath))
 		if err := os.WriteFile(layerPath, blobData, 0644); err != nil {
 			return nil, fmt.Errorf("write layer %s: %w", digest, err)
 		}
@@ -999,7 +999,7 @@ func (s *Store) Push(idOrTag string) error {
 			return fmt.Errorf("open layer %s: %w", digest, err)
 		}
 		data, err := io.ReadAll(f)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			return fmt.Errorf("read layer %s: %w", digest, err)
 		}
@@ -1012,7 +1012,7 @@ func (s *Store) Push(idOrTag string) error {
 
 	manifestDigest := fmt.Sprintf("%s@sha256:%x", ref.Name, sha256SumManifest(record.Manifest))
 	record.RepoDigests = append(record.RepoDigests, manifestDigest)
-	s.SaveRecord(record)
+	_ = s.SaveRecord(record)
 
 	return nil
 }

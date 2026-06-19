@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/OpceanAI/Doki/pkg/common"
@@ -32,7 +31,6 @@ const (
 
 // Manager manages storage drivers.
 type Manager struct {
-	mu      sync.RWMutex
 	driver  Driver
 	root    string
 	drivers map[string]Driver
@@ -45,7 +43,7 @@ func NewManager(root string, driverName string) (*Manager, error) {
 		drivers: make(map[string]Driver),
 	}
 
-	common.EnsureDir(root)
+	_ = common.EnsureDir(root)
 
 	var driver Driver
 	var err error
@@ -260,7 +258,7 @@ func (d *FuseOverlayFSDriver) Get(id, mountLabel string) (string, error) {
 func (d *FuseOverlayFSDriver) Put(id, mountLabel string) (string, error) {
 	mergePath := filepath.Join(d.mergeDir, id)
 	if common.PathExists(mergePath) {
-		unmountOverlay(mergePath)
+		_ = unmountOverlay(mergePath)
 	}
 	return mergePath, nil
 }
@@ -293,7 +291,7 @@ func (d *FuseOverlayFSDriver) Cleanup() error {
 			continue
 		}
 		for _, entry := range entries {
-			unmountOverlay(filepath.Join(dir, entry.Name()))
+			_ = unmountOverlay(filepath.Join(dir, entry.Name()))
 		}
 	}
 	return nil

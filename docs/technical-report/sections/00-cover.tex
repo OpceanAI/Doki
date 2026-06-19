@@ -1,0 +1,106 @@
+% 00-cover.tex — Professional Cover Page + Preface (Anthropic-Style)
+\thispagestyle{empty}
+\begin{titlepage}
+  \centering
+
+  \vspace*{1.5cm}
+
+  % --- Logo (TikZ decorative) ---
+  \begin{tikzpicture}
+    \node[
+      circle, draw=accentClay, line width=1.5pt,
+      fill=accentClay!8,
+      minimum size=2.5cm,
+      font=\sffamily\fontsize{28}{34}\selectfont\bfseries,
+      text=accentClay
+    ] {D};
+  \end{tikzpicture}
+
+  \vspace{1.2cm}
+
+  % --- OpceanAI Brand Name (Large) ---
+  {\sffamily\fontsize{44}{52}\selectfont\bfseries\color{inkDark} OpceanAI\par}
+
+  \vspace{0.4cm}
+
+  % --- Slogan in English ---
+  {\sffamily\fontsize{13}{17}\selectfont\itshape\color{textgray}
+    A sea of possibilities\par}
+
+  \vspace{2.2cm}
+
+  % --- Terracotta accent rule ---
+  {\color{accentClay}\rule{0.5\textwidth}{1.2pt}}
+
+  \vspace{1.5cm}
+
+  % --- Report Title ---
+  {\sffamily\fontsize{32}{38}\selectfont\bfseries\color{inkDark}
+    Doki\par}
+
+  \vspace{0.6cm}
+
+  % --- Subtitle ---
+  {\sffamily\fontsize{13}{17}\selectfont\color{textdark}
+    A Complete Container Ecosystem\\for Android\par}
+
+  \vspace{0.8cm}
+
+  % --- Version ---
+  {\sffamily\fontsize{11}{14}\selectfont\color{textgray}
+    Technical Report --- Version 0.9.3\par}
+
+  \vspace{3cm}
+
+  % --- Author ---
+  {\sffamily\fontsize{12}{16}\selectfont\color{inkDark}
+    OpceanAI Contributors\par}
+
+  \vspace{0.4cm}
+
+  % --- Date ---
+  {\sffamily\fontsize{10}{13}\selectfont\color{textgray} \today\par}
+
+  \vfill
+
+  % --- Bottom accent rule ---
+  {\color{accentClay}\rule{\textwidth}{0.4pt}}
+
+  \vspace{0.4cm}
+
+  % --- Footer ---
+  {\sffamily\fontsize{8}{10}\selectfont\color{textgray}
+    Doki v0.9.3 \textbar{}
+    \url{https://github.com/OpceanAI/Doki} \textbar{}
+    Apache License, Version 2.0
+  \par}
+
+  \vspace{0.8cm}
+\end{titlepage}
+
+% PREFACE
+\chapter*{Preface}
+\addcontentsline{toc}{chapter}{Preface}
+
+This technical report provides a comprehensive description of the Doki
+container ecosystem, covering its architecture, components, and design
+decisions. It is intended for developers, system administrators, and
+researchers interested in container technology on Android platforms.
+
+Doki is developed by OpceanAI and released as open-source software
+under the Apache License, Version 2.0. The project began as a response
+to the absence of robust containerization tools for Android
+environments, where traditional solutions such as Docker are
+unavailable due to kernel limitations and the lack of root access.
+
+This report covers version 0.9.3 of Doki, which includes DokiLink-Lite
+peer-to-peer mesh networking, 244 CLI commands, 12 isolation levels,
+and support for both ARM64 and ARMv7 architectures.
+
+\begin{center}
+  \color{textgray}
+  \sffamily\small
+  OpceanAI \textbar{} \today
+\end{center}
+
+\cleardoublepage

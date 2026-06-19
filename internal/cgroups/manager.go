@@ -283,7 +283,7 @@ func (m *Manager) KillAll(containerID string) error {
 		pid, err := strconv.Atoi(strings.TrimSpace(pidStr))
 		if err == nil && pid > 0 {
 			proc, _ := os.FindProcess(pid)
-			proc.Kill()
+			_ = proc.Kill()
 		}
 	}
 

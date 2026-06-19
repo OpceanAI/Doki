@@ -113,13 +113,13 @@ func (c *CRIPlugin) StopPodSandbox(id string) error {
 	}
 
 	for _, containerID := range sandbox.Containers {
-		c.runtime.Stop(containerID, 10)
-		c.runtime.Delete(containerID, true)
+		_ = c.runtime.Stop(containerID, 10)
+		_ = c.runtime.Delete(containerID, true)
 	}
 
 	sandbox.State = "SANDBOX_NOTREADY"
 	// Cleanup network.
-	c.network.Disconnect("pod-"+id[:12], "", 0)
+	_ = c.network.Disconnect("pod-"+id[:12], "", 0)
 
 	return nil
 }
@@ -135,8 +135,8 @@ func (c *CRIPlugin) RemovePodSandbox(id string) error {
 	}
 
 	for _, containerID := range sandbox.Containers {
-		c.runtime.Stop(containerID, 10)
-		c.runtime.Delete(containerID, true)
+		_ = c.runtime.Stop(containerID, 10)
+		_ = c.runtime.Delete(containerID, true)
 	}
 
 	delete(c.podSandboxes, id)
@@ -181,7 +181,7 @@ func (c *CRIPlugin) CreateContainer(podID, containerID string, imageName string,
 
 	// Pull image if needed.
 	if !c.image.Exists(imageName) {
-		c.image.Pull(imageName)
+		_, _ = c.image.Pull(imageName)
 	}
 
 	cfg := &runtime.Config{

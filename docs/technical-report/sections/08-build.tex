@@ -1,0 +1,213 @@
+% 08-build.tex
+\chapter{Development and Build System}
+\label{ch:build}
+
+\section{Build Process}
+\label{sec:build-process}
+
+Doki uses a Make-based build system that compiles four binaries for
+multiple architectures. The build produces statically linked executables
+with no runtime CGo dependencies.
+
+\subsection{Compilation Targets}
+\label{sec:compilation-targets}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.5cm,
+    every node/.style={font=\sffamily\footnotesize},
+    stage/.style={
+      rectangle, rounded corners=2pt,
+      draw=nodeblue!60, fill=fillblue,
+      minimum width=2.2cm, minimum height=0.7cm,
+      text=textdark, align=center, inner sep=4pt
+    }
+  ]
+    \node[stage] (src) {Go Source\\{\scriptsize\color{textgray} cmd/\& pkg/}};
+    \node[stage, right=0.8cm of src] (build) {Make\\{\scriptsize\color{textgray} build target}};
+    \node[stage, right=0.8cm of build] (cross) {Cross-\\{\scriptsize\color{textgray} compile}};
+    \node[stage, right=0.8cm of cross] (strip) {Strip\\{\scriptsize\color{textgray} -ldflags "-s -w"}};
+    \node[stage, right=0.8cm of strip] (archive) {Archive\\{\scriptsize\color{textgray} .tar.gz}};
+
+    \draw[arr] (src) -- (build);
+    \draw[arr] (build) -- (cross);
+    \draw[arr] (cross) -- (strip);
+    \draw[arr] (strip) -- (archive);
+
+    % Cache hit
+    \draw[arrDash, nodeorange] (build.south) -- ++(0,-0.5)
+      node[below, font=\sffamily\tiny, text=nodeorange] {incremental}
+      -- ++(2,0) |- (strip.south);
+  \end{tikzpicture}
+  \caption{Build pipeline from source to release archive.}
+  \label{fig:build-pipeline}
+\end{figure}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Build targets and their output binaries.}
+  \label{tab:build-targets}
+  \begin{tabularx}{\textwidth}{l l X}
+    \toprule
+    \textbf{Target} & \textbf{Output} & \textbf{Description} \\
+    \midrule
+    \texttt{build}            & \texttt{bin/doki*}         & Development binaries \\
+    \texttt{build-android-arm64}  & \texttt{releases/doki-v*-arm64.tar.gz}  & Android ARM64 \\
+    \texttt{build-android-armv7}  & \texttt{releases/doki-v*-armv7.tar.gz}  & Android ARMv7 \\
+    \texttt{build-linux-arm64}    & \texttt{releases/doki-v*-arm64.tar.gz}  & Linux ARM64 \\
+    \texttt{build-linux-armv7}    & \texttt{releases/doki-v*-armv7.tar.gz}  & Linux ARMv7 \\
+    \texttt{build-darwin-arm64}   & \texttt{releases/doki-v*-arm64.tar.gz}  & macOS ARM64 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Android ARMv7 Build Fix}
+\label{sec:armv7-fix}
+
+A critical build issue was resolved in v0.9.3: Go 1.22+ requires
+an external linker for \texttt{GOOS=android GOARCH=arm}, causing
+a ``requires external cgo linking'' error with \texttt{CGO\_ENABLED=0}.
+
+The solution builds ARMv7 with \texttt{GOOS=linux} instead of
+\texttt{GOOS=android}. Doki is 100\% CGo-free, and Android detection
+uses filesystem probes (\texttt{/data/data/com.termux}) rather than
+\texttt{runtime.GOOS}. The resulting binaries compile as ELF 32-bit
+ARM EABI5 statically linked executables.
+
+\begin{codebox}[title={Makefile fix for ARMv7}]{makefile}
+build-android-armv7:
+	CGO\_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \\
+	  go build -ldflags "-s -w" \\
+	  -o bin/doki ./cmd/doki/
+\end{codebox}
+
+\section{Dokifile Build System}
+\label{sec:dokifile}
+
+The Dokifile build system parses Dockerfile instructions and produces
+OCI-compliant images. It supports multi-stage builds, build arguments,
+and a layer cache for incremental rebuilds.
+
+\subsection{Build Pipeline}
+\label{sec:build-pipeline}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.5cm,
+    every node/.style={font=\sffamily\footnotesize},
+    stage/.style={
+      rectangle, rounded corners=2pt,
+      draw=nodeblue!60, fill=fillblue,
+      minimum width=2.2cm, minimum height=0.8cm,
+      text=textdark, align=center, inner sep=4pt
+    }
+  ]
+    \node[stage] (parse) {Parse\\Dokifile};
+    \node[stage, right=0.8cm of parse] (resolve) {Resolve\\Base Image};
+    \node[stage, right=0.8cm of resolve] (cache) {Check\\Layer Cache};
+    \node[stage, right=0.8cm of cache] (exec) {Execute\\Instructions};
+    \node[stage, right=0.8cm of exec] (commit) {Commit\\Layers};
+    \node[stage, right=0.8cm of commit] (config) {Apply\\Config};
+
+    \draw[arr] (parse) -- (resolve);
+    \draw[arr] (resolve) -- (cache);
+    \draw[arr] (cache) -- (exec);
+    \draw[arr] (exec) -- (commit);
+    \draw[arr] (commit) -- (config);
+
+    % Cache hit arrow
+    \draw[arrDash, nodeorange] (cache.south) -- ++(0,-0.6)
+      node[below, font=\sffamily\tiny, text=nodeorange]
+        {cache hit: skip to commit}
+      -- ++(1.5,0) |- (commit.south);
+  \end{tikzpicture}
+  \caption{Dokifile build pipeline with layer cache optimization.}
+  \label{fig:build-pipeline}
+\end{figure}
+
+\section{Compose Orchestration}
+\label{sec:compose-orchestration}
+
+The Compose engine processes YAML configuration files and manages
+multi-container applications. It supports service dependencies,
+health checks, profiles, and volume definitions.
+
+\subsection{Compose File Structure}
+\label{sec:compose-structure}
+
+A typical Compose file defines services, networks, and volumes:
+
+\begin{codebox}[title={Example Compose file}]{yaml}
+services:
+  web:
+    build: ./web
+    ports:
+      - "8080:80"
+    depends\_on:
+      api:
+        condition: service\_started
+  api:
+    image: myapi:latest
+    environment:
+      - DB\_HOST=db
+    depends\_on:
+      db:
+        condition: service\_healthy
+  db:
+    image: postgres:16
+    healthcheck:
+      test: ["CMD", "pg\_isready"]
+      interval: 10s
+volumes:
+  pgdata:
+\end{codebox}
+
+\subsection{Service Dependency Resolution}
+\label{sec:dependency-resolution}
+
+The engine resolves dependencies using topological sort. Services
+without dependencies start first, and dependent services wait for
+their prerequisites to reach the specified condition.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.8cm,
+    every node/.style={font=\sffamily\footnotesize},
+    svc/.style={
+      rectangle, rounded corners=2pt,
+      draw=nodeblue!60, fill=fillblue,
+      minimum width=1.8cm, minimum height=0.7cm,
+      text=textdark, align=center, inner sep=4pt
+    },
+    arr/.style={
+      -{Stealth[length=2.5mm, width=2mm]},
+      linegray, line width=0.5pt
+    }
+  ]
+    % Services
+    \node[svc] (db) {db};
+    \node[svc, right=1.5cm of db] (redis) {redis};
+    \node[svc, above=1.0cm of db] (api) {api};
+    \node[svc, right=1.5cm of api] (worker) {worker};
+    \node[svc, above=1.0cm of api] (web) {web};
+    \node[svc, right=1.5cm of web] (nginx) {nginx};
+
+    % Dependencies
+    \draw[arr] (api) -- (db);
+    \draw[arr] (api) -- (redis);
+    \draw[arr] (worker) -- (db);
+    \draw[arr] (worker) -- (redis);
+    \draw[arr] (web) -- (api);
+    \draw[arr] (nginx) -- (web);
+
+    % Start order
+    \node[annot, below=0.3cm of db] {1. db, redis};
+    \node[annot, below=0.3cm of api] {2. api, worker};
+    \node[annot, below=0.3cm of web] {3. web, nginx};
+  \end{tikzpicture}
+  \caption{Compose service dependency graph with start order.}
+  \label{fig:compose-dependencies}
+\end{figure}

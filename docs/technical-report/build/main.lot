@@ -1,0 +1,30 @@
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {3.1}{\ignorespaces API endpoint examples and their HTTP methods.}}{8}{table.caption.7}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {4.1}{\ignorespaces Runtime comparison: proot vs.\ native runner.}}{12}{table.caption.11}%
+\contentsline {table}{\numberline {4.2}{\ignorespaces Supported Dockerfile instructions.}}{13}{table.caption.12}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {5.1}{\ignorespaces Doki isolation levels with their mechanisms and applicable environments.}}{16}{table.caption.14}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {7.1}{\ignorespaces Storage driver comparison.}}{24}{table.caption.19}%
+\contentsline {table}{\numberline {7.2}{\ignorespaces Filesystem probes and their detected environments.}}{26}{table.caption.21}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {8.1}{\ignorespaces Build targets and their output binaries.}}{27}{table.caption.23}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {9.1}{\ignorespaces Image extraction times for common base images.}}{32}{table.caption.29}%
+\contentsline {table}{\numberline {9.2}{\ignorespaces Binary sizes for v0.9.3 release.}}{32}{table.caption.30}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {10.1}{\ignorespaces Feature priority matrix for the Doki roadmap.}}{35}{table.caption.31}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {11.1}{\ignorespaces Summary of Doki v0.9.3 key metrics.}}{37}{table.caption.33}%
+\def \@chapapp {\appendixname }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {A.1}{\ignorespaces CLI command categories and counts.}}{40}{table.caption.35}%
+\contentsline {table}{\numberline {A.2}{\ignorespaces Daemon configuration keys.}}{41}{table.caption.36}%
+\contentsline {table}{\numberline {A.3}{\ignorespaces Environment variables recognized by Doki.}}{41}{table.caption.37}%
+\contentsline {table}{\numberline {A.4}{\ignorespaces Glossary of technical terms used in this report.}}{42}{table.caption.38}%
+\contentsline {table}{\numberline {A.5}{\ignorespaces Common error codes and their meanings.}}{42}{table.caption.39}%
+\providecommand \tocbasic@end@toc@file {}\tocbasic@end@toc@file 

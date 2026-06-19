@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><title>Doki Test</title></head>
+<body>
+<h1>Doki Compose Test Stack</h1>
+<p>Services: db, redis, api, web, worker, prometheus, grafana</p>
+<div id="status">Loading...</div>
+<script>
+fetch('/api/health').then(r => r.json()).then(d => {
+  document.getElementById('status').textContent = JSON.stringify(d, null, 2);
+}).catch(e => {
+  document.getElementById('status').textContent = 'API not reachable: ' + e.message;
+});
+</script>
+</body>
+</html>

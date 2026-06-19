@@ -1,0 +1,193 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{nty/global//global/global/global}
+    \entry{burns2016borg}{article}{}{}
+      \name{author}{5}{}{%
+        {{hash=f81bf4ac2381d4b3bdc662e5d904ceb8}{%
+           family={Burns},
+           familyi={B\bibinitperiod},
+           given={Brendan},
+           giveni={B\bibinitperiod}}}%
+        {{hash=a34e9967731609a76f8a920bf98d3660}{%
+           family={Grant},
+           familyi={G\bibinitperiod},
+           given={Brian},
+           giveni={B\bibinitperiod}}}%
+        {{hash=3b7c6d08ef992f50cc6cb714826cab85}{%
+           family={Oppenheimer},
+           familyi={O\bibinitperiod},
+           given={David},
+           giveni={D\bibinitperiod}}}%
+        {{hash=781eec3551b6a48285790e48b277e991}{%
+           family={Brewer},
+           familyi={B\bibinitperiod},
+           given={Eric},
+           giveni={E\bibinitperiod}}}%
+        {{hash=5f3c579f3b21ba42d76c7a3ee89b6ca2}{%
+           family={Wilkes},
+           familyi={W\bibinitperiod},
+           given={John},
+           giveni={J\bibinitperiod}}}%
+      }
+      \list{publisher}{1}{%
+        {ACM}%
+      }
+      \strng{namehash}{17b433ded7ffa09f701064de70089d7b}
+      \strng{fullhash}{d931dde8d2c3b5c47067a310bcd5acef}
+      \strng{fullhashraw}{d931dde8d2c3b5c47067a310bcd5acef}
+      \strng{bibnamehash}{d931dde8d2c3b5c47067a310bcd5acef}
+      \strng{authorbibnamehash}{d931dde8d2c3b5c47067a310bcd5acef}
+      \strng{authornamehash}{17b433ded7ffa09f701064de70089d7b}
+      \strng{authorfullhash}{d931dde8d2c3b5c47067a310bcd5acef}
+      \strng{authorfullhashraw}{d931dde8d2c3b5c47067a310bcd5acef}
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Communications of the ACM}
+      \field{number}{5}
+      \field{title}{Borg, Omega, and Kubernetes}
+      \field{volume}{59}
+      \field{year}{2016}
+      \field{pages}{50\bibrangedash 57}
+      \range{pages}{8}
+    \endentry
+    \entry{gvisor2024}{misc}{}{}
+      \name{author}{1}{}{%
+        {{hash=8b36e9207c24c76e6719268e49201d94}{%
+           family={{Google}},
+           familyi={G\bibinitperiod}}}%
+      }
+      \strng{namehash}{8b36e9207c24c76e6719268e49201d94}
+      \strng{fullhash}{8b36e9207c24c76e6719268e49201d94}
+      \strng{fullhashraw}{8b36e9207c24c76e6719268e49201d94}
+      \strng{bibnamehash}{8b36e9207c24c76e6719268e49201d94}
+      \strng{authorbibnamehash}{8b36e9207c24c76e6719268e49201d94}
+      \strng{authornamehash}{8b36e9207c24c76e6719268e49201d94}
+      \strng{authorfullhash}{8b36e9207c24c76e6719268e49201d94}
+      \strng{authorfullhashraw}{8b36e9207c24c76e6719268e49201d94}
+      \field{sortinit}{G}
+      \field{sortinithash}{32d67eca0634bf53703493fb1090a2e8}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{howpublished}{\url{https://gvisor.dev/}}
+      \field{title}{gVisor: A Container Runtime Sandbox}
+      \field{year}{2024}
+    \endentry
+    \entry{open2021runtime}{misc}{}{}
+      \name{author}{1}{}{%
+        {{hash=6143e45c6577ea4f313dbf977ca6bef4}{%
+           family={{Open Container Initiative}},
+           familyi={O\bibinitperiod}}}%
+      }
+      \strng{namehash}{6143e45c6577ea4f313dbf977ca6bef4}
+      \strng{fullhash}{6143e45c6577ea4f313dbf977ca6bef4}
+      \strng{fullhashraw}{6143e45c6577ea4f313dbf977ca6bef4}
+      \strng{bibnamehash}{6143e45c6577ea4f313dbf977ca6bef4}
+      \strng{authorbibnamehash}{6143e45c6577ea4f313dbf977ca6bef4}
+      \strng{authornamehash}{6143e45c6577ea4f313dbf977ca6bef4}
+      \strng{authorfullhash}{6143e45c6577ea4f313dbf977ca6bef4}
+      \strng{authorfullhashraw}{6143e45c6577ea4f313dbf977ca6bef4}
+      \field{sortinit}{O}
+      \field{sortinithash}{2cd7140a07aea5341f9e2771efe90aae}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{howpublished}{\url{https://github.com/opencontainers/runtime-spec}}
+      \field{title}{OCI Runtime Specification}
+      \field{year}{2021}
+    \endentry
+    \entry{noise2015}{misc}{}{}
+      \name{author}{2}{}{%
+        {{hash=94b0a8eff15435fc3fdb7b8e67526800}{%
+           family={Perrin},
+           familyi={P\bibinitperiod},
+           given={Trevor},
+           giveni={T\bibinitperiod}}}%
+        {{hash=ef84f28e92aa662bd365e6a745930836}{%
+           family={Unger},
+           familyi={U\bibinitperiod},
+           given={Rosario},
+           giveni={R\bibinitperiod}}}%
+      }
+      \strng{namehash}{55381743bf5e40b50fd9fef14dbafa89}
+      \strng{fullhash}{55381743bf5e40b50fd9fef14dbafa89}
+      \strng{fullhashraw}{55381743bf5e40b50fd9fef14dbafa89}
+      \strng{bibnamehash}{55381743bf5e40b50fd9fef14dbafa89}
+      \strng{authorbibnamehash}{55381743bf5e40b50fd9fef14dbafa89}
+      \strng{authornamehash}{55381743bf5e40b50fd9fef14dbafa89}
+      \strng{authorfullhash}{55381743bf5e40b50fd9fef14dbafa89}
+      \strng{authorfullhashraw}{55381743bf5e40b50fd9fef14dbafa89}
+      \field{sortinit}{P}
+      \field{sortinithash}{ff3bcf24f47321b42cb156c2cc8a8422}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{howpublished}{\url{https://noiseprotocol.org/}}
+      \field{title}{The Noise Protocol Framework}
+      \field{year}{2015}
+    \endentry
+    \entry{proot2024}{misc}{}{}
+      \name{author}{1}{}{%
+        {{hash=88dd0d4bc813d8caa6f0c22be1b07f5f}{%
+           family={{PRoot Developers}},
+           familyi={P\bibinitperiod}}}%
+      }
+      \strng{namehash}{88dd0d4bc813d8caa6f0c22be1b07f5f}
+      \strng{fullhash}{88dd0d4bc813d8caa6f0c22be1b07f5f}
+      \strng{fullhashraw}{88dd0d4bc813d8caa6f0c22be1b07f5f}
+      \strng{bibnamehash}{88dd0d4bc813d8caa6f0c22be1b07f5f}
+      \strng{authorbibnamehash}{88dd0d4bc813d8caa6f0c22be1b07f5f}
+      \strng{authornamehash}{88dd0d4bc813d8caa6f0c22be1b07f5f}
+      \strng{authorfullhash}{88dd0d4bc813d8caa6f0c22be1b07f5f}
+      \strng{authorfullhashraw}{88dd0d4bc813d8caa6f0c22be1b07f5f}
+      \field{sortinit}{P}
+      \field{sortinithash}{ff3bcf24f47321b42cb156c2cc8a8422}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{howpublished}{\url{https://proot-me.github.io/}}
+      \field{title}{PRoot: User-space Implementation of chroot}
+      \field{year}{2024}
+    \endentry
+    \entry{statcounter2025}{misc}{}{}
+      \name{author}{1}{}{%
+        {{hash=fee3fc182e02f376217580e5bfec4f51}{%
+           family={{StatCounter}},
+           familyi={S\bibinitperiod}}}%
+      }
+      \strng{namehash}{fee3fc182e02f376217580e5bfec4f51}
+      \strng{fullhash}{fee3fc182e02f376217580e5bfec4f51}
+      \strng{fullhashraw}{fee3fc182e02f376217580e5bfec4f51}
+      \strng{bibnamehash}{fee3fc182e02f376217580e5bfec4f51}
+      \strng{authorbibnamehash}{fee3fc182e02f376217580e5bfec4f51}
+      \strng{authornamehash}{fee3fc182e02f376217580e5bfec4f51}
+      \strng{authorfullhash}{fee3fc182e02f376217580e5bfec4f51}
+      \strng{authorfullhashraw}{fee3fc182e02f376217580e5bfec4f51}
+      \field{sortinit}{S}
+      \field{sortinithash}{b164b07b29984b41daf1e85279fbc5ab}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{howpublished}{\url{https://gs.statcounter.com/os-market-share/mobile}}
+      \field{title}{Mobile Operating System Market Share Worldwide}
+      \field{year}{2025}
+    \endentry
+  \enddatalist
+\endrefsection
+\endinput
+

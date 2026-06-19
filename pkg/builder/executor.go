@@ -92,7 +92,7 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 	if cachePath, hit := b.checkCache(inst, b.envMap); hit {
 		f, err := os.Open(cachePath)
 		if err == nil {
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			return ExtractTar(f, rootDir)
 		}
 	}
@@ -101,7 +101,9 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 	var secretFiles []string
 	for name, srcPath := range b.secrets {
 		destPath := filepath.Join(rootDir, "run", "secrets", name)
-		common.EnsureDir(filepath.Dir(destPath))
+		if err := common.EnsureDir(filepath.Dir(destPath)); err != nil {
+			return fmt.Errorf("ensure dir %s: %w", filepath.Dir(destPath), err)
+		}
 		data, err := os.ReadFile(srcPath)
 		if err != nil {
 			return fmt.Errorf("read secret %s: %w", name, err)
@@ -113,7 +115,9 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 	}
 	defer func() {
 		for _, f := range secretFiles {
-			os.RemoveAll(f)
+			if err := os.RemoveAll(f); err != nil {
+				slog.Warn("remove secret failed", "path", f, "error", err)
+			}
 		}
 	}()
 
@@ -167,7 +171,7 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 	// Add a timeout to prevent indefinite hangs (10 minutes)
 	timer := time.AfterFunc(10*time.Minute, func() {
 		if cmd.Process != nil {
-			cmd.Process.Kill()
+			_ = cmd.Process.Kill()
 		}
 	})
 	defer timer.Stop()
@@ -185,7 +189,9 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 	// Save to build cache
 	var buf bytes.Buffer
 	if err := CreateTar(rootDir, &buf); err == nil {
-		b.saveCache(inst, b.envMap, buf.Bytes())
+		if err := b.saveCache(inst, b.envMap, buf.Bytes()); err != nil {
+			slog.Warn("save cache failed", "error", err)
+		}
 	}
 
 	return nil
@@ -264,7 +270,9 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 		dstPath = filepath.Join(rootDir, dst)
 	}
 	if dstIsDir {
-		common.EnsureDir(dstPath)
+		if err := common.EnsureDir(dstPath); err != nil {
+			return fmt.Errorf("ensure dir %s: %w", dstPath, err)
+		}
 	}
 
 	// Handle glob patterns in source
@@ -304,14 +312,18 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 					return fmt.Errorf("copy dir %s: %w", src, err)
 				}
 				if chown != "" || chmod != "" {
-					applyChowChmodRecursive(target, chown, chmod)
+					if err := applyChowChmodRecursive(target, chown, chmod); err != nil {
+						slog.Warn("apply chown/chmod failed", "path", target, "error", err)
+					}
 				}
 			} else {
 				if err := common.CopyDir(match, dstPath); err != nil {
 					return fmt.Errorf("copy dir %s: %w", src, err)
 				}
 				if chown != "" || chmod != "" {
-					applyChowChmodRecursive(dstPath, chown, chmod)
+					if err := applyChowChmodRecursive(dstPath, chown, chmod); err != nil {
+						slog.Warn("apply chown/chmod failed", "path", dstPath, "error", err)
+					}
 				}
 			}
 		} else {
@@ -320,7 +332,9 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 			if fiDest, err := os.Stat(dstPath); err == nil && fiDest.IsDir() {
 				target = filepath.Join(dstPath, filepath.Base(match))
 			}
-			common.EnsureDir(filepath.Dir(target))
+			if err := common.EnsureDir(filepath.Dir(target)); err != nil {
+				return fmt.Errorf("ensure dir %s: %w", filepath.Dir(target), err)
+			}
 			data, err := os.ReadFile(match)
 			if err != nil {
 				return fmt.Errorf("copy %s: %w", src, err)
@@ -329,7 +343,9 @@ func (b *Builder) executeCopy(stage *Stage, inst *Instruction, ctxDir, rootDir s
 				return fmt.Errorf("write %s: %w", dst, err)
 			}
 			if chown != "" || chmod != "" {
-				applyChowChmod(target, chown, chmod)
+				if err := applyChowChmod(target, chown, chmod); err != nil {
+					slog.Warn("apply chown/chmod failed", "path", target, "error", err)
+				}
 			}
 		}
 	}
@@ -414,9 +430,13 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 		dstPath = filepath.Join(rootDir, dst)
 	}
 	if dstIsDir {
-		common.EnsureDir(dstPath)
+		if err := common.EnsureDir(dstPath); err != nil {
+			return fmt.Errorf("ensure dir %s: %w", dstPath, err)
+		}
 	}
-	common.EnsureDir(filepath.Dir(dstPath))
+	if err := common.EnsureDir(filepath.Dir(dstPath)); err != nil {
+		return fmt.Errorf("ensure dir %s: %w", filepath.Dir(dstPath), err)
+	}
 
 	// If source is a URL, download it
 	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
@@ -424,7 +444,11 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 		if err != nil {
 			return fmt.Errorf("create temp dir: %w", err)
 		}
-		defer os.RemoveAll(tmpDir)
+		defer func() {
+			if err := os.RemoveAll(tmpDir); err != nil {
+				slog.Warn("remove temp dir failed", "path", tmpDir, "error", err)
+			}
+		}()
 
 		tmpFile := filepath.Join(tmpDir, filepath.Base(dstPath))
 		if err := b.downloadAdd(src, tmpFile); err != nil {
@@ -482,7 +506,9 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 					if err := extractArchive(dstPath, filepath.Dir(dstPath)); err != nil {
 						return fmt.Errorf("extract archive %s: %w", dstPath, err)
 					}
-					os.Remove(dstPath)
+					if err := os.Remove(dstPath); err != nil {
+						slog.Warn("remove archive failed", "path", dstPath, "error", err)
+					}
 				}
 			}
 		}
@@ -525,7 +551,11 @@ func (b *Builder) downloadAdd(url, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("close response body failed", "error", err)
+		}
+	}()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
@@ -535,7 +565,11 @@ func (b *Builder) downloadAdd(url, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			slog.Warn("close file failed", "path", destPath, "error", err)
+		}
+	}()
 
 	_, err = io.Copy(f, io.LimitReader(resp.Body, 1<<30))
 	return err
@@ -556,7 +590,7 @@ func extractArchive(archivePath, destDir string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	name := strings.ToLower(filepath.Base(archivePath))
 
@@ -567,7 +601,11 @@ func extractArchive(archivePath, destDir string) error {
 		if err != nil {
 			return err
 		}
-		defer gzReader.Close()
+		defer func() {
+			if err := gzReader.Close(); err != nil {
+				slog.Warn("close gzip reader failed", "error", err)
+			}
+		}()
 		reader = gzReader
 	} else if strings.HasSuffix(name, ".bz2") || strings.HasSuffix(name, ".tar.bz2") {
 		reader = bzip2.NewReader(f)
@@ -585,7 +623,9 @@ func extractArchive(archivePath, destDir string) error {
 			return fmt.Errorf("xz decompress: %w", err)
 		}
 		if err := ExtractTar(stdout, destDir); err != nil {
-			cmd.Wait()
+			if waitErr := cmd.Wait(); waitErr != nil {
+				slog.Warn("xz command wait failed", "error", waitErr)
+			}
 			return err
 		}
 		return cmd.Wait()
@@ -603,7 +643,9 @@ func extractArchive(archivePath, destDir string) error {
 			return fmt.Errorf("zstd decompress: %w", err)
 		}
 		if err := ExtractTar(stdout, destDir); err != nil {
-			cmd.Wait()
+			if waitErr := cmd.Wait(); waitErr != nil {
+				slog.Warn("zstd command wait failed", "error", waitErr)
+			}
 			return err
 		}
 		return cmd.Wait()
@@ -661,7 +703,10 @@ func (b *Builder) executeWorkdir(stage *Stage, inst *Instruction, rootDir string
 		if stage.ImageConfig != nil {
 			stage.ImageConfig.WorkingDir = *workDir
 		}
-		common.EnsureDir(filepath.Join(rootDir, *workDir))
+		workDirPath := filepath.Join(rootDir, *workDir)
+		if err := common.EnsureDir(workDirPath); err != nil {
+			return fmt.Errorf("ensure workdir %s: %w", workDirPath, err)
+		}
 	}
 	return nil
 }
@@ -914,7 +959,11 @@ func ExtractTar(r io.Reader, dest string) error {
 		if err != nil {
 			return err
 		}
-		defer gzr.Close()
+		defer func() {
+			if err := gzr.Close(); err != nil {
+				slog.Warn("close gzip reader failed", "error", err)
+			}
+		}()
 		r = gzr
 	} else {
 		r = mr
@@ -943,7 +992,7 @@ func ExtractTar(r io.Reader, dest string) error {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
@@ -952,10 +1001,14 @@ func ExtractTar(r io.Reader, dest string) error {
 				return err
 			}
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				if closeErr := f.Close(); closeErr != nil {
+					slog.Warn("close file failed", "path", target, "error", closeErr)
+				}
 				return err
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				slog.Warn("close file failed", "path", target, "error", err)
+			}
 			if err := os.Chmod(target, mode); err != nil {
 				return err
 			}
@@ -978,7 +1031,9 @@ func ExtractTar(r io.Reader, dest string) error {
 					return fmt.Errorf("tar: symlink traversal: %s -> %s", hdr.Name, hdr.Linkname)
 				}
 			}
-			os.Remove(target)
+			if err := os.Remove(target); err != nil {
+				slog.Warn("remove symlink target failed", "path", target, "error", err)
+			}
 			if err := os.Symlink(hdr.Linkname, target); err != nil {
 				return err
 			}
@@ -990,7 +1045,9 @@ func ExtractTar(r io.Reader, dest string) error {
 			if !strings.HasPrefix(linkTarget, cleanDest+string(os.PathSeparator)) && linkTarget != cleanDest {
 				return fmt.Errorf("tar: hardlink traversal: %s -> %s", hdr.Name, hdr.Linkname)
 			}
-			os.Remove(target)
+			if err := os.Remove(target); err != nil {
+				slog.Warn("remove hardlink target failed", "path", target, "error", err)
+			}
 			if err := os.Link(linkTarget, target); err != nil {
 				return err
 			}
@@ -1003,7 +1060,11 @@ func ExtractTar(r io.Reader, dest string) error {
 // CreateTar creates a tar archive from a directory.
 func CreateTar(dir string, writer io.Writer) error {
 	tw := tar.NewWriter(writer)
-	defer tw.Close()
+	defer func() {
+		if err := tw.Close(); err != nil {
+			slog.Warn("close tar writer failed", "error", err)
+		}
+	}()
 
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -1053,7 +1114,9 @@ func CompressGzip(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	w := gzip.NewWriter(&buf)
 	if _, err := w.Write(data); err != nil {
-		w.Close()
+		if closeErr := w.Close(); closeErr != nil {
+			slog.Warn("close gzip writer failed", "error", closeErr)
+		}
 		return nil, err
 	}
 	if err := w.Close(); err != nil {
@@ -1069,7 +1132,7 @@ func (b *Builder) ExecuteBuildContext(contextDir, tarPath, outputDir string) err
 		if err != nil {
 			return fmt.Errorf("open context tar: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		if err := ExtractTar(f, contextDir); err != nil {
 			return fmt.Errorf("extract context: %w", err)
 		}

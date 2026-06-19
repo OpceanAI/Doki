@@ -13,8 +13,8 @@ GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 BUILD_USER ?= $(shell id -un 2>/dev/null || echo unknown)
 DOKI_PKG   = github.com/OpceanAI/Doki/pkg/common
-DOKI_API   = 1.48
-DOKI_VER   = 0.9.3
+DOKI_API   = 1.54
+DOKI_VER   = 0.10.0
 
 # 16KB page size alignment (Android 15+ requirement, May 2026).
 ifeq ($(GOOS),android)
@@ -47,36 +47,66 @@ build-android-arm64: | $(RELEASES)
 	GOOS=android GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-android-arm64 ./cmd/dokid
 	GOOS=android GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-android-arm64 ./cmd/doki-compose
 	GOOS=android GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-init-android-arm64 ./cmd/doki-init
+	GOOS=android GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-android-arm64 ./cmd/doki-kube
+	GOOS=android GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-android-arm64 ./cmd/doki-kubectl
 
 build-android-armv7: | $(RELEASES)
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-android-armv7 ./cmd/doki
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-android-armv7 ./cmd/dokid
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-android-armv7 ./cmd/doki-compose
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-init-android-armv7 ./cmd/doki-init
+	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-android-armv7 ./cmd/doki-kube
+	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-android-armv7 ./cmd/doki-kubectl
 
 
-build-linux: build-linux-arm64 build-linux-armv7
+build-linux: build-linux-arm64 build-linux-armv7 build-linux-amd64
 
 build-linux-arm64: | $(RELEASES)
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-linux-arm64 ./cmd/doki
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-linux-arm64 ./cmd/dokid
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-linux-arm64 ./cmd/doki-compose
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-init-linux-arm64 ./cmd/doki-init
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-linux-arm64 ./cmd/doki-kube
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-linux-arm64 ./cmd/doki-kubectl
 
 build-linux-armv7: | $(RELEASES)
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-linux-armv7 ./cmd/doki
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-linux-armv7 ./cmd/dokid
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-linux-armv7 ./cmd/doki-compose
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-init-linux-armv7 ./cmd/doki-init
+	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-linux-armv7 ./cmd/doki-kube
+	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-linux-armv7 ./cmd/doki-kubectl
+
+build-linux-amd64: | $(RELEASES)
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-linux-amd64 ./cmd/doki
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-linux-amd64 ./cmd/dokid
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-linux-amd64 ./cmd/doki-compose
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-init-linux-amd64 ./cmd/doki-init
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-linux-amd64 ./cmd/doki-kube
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-linux-amd64 ./cmd/doki-kubectl
 
 
-build-darwin: build-darwin-arm64
+build-darwin: build-darwin-arm64 build-darwin-amd64
 
 build-darwin-arm64: | $(RELEASES)
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-darwin-arm64 ./cmd/doki
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-darwin-arm64 ./cmd/dokid
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-darwin-arm64 ./cmd/doki-compose
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-darwin-arm64 ./cmd/doki-kube
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-darwin-arm64 ./cmd/doki-kubectl
 
+build-darwin-amd64: | $(RELEASES)
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-darwin-amd64 ./cmd/doki
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-darwin-amd64 ./cmd/dokid
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-darwin-amd64 ./cmd/doki-compose
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-darwin-amd64 ./cmd/doki-kube
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-darwin-amd64 ./cmd/doki-kubectl
 
-build-release: build-android build-linux build-darwin
+build-kube: | $(RELEASES)
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-linux-arm64 ./cmd/doki-kube
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-linux-arm64 ./cmd/doki-kubectl
+
+build-release: build-android build-linux build-darwin build-kube
 
 sha256: | $(RELEASES)
 	cd $(RELEASES) && for f in *; do \
@@ -97,7 +127,7 @@ version-info:
 	@echo "Build date:  $(BUILD_DATE)"
 	@echo "Build user:  $(BUILD_USER)"
 	@echo "API:         $(DOKI_API)"
-	@echo "Platforms:   android-arm64 android-armv7 linux-arm64 linux-armv7 darwin-arm64"
+	@echo "Platforms:   android-arm64 android-armv7 linux-arm64 linux-armv7 linux-amd64 darwin-arm64 darwin-amd64"
 
 test:
 	$(GO) test ./... -count=1
@@ -117,3 +147,5 @@ install: build-android-arm64
 	install $(RELEASES)/dokid-android-arm64 $(PREFIX)/bin/dokid
 	install $(RELEASES)/doki-compose-android-arm64 $(PREFIX)/bin/doki-compose
 	install $(RELEASES)/doki-init-android-arm64 $(PREFIX)/bin/doki-init
+	install $(RELEASES)/doki-kube-android-arm64 $(PREFIX)/bin/doki-kube
+	install $(RELEASES)/doki-kubectl-android-arm64 $(PREFIX)/bin/doki-kubectl

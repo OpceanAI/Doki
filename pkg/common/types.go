@@ -8,16 +8,16 @@ import (
 )
 
 // DokiVersion is the current version of the Doki engine.
-// Bumped to v0.9.3: critical bug fixes (proot ENOSYS, deadlocks, security hardening, 80+ bugs fixed).
-const DokiVersion = "0.9.3"
+// v0.10.0: Podman 1:1, Kubernetes 1:1, doki-OS VM, macOS native, Landlock, pasta
+const DokiVersion = "0.10.0"
 
 // DokiAPIVersion is the compatible Docker Engine API version.
-// Aligned with Docker Engine 29.5.x (May 2026) max API.
-const DokiAPIVersion = "1.48"
+// Aligned with Docker Engine 29.5.x (June 2026) max API.
+const DokiAPIVersion = "1.54"
 
 // DokiMinClient is the minimum API version we accept from clients.
 // Below this we negotiate up.
-const DokiMinClient = "1.43"
+const DokiMinClient = "1.44"
 
 // ContainerState represents the state of a container.
 type ContainerState string
@@ -113,6 +113,13 @@ type DokiConfig struct {
 	DefaultUlimits     map[string]Ulimit `json:"default_ulimits"`
 	RegistryMirrors    []string `json:"registry_mirrors"`
 	InsecureRegistries []string `json:"insecure_registries"`
+
+	// VM Configuration (doki-OS)
+	VMImage      string `json:"vm_image,omitempty"`
+	VMCPUs       int    `json:"vm_cpus,omitempty"`
+	VMMemoryMB   int64  `json:"vm_memory_mb,omitempty"`
+	VMDiskSizeGB int64  `json:"vm_disk_size_gb,omitempty"`
+	VMForce      bool   `json:"vm_force,omitempty"`
 }
 
 // Ulimit defines a resource limit.
@@ -135,6 +142,11 @@ func DefaultConfig() *DokiConfig {
 		DataDir:        "/data/data/com.termux/files/usr/var/lib/doki",
 		ExecRoot:       "/data/data/com.termux/files/usr/var/run/doki",
 		DNS:            []string{"8.8.8.8", "8.8.4.4"},
+		VMImage:        "",
+		VMCPUs:         2,
+		VMMemoryMB:     1024,
+		VMDiskSizeGB:   20,
+		VMForce:        false,
 	}
 }
 
