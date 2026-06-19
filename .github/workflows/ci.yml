@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.23']
+        go: ['1.26']
 
     steps:
       - name: Checkout
@@ -30,5 +30,48 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test -race ./...
+      - name: Test with Race Detector
+        run: go test -race ./... -v -count=1
+
+  audit:
+    name: Audit (staticcheck, errcheck, govulncheck)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ['1.26']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Check dependencies
+        run: go mod verify
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+      - name: Errcheck
+        run: |
+          go install github.com/kisielk/errcheck@latest
+          errcheck ./...
+
+      - name: Govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Coverage
+        run: |
+          go test ./... -coverprofile=coverage.out -covermode=atomic
+          go tool cover -func=coverage.out | tail -5
