@@ -144,7 +144,7 @@ func (m *DistroManager) GetRootfsPath(name string) string {
 }
 
 func (m *DistroManager) extractRootfs(img interface{}, target string) error {
-	common.EnsureDir(target)
+	_ = common.EnsureDir(target)
 	if record, ok := img.(*image.ImageRecord); ok {
 		layers, _ := m.imageStore.GetLayerPaths(record.ID)
 		if len(layers) == 0 {
@@ -188,7 +188,7 @@ func (m *DistroManager) extractRootfs(img interface{}, target string) error {
 			}
 		}
 		if firstErr != nil {
-			os.RemoveAll(target)
+			_ = os.RemoveAll(target)
 			return firstErr
 		}
 		return nil
@@ -201,11 +201,11 @@ func extractLayerNative(tarPath, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	magic := make([]byte, 4)
 	n, _ := f.Read(magic)
-	f.Seek(0, io.SeekStart)
+	_, _ = f.Seek(0, io.SeekStart)
 
 	var decompressed io.Reader
 	switch {
@@ -214,7 +214,7 @@ func extractLayerNative(tarPath, dest string) error {
 		if err != nil {
 			return err
 		}
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		decompressed = gz
 	case n >= 2 && magic[0] == 0x42 && magic[1] == 0x5a:
 		decompressed = bzip2.NewReader(f)
@@ -266,14 +266,14 @@ func extractLayerNative(tarPath, dest string) error {
 				if strings.HasPrefix(opqDir, cleanDest+string(os.PathSeparator)) || opqDir == cleanDest {
 					entries, _ := os.ReadDir(opqDir)
 					for _, e := range entries {
-						os.RemoveAll(filepath.Join(opqDir, e.Name()))
+						_ = os.RemoveAll(filepath.Join(opqDir, e.Name()))
 					}
 				}
 				continue
 			}
 			whTarget := filepath.Clean(filepath.Join(dest, filepath.Dir(hdr.Name), baseName[4:]))
 			if strings.HasPrefix(whTarget, cleanDest+string(os.PathSeparator)) || whTarget == cleanDest {
-				os.RemoveAll(whTarget)
+				_ = os.RemoveAll(whTarget)
 			}
 			continue
 		}
@@ -283,8 +283,8 @@ func extractLayerNative(tarPath, dest string) error {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return err
 			}
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
-		case tar.TypeReg, tar.TypeRegA:
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
@@ -298,12 +298,12 @@ func extractLayerNative(tarPath, dest string) error {
 				return err
 			}
 			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
+				_ = out.Close()
 				return err
 			}
-			out.Close()
-			os.Chmod(target, os.FileMode(hdr.Mode))
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			_ = out.Close()
+			_ = os.Chmod(target, os.FileMode(hdr.Mode))
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeSymlink:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
@@ -378,7 +378,7 @@ func (m *DistroManager) saveMetadata(name string, meta *InstalledDistro) error {
 	}
 
 	metaPath := filepath.Join(m.distroDir, name, "metadata.json")
-	os.MkdirAll(filepath.Dir(metaPath), 0755)
+	_ = os.MkdirAll(filepath.Dir(metaPath), 0755)
 	return os.WriteFile(metaPath, data, 0644)
 }
 
@@ -404,7 +404,7 @@ func (m *DistroManager) Remove(name string) error {
 
 // Update re-pulls and re-extracts a distro.
 func (m *DistroManager) Update(def *DistroDefinition) error {
-	m.Remove(def.Name)
+	_ = m.Remove(def.Name)
 	return m.EnsureInstalled(def)
 }
 

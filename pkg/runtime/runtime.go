@@ -175,10 +175,10 @@ func NewRuntime(root string, store *storage.Manager, opts ...RuntimeOption) *Run
 	}
 	rt.detectMode()
 
-	common.EnsureDir(filepath.Join(root, "containers"))
-	common.EnsureDir(filepath.Join(root, "bundles"))
-	common.EnsureDir(filepath.Join(root, "layers"))
-	common.EnsureDir(filepath.Join(root, "rootfs"))
+	_ = common.EnsureDir(filepath.Join(root, "containers"))
+	_ = common.EnsureDir(filepath.Join(root, "bundles"))
+	_ = common.EnsureDir(filepath.Join(root, "layers"))
+	_ = common.EnsureDir(filepath.Join(root, "rootfs"))
 
 	return rt
 }
@@ -238,8 +238,8 @@ func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 
 	bundleDir := filepath.Join(rt.root, "bundles", cfg.ID)
 	rootfsDir := filepath.Join(bundleDir, "rootfs")
-	common.EnsureDir(bundleDir)
-	common.EnsureDir(rootfsDir)
+	_ = common.EnsureDir(bundleDir)
+	_ = common.EnsureDir(rootfsDir)
 
 	// Copy existing rootfs if provided.
 	if cfg.Rootfs != "" && common.PathExists(cfg.Rootfs) {
@@ -267,7 +267,7 @@ func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 		"etc/hosts":       fuse.GenerateHosts(hostname, parseExtraHosts(cfg.ExtraHosts)),
 		"etc/resolv.conf": fuse.GenerateResolvConf(cfg.DNS, cfg.DNSSearch, cfg.DNSOptions, rt.dnsAddr),
 	}
-	fuse.PrepareRootfs(rootfsDir, rootfsFiles, cfg.User)
+	_ = fuse.PrepareRootfs(rootfsDir, rootfsFiles, cfg.User)
 
 	state := &ContainerState{
 		ID:      cfg.ID,
@@ -300,7 +300,7 @@ func (rt *Runtime) extractLayers(rootfsDir string, layers []string) error {
 		}
 		if err := extractTarGz(layerPath, rootfsDir); err != nil {
 			// Rollback: clean up partial rootfs
-			os.RemoveAll(rootfsDir)
+			_ = os.RemoveAll(rootfsDir)
 			return fmt.Errorf("layer %d (%s): %w", i, filepath.Base(layerPath), err)
 		}
 	}
@@ -313,7 +313,7 @@ func extractTarGz(tarPath, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { if err := f.Close(); err != nil { slog.Default().Warn("close failed", "error", err) } }()
 
 	// C12: Detect compression format from magic bytes.
 	magic := make([]byte, 4)
@@ -332,7 +332,7 @@ func extractTarGz(tarPath, dest string) error {
 		if err != nil {
 			return err
 		}
-		defer gz.Close()
+		defer func() { if err := gz.Close(); err != nil { slog.Default().Warn("close failed", "error", err) } }()
 		decompressed = gz
 	case n >= 2 && magic[0] == 0x42 && magic[1] == 0x5a:
 		decompressed = bzip2.NewReader(f)
@@ -389,14 +389,14 @@ func extractTarGz(tarPath, dest string) error {
 				if strings.HasPrefix(opqDir, cleanDest+string(os.PathSeparator)) || opqDir == cleanDest {
 					entries, _ := os.ReadDir(opqDir)
 					for _, e := range entries {
-						os.RemoveAll(filepath.Join(opqDir, e.Name()))
+						_ = os.RemoveAll(filepath.Join(opqDir, e.Name()))
 					}
 				}
 				continue
 			}
 			whTarget := filepath.Clean(filepath.Join(dest, filepath.Dir(hdr.Name), baseName[4:]))
 			if strings.HasPrefix(whTarget, cleanDest+string(os.PathSeparator)) || whTarget == cleanDest {
-				os.RemoveAll(whTarget)
+				_ = os.RemoveAll(whTarget)
 			}
 			continue
 		}
@@ -409,37 +409,43 @@ func extractTarGz(tarPath, dest string) error {
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
 				slog.Warn("chown dir", "target", target, "err", err)
 			}
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
 			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-				os.Remove(target)
+				_ = os.Remove(target)
 			} else if err != nil {
-				os.Remove(target)
+				_ = os.Remove(target)
 			}
 			out, err := os.Create(target)
 			if err != nil {
 				return err
 			}
 			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
+				if cerr := out.Close(); cerr != nil {
+					slog.Warn("close failed", "error", cerr)
+				}
 				return err
 			}
 			if err := out.Chmod(os.FileMode(hdr.Mode)); err != nil {
-				out.Close()
+				if cerr := out.Close(); cerr != nil {
+					slog.Warn("close failed", "error", cerr)
+				}
 				return err
 			}
 			if err := out.Chown(hdr.Uid, hdr.Gid); err != nil && !os.IsNotExist(err) {
 				slog.Warn("chown file", "target", target, "err", err)
 			}
-			out.Close()
+			if err := out.Close(); err != nil {
+				slog.Warn("close failed", "error", err)
+			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil && !os.IsNotExist(err) {
 				slog.Warn("chown file", "target", target, "err", err)
 			}
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
 		case tar.TypeSymlink:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
@@ -454,7 +460,7 @@ func extractTarGz(tarPath, dest string) error {
 				}
 			}
 			for attempts := 0; attempts < 5; attempts++ {
-				os.Remove(target)
+				_ = os.Remove(target)
 				if err := os.Symlink(hdr.Linkname, target); err == nil {
 					break
 				}
@@ -475,13 +481,13 @@ func extractTarGz(tarPath, dest string) error {
 			}
 			linkTarget := filepath.Clean(filepath.Join(dest, hdr.Linkname))
 			if !strings.HasPrefix(linkTarget, cleanDest+string(os.PathSeparator)) && linkTarget != cleanDest {
-				return fmt.Errorf("tar: hardlink escape attempt")
+					return fmt.Errorf("tar: hardlink escape attempt")
 			}
-			os.Remove(target)
+			_ = os.Remove(target)
 			// C8: Hardlink with fallback to copy; return error if both fail.
 			if err := os.Link(linkTarget, target); err != nil {
 				if data, readErr := os.ReadFile(linkTarget); readErr == nil {
-					os.Remove(target)
+					_ = os.Remove(target)
 					if writeErr := os.WriteFile(target, data, 0644); writeErr != nil {
 						return fmt.Errorf("tar: hardlink copy fallback: %w", writeErr)
 					}
@@ -495,13 +501,13 @@ func extractTarGz(tarPath, dest string) error {
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
 				slog.Warn("chown hardlink", "target", target, "err", err)
 			}
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
 		case tar.TypeBlock:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			os.Remove(target)
+			_ = os.Remove(target)
 			dev := int(hdr.Devmajor)<<8 | int(hdr.Devminor)
 			if err := syscall.Mknod(target, syscall.S_IFBLK|uint32(hdr.Mode&0777), dev); err != nil {
 				return fmt.Errorf("tar: mknod block device %s: %w", hdr.Name, err)
@@ -509,12 +515,12 @@ func extractTarGz(tarPath, dest string) error {
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
 				slog.Warn("chown block device", "target", target, "err", err)
 			}
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeChar:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			os.Remove(target)
+			_ = os.Remove(target)
 			dev := int(hdr.Devmajor)<<8 | int(hdr.Devminor)
 			if err := syscall.Mknod(target, syscall.S_IFCHR|uint32(hdr.Mode&0777), dev); err != nil {
 				return fmt.Errorf("tar: mknod char device %s: %w", hdr.Name, err)
@@ -522,43 +528,49 @@ func extractTarGz(tarPath, dest string) error {
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
 				slog.Warn("chown char device", "target", target, "err", err)
 			}
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeFifo:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			os.Remove(target)
+			_ = os.Remove(target)
 			if err := syscall.Mkfifo(target, uint32(hdr.Mode&0777)); err != nil {
 				return fmt.Errorf("tar: mkfifo %s: %w", hdr.Name, err)
 			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
 				slog.Warn("chown fifo", "target", target, "err", err)
 			}
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeGNUSparse:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
 			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-				os.Remove(target)
+				_ = os.Remove(target)
 			}
 			out, err := os.Create(target)
 			if err != nil {
 				return err
 			}
 			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
+				if cerr := out.Close(); cerr != nil {
+					slog.Warn("close failed", "error", cerr)
+				}
 				return err
 			}
 			if err := out.Chmod(os.FileMode(hdr.Mode)); err != nil {
-				out.Close()
+				if cerr := out.Close(); cerr != nil {
+					slog.Warn("close failed", "error", cerr)
+				}
 				return err
 			}
 			if err := out.Chown(hdr.Uid, hdr.Gid); err != nil {
 				slog.Warn("chown file", "target", target, "err", err)
 			}
-			out.Close()
-			os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+			if err := out.Close(); err != nil {
+				slog.Warn("close failed", "error", err)
+			}
+			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
 		default:
 		}
@@ -574,7 +586,9 @@ func extractXattrs(hdr *tar.Header, target string) {
 	for key, value := range hdr.PAXRecords {
 		if strings.HasPrefix(key, "SCHILY.xattr.") {
 			attrName := strings.TrimPrefix(key, "SCHILY.xattr.")
-			syscall.Setxattr(target, attrName, []byte(value), 0)
+			if err := syscall.Setxattr(target, attrName, []byte(value), 0); err != nil {
+				slog.Warn("Setxattr failed", "target", target, "attr", attrName, "error", err)
+			}
 		}
 	}
 }
@@ -618,7 +632,9 @@ func (rt *Runtime) Start(id string) error {
 	// Setup mounts (only in namespace mode).
 	if rt.mode == ModeNamespaces {
 		if err := rt.setupMounts(rootfsDir, cfg); err != nil {
-			logFile.Close()
+			if cerr := logFile.Close(); cerr != nil {
+				slog.Warn("close failed", "error", cerr)
+			}
 			return fmt.Errorf("setup mounts: %w", err)
 		}
 	}
@@ -641,7 +657,9 @@ func (rt *Runtime) Start(id string) error {
 	// Start process.
 	pid, proc, err := rt.startProcess(cfg, rootfsDir, logFile)
 	if err != nil {
-		logFile.Close()
+		if cerr := logFile.Close(); cerr != nil {
+			slog.Warn("close failed", "error", cerr)
+		}
 		return fmt.Errorf("start process: %w", err)
 	}
 
@@ -649,7 +667,7 @@ func (rt *Runtime) Start(id string) error {
 	if rt.cgMgr.IsAvailable() {
 		cgCfg := rt.buildCgroupConfig(cfg)
 		if _, err := rt.cgMgr.Create(id, cgCfg); err == nil {
-			rt.cgMgr.AddProcess(id, pid)
+			_ = rt.cgMgr.AddProcess(id, pid)
 		}
 	}
 
@@ -691,10 +709,14 @@ func (rt *Runtime) monitorProcess(state *ContainerState, logFile *os.File) {
 	// Check ProcessState to avoid double Wait(): startWithProot/retryWithQemu
 	// may have already called Wait() via their fast-detection goroutines.
 	if state.Cmd != nil && state.Cmd.ProcessState == nil {
-		state.Cmd.Wait()
+		if err := state.Cmd.Wait(); err != nil {
+			slog.Default().Warn("wait failed", "error", err)
+		}
 	}
 	if logFile != nil {
-		logFile.Close()
+		if err := logFile.Close(); err != nil {
+			slog.Default().Warn("close failed", "error", err)
+		}
 	}
 
 	exitCode := -1
@@ -740,7 +762,9 @@ func (rt *Runtime) handleRestart(state *ContainerState, exitCode int) {
 		time.Sleep(1 * time.Second)
 		rt.mu.Lock()
 		state.RestartCount++
-		rt.saveState(state)
+		if err := rt.saveState(state); err != nil {
+			slog.Default().Warn("saveState failed", "error", err)
+		}
 		rt.mu.Unlock()
 		if err := rt.Start(id); err != nil {
 			slog.Warn("restart-always failed", "id", id, "err", err)
@@ -750,7 +774,9 @@ func (rt *Runtime) handleRestart(state *ContainerState, exitCode int) {
 		if exitCode != 0 {
 			rt.mu.Lock()
 			state.RestartCount++
-			rt.saveState(state)
+			if err := rt.saveState(state); err != nil {
+				slog.Default().Warn("saveState failed", "error", err)
+			}
 			rt.mu.Unlock()
 
 			maxRetries := cfg.RestartMaxRetries
@@ -767,7 +793,9 @@ func (rt *Runtime) handleRestart(state *ContainerState, exitCode int) {
 				}
 				rt.mu.Lock()
 				state.RestartCount++
-				rt.saveState(state)
+				if err := rt.saveState(state); err != nil {
+					slog.Default().Warn("saveState failed", "error", err)
+				}
 				rt.mu.Unlock()
 				if err := rt.Start(id); err == nil {
 					return // Success: new monitorProcess will handle next exit.
@@ -780,9 +808,11 @@ func (rt *Runtime) handleRestart(state *ContainerState, exitCode int) {
 			time.Sleep(1 * time.Second)
 			rt.mu.Lock()
 			state.RestartCount++
-			rt.saveState(state)
+			if err := rt.saveState(state); err != nil {
+				slog.Default().Warn("saveState failed", "error", err)
+			}
 			rt.mu.Unlock()
-			rt.Start(id)
+			_ = rt.Start(id)
 		}
 	}
 }
@@ -923,8 +953,8 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	if cfg.Hostname != "" {
 		cfg.Env = append(cfg.Env, "HOSTNAME="+cfg.Hostname)
 		hostnamePath := filepath.Join(cleanRootfs, "etc", "hostname")
-		os.MkdirAll(filepath.Dir(hostnamePath), 0755)
-		os.WriteFile(hostnamePath, []byte(cfg.Hostname+"\n"), 0644)
+		_ = os.MkdirAll(filepath.Dir(hostnamePath), 0755)
+		_ = os.WriteFile(hostnamePath, []byte(cfg.Hostname+"\n"), 0644)
 	}
 
 	prootArgs = append(prootArgs, args...)
@@ -973,14 +1003,18 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		// Process died immediately - try to get the error
 		stderrStr := stderrBuf.String()
 		if stderrStr != "" {
-			logFile.Write([]byte(stderrStr))
+			if _, err := logFile.Write([]byte(stderrStr)); err != nil {
+				slog.Warn("write to log failed", "error", err)
+			}
 		}
 
 		hasENOSYS := strings.Contains(stderrStr, "Function not implemented") ||
 			strings.Contains(stderrStr, "ENOSYS")
 
 		if hasENOSYS {
-			logFile.Write([]byte("DOKI: proot failed with ENOSYS, retrying with QEMU...\n"))
+			if _, err := logFile.Write([]byte("DOKI: proot failed with ENOSYS, retrying with QEMU...\n")); err != nil {
+				slog.Warn("write to log failed", "error", err)
+			}
 			rt.writeProotENOSYSDiagnostic(logFile)
 			if pid, qemuCmd, qemuErr := rt.retryWithQemu(cfg, rootfsDir, logFile); qemuErr == nil {
 				return pid, qemuCmd, nil
@@ -988,7 +1022,9 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		}
 
 		// Try to reap the process to avoid zombie
-		cmd.Process.Wait()
+		if _, err := cmd.Process.Wait(); err != nil {
+			slog.Warn("wait failed", "error", err)
+		}
 		return 0, nil, fmt.Errorf("proot exited immediately")
 	}
 
@@ -1022,7 +1058,9 @@ func (rt *Runtime) writeProotENOSYSDiagnostic(logFile *os.File) {
 	buf.WriteString("  3) Update Termux:                pkg update && pkg upgrade\n")
 	buf.WriteString("  4) Re-run with --doki-trace proot for verbose output\n")
 	buf.WriteString("  5) Report: https://github.com/OpceanAI/Doki/issues/4\n")
-	logFile.Write(buf.Bytes())
+	if _, err := logFile.Write(buf.Bytes()); err != nil {
+		slog.Warn("write to log failed", "error", err)
+	}
 	fmt.Fprint(os.Stderr, buf.String())
 }
 
@@ -1082,7 +1120,7 @@ func (rt *Runtime) startWithNamespaces(cfg *Config, rootfsDir string, logFile *o
 
 	// I2 + I3: Write UID/GID mappings for user namespaces.
 	if !cfg.Privileged && rt.rootless {
-		rt.nsMgr.SetupUserNamespace(cmd.Process.Pid, &namespaces.Config{
+		_ = rt.nsMgr.SetupUserNamespace(cmd.Process.Pid, &namespaces.Config{
 			User:     true,
 			Rootless: true,
 		})
@@ -1091,7 +1129,7 @@ func (rt *Runtime) startWithNamespaces(cfg *Config, rootfsDir string, logFile *o
 	// I4: Set up loopback in new network namespace.
 	if cfg.NetworkMode != common.NetworkHost && cfg.NetworkMode != common.NetworkNone {
 		loopbackCmd := exec.Command("nsenter", "-t", strconv.Itoa(cmd.Process.Pid), "-n", "ip", "link", "set", "lo", "up")
-		loopbackCmd.Run()
+		_ = loopbackCmd.Run()
 	}
 
 	return cmd.Process.Pid, cmd, nil
@@ -1100,30 +1138,30 @@ func (rt *Runtime) startWithNamespaces(cfg *Config, rootfsDir string, logFile *o
 // ─── Mount setup (namespace mode only) ─────────────────────────────
 
 func (rt *Runtime) setupMounts(rootfsDir string, cfg *Config) error {
-	fuse.ProcMount(filepath.Join(rootfsDir, "proc"))
-	fuse.SysMount(filepath.Join(rootfsDir, "sys"))
-	fuse.DevMount(filepath.Join(rootfsDir, "dev"))
-	fuse.DevPtsMount(filepath.Join(rootfsDir, "dev", "pts"))
+	_ = fuse.ProcMount(filepath.Join(rootfsDir, "proc"))
+	_ = fuse.SysMount(filepath.Join(rootfsDir, "sys"))
+	_ = fuse.DevMount(filepath.Join(rootfsDir, "dev"))
+	_ = fuse.DevPtsMount(filepath.Join(rootfsDir, "dev", "pts"))
 
 	shmSize := int64(67108864)
 	if cfg.Resources != nil && cfg.Resources.Memory > 0 {
 		shmSize = cfg.Resources.Memory / 2
 	}
-	fuse.ShmMount(filepath.Join(rootfsDir, "dev", "shm"), shmSize)
+	_ = fuse.ShmMount(filepath.Join(rootfsDir, "dev", "shm"), shmSize)
 
 	for _, mnt := range cfg.Mounts {
 		target := filepath.Join(rootfsDir, mnt.Target)
 		switch mnt.Type {
 		case common.MountBind:
 			if mnt.Source != "" {
-				fuse.BindMount(mnt.Source, target, mnt.ReadOnly)
+				_ = fuse.BindMount(mnt.Source, target, mnt.ReadOnly)
 			}
 		case common.MountTmpfs:
 			size := int64(0)
 			if mnt.TmpfsOptions != nil {
 				size = mnt.TmpfsOptions.SizeBytes
 			}
-			fuse.TmpfsMount(target, size, 0755)
+			_ = fuse.TmpfsMount(target, size, 0755)
 		}
 	}
 
@@ -1257,7 +1295,9 @@ func (rt *Runtime) Stop(id string, timeout int) error {
 			strings.Contains(err.Error(), "no such process") {
 			state.Status = common.StateExited
 			state.Finished = time.Now()
-			rt.saveState(state)
+			if err := rt.saveState(state); err != nil {
+				slog.Warn("saveState failed", "error", err)
+			}
 			rt.mu.Unlock()
 			return nil
 		}
@@ -1283,7 +1323,9 @@ func (rt *Runtime) Stop(id string, timeout int) error {
 				state.Status = common.StateExited
 				state.ExitCode = 0
 				state.Finished = time.Now()
-				rt.saveState(state)
+				if err := rt.saveState(state); err != nil {
+					slog.Warn("saveState failed", "error", err)
+				}
 			}
 			rt.mu.Unlock()
 			return nil
@@ -1292,7 +1334,9 @@ func (rt *Runtime) Stop(id string, timeout int) error {
 	}
 
 	// Timeout: send SIGKILL
-	process.Signal(syscall.SIGKILL)
+	if err := process.Signal(syscall.SIGKILL); err != nil {
+		slog.Warn("SIGKILL failed", "error", err)
+	}
 	// Wait up to 3 more seconds for SIGKILL to take effect
 	for i := 0; i < 30; i++ {
 		if err := process.Signal(syscall.Signal(0)); err != nil {
@@ -1302,7 +1346,9 @@ func (rt *Runtime) Stop(id string, timeout int) error {
 				state.Status = common.StateExited
 				state.ExitCode = 137
 				state.Finished = time.Now()
-				rt.saveState(state)
+				if err := rt.saveState(state); err != nil {
+					slog.Warn("saveState failed", "error", err)
+				}
 			}
 			rt.mu.Unlock()
 			return nil
@@ -1316,7 +1362,9 @@ func (rt *Runtime) Stop(id string, timeout int) error {
 		state.Status = common.StateExited
 		state.ExitCode = 137
 		state.Finished = time.Now()
-		rt.saveState(state)
+		if err := rt.saveState(state); err != nil {
+			slog.Warn("saveState failed", "error", err)
+		}
 	}
 	rt.mu.Unlock()
 	return nil
@@ -1342,7 +1390,9 @@ func (rt *Runtime) Kill(id string, signal syscall.Signal) error {
 			if err == nil {
 				state.Status = common.StateExited
 				state.Finished = time.Now()
-				rt.saveState(state)
+				if err := rt.saveState(state); err != nil {
+					slog.Warn("saveState failed", "error", err)
+				}
 			}
 			rt.mu.Unlock()
 			return nil
@@ -1357,7 +1407,9 @@ func (rt *Runtime) Kill(id string, signal syscall.Signal) error {
 			if err == nil {
 				state.Status = common.StateExited
 				state.Finished = time.Now()
-				rt.saveState(state)
+				if err := rt.saveState(state); err != nil {
+					slog.Warn("saveState failed", "error", err)
+				}
 			}
 			rt.mu.Unlock()
 			return nil
@@ -1379,10 +1431,12 @@ func (rt *Runtime) Pause(id string) error {
 		return fmt.Errorf("container %s is not running", id)
 	}
 	if rt.cgMgr != nil && rt.cgMgr.IsAvailable() {
-		rt.cgMgr.Freeze(id)
+		_ = rt.cgMgr.Freeze(id)
 	} else if state.Cmd != nil && state.Cmd.Process != nil {
 		// Fallback: SIGSTOP the process
-		state.Cmd.Process.Signal(syscall.SIGSTOP)
+		if err := state.Cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+			slog.Warn("SIGSTOP failed", "error", err)
+		}
 	}
 	state.Status = common.StatePaused
 	return rt.saveState(state)
@@ -1399,10 +1453,12 @@ func (rt *Runtime) Unpause(id string) error {
 		return fmt.Errorf("container %s is not paused", id)
 	}
 	if rt.cgMgr != nil && rt.cgMgr.IsAvailable() {
-		rt.cgMgr.Thaw(id)
+		_ = rt.cgMgr.Thaw(id)
 	} else if state.Cmd != nil && state.Cmd.Process != nil {
 		// Fallback: SIGCONT the process
-		state.Cmd.Process.Signal(syscall.SIGCONT)
+		if err := state.Cmd.Process.Signal(syscall.SIGCONT); err != nil {
+			slog.Warn("SIGCONT failed", "error", err)
+		}
 	}
 	state.Status = common.StateRunning
 	return rt.saveState(state)
@@ -1477,10 +1533,8 @@ func (rt *Runtime) Stats(id string) (map[string]interface{}, error) {
 		if err != nil {
 			slog.Warn("get cgroup stats", "id", id, "err", err)
 		}
-		if cgStats != nil {
-			for k, v := range cgStats {
-				stats[k] = v
-			}
+		for k, v := range cgStats {
+			stats[k] = v
 		}
 	}
 	// Add network I/O stats from /proc/net/dev
@@ -1593,16 +1647,16 @@ func (rt *Runtime) Processes(id string) ([]string, error) {
 
 func (rt *Runtime) cleanupContainer(state *ContainerState) {
 	if rt.cgMgr != nil {
-		rt.cgMgr.Destroy(state.ID)
+		_ = rt.cgMgr.Destroy(state.ID)
 	}
 	if rt.nsMgr != nil {
-		rt.nsMgr.DeletePersistentNamespace(state.ID)
+		_ = rt.nsMgr.DeletePersistentNamespace(state.ID)
 	}
 	if state.Bundle != "" {
-		fuse.CleanupMounts(filepath.Join(state.Bundle, "rootfs"))
-		os.RemoveAll(state.Bundle)
+		_ = fuse.CleanupMounts(filepath.Join(state.Bundle, "rootfs"))
+		_ = os.RemoveAll(state.Bundle)
 	}
-	os.RemoveAll(filepath.Join(rt.root, "containers", state.ID))
+	_ = os.RemoveAll(filepath.Join(rt.root, "containers", state.ID))
 }
 
 func (rt *Runtime) loadState(id string) (*ContainerState, error) {
@@ -1652,7 +1706,7 @@ func (rt *Runtime) loadState(id string) (*ContainerState, error) {
 
 func (rt *Runtime) saveState(state *ContainerState) error {
 	dir := filepath.Join(rt.root, "containers", state.ID)
-	common.EnsureDir(dir)
+	_ = common.EnsureDir(dir)
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
@@ -1827,10 +1881,12 @@ func (rt *Runtime) StartHealthcheck(id string, cmd []string, interval, timeout t
 						state.HealthStatus.FailingStreak = failures
 						state.HealthStatus.Status = "unhealthy"
 					}
-					rt.saveState(state)
+					if err := rt.saveState(state); err != nil {
+						slog.Default().Warn("saveState failed", "error", err)
+					}
 					rt.mu.Unlock()
 					if failures >= retries {
-						go rt.Stop(id, 10)
+						go func() { _ = rt.Stop(id, 10) }()
 						return
 					}
 				} else {
@@ -1849,12 +1905,16 @@ func (rt *Runtime) StartHealthcheck(id string, cmd []string, interval, timeout t
 							state.HealthStatus.Log = state.HealthStatus.Log[len(state.HealthStatus.Log)-5:]
 						}
 					}
-					rt.saveState(state)
+					if err := rt.saveState(state); err != nil {
+						slog.Default().Warn("saveState failed", "error", err)
+					}
 					rt.mu.Unlock()
 				}
 			case <-time.After(timeout):
 				if hcmd.Process != nil {
-					hcmd.Process.Kill()
+					if err := hcmd.Process.Kill(); err != nil {
+						slog.Default().Warn("healthcheck kill failed", "error", err)
+					}
 				}
 				failures++
 				rt.mu.Lock()
@@ -1862,10 +1922,12 @@ func (rt *Runtime) StartHealthcheck(id string, cmd []string, interval, timeout t
 					state.HealthStatus.FailingStreak = failures
 					state.HealthStatus.Status = "unhealthy"
 				}
-				rt.saveState(state)
+				if err := rt.saveState(state); err != nil {
+					slog.Default().Warn("saveState failed", "error", err)
+				}
 				rt.mu.Unlock()
 				if failures >= retries {
-					rt.Stop(id, 10)
+					_ = rt.Stop(id, 10)
 					return
 				}
 			}
@@ -1954,8 +2016,12 @@ func (rt *Runtime) startWithMicroVM(cfg *Config, rootfsDir string, logFile *os.F
 		return 0, nil, fmt.Errorf("start microVM: %w", err)
 	}
 
-	logFile.Write([]byte(fmt.Sprintf("[dokivm] MicroVM started with %s backend\n", vmm.Name())))
-	logFile.Write([]byte(fmt.Sprintf("[dokivm] VM PID: %d, CID: %d\n", vm.PID, vm.CID)))
+	if _, err := logFile.Write([]byte(fmt.Sprintf("[dokivm] MicroVM started with %s backend\n", vmm.Name()))); err != nil {
+		slog.Warn("write to log failed", "error", err)
+	}
+	if _, err := logFile.Write([]byte(fmt.Sprintf("[dokivm] VM PID: %d, CID: %d\n", vm.PID, vm.CID))); err != nil {
+		slog.Warn("write to log failed", "error", err)
+	}
 
 	return vm.PID, nil, nil
 }
@@ -2074,7 +2140,9 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 	validEnv := common.ValidateEnv(cfg.Env)
 	cmd.Env = proot.BuildEnv(validEnv, imageEnv)
 
-	fmt.Fprintf(logFile, "DOKI: retrying with QEMU user mode (%s)\n", qemuPaths[0])
+	if _, err := fmt.Fprintf(logFile, "DOKI: retrying with QEMU user mode (%s)\n", qemuPaths[0]); err != nil {
+		slog.Warn("write to log failed", "error", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return 0, nil, fmt.Errorf("proot+qemu start: %w", err)
@@ -2092,24 +2160,4 @@ func (rt *Runtime) retryWithQemu(cfg *Config, rootfsDir string, logFile *os.File
 	}
 
 	return cmd.Process.Pid, cmd, nil
-}
-
-// isShell checks if a file is a shell script.
-func isShell(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) < 2 {
-		return false
-	}
-	return data[0] == '#' && data[1] == '!'
-}
-
-// findShell finds a shell binary in the container rootfs.
-func findShell(rootfsDir string) string {
-	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
-		path := filepath.Join(rootfsDir, sh)
-		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() {
-			return path
-		}
-	}
-	return "/bin/sh" // fallback
 }

@@ -27,7 +27,7 @@ type SnapshotManager struct {
 
 // NewSnapshotManager creates a new snapshot manager.
 func NewSnapshotManager(root string, driver Driver) *SnapshotManager {
-	common.EnsureDir(filepath.Join(root, "snapshots"))
+	_ = common.EnsureDir(filepath.Join(root, "snapshots"))
 	return &SnapshotManager{root: root, driver: driver}
 }
 
@@ -55,7 +55,7 @@ func (sm *SnapshotManager) Create(id string, metadata map[string]string) (*Snaps
 	}
 
 	if err := common.CopyDir(srcDir, snapDir); err != nil {
-		os.RemoveAll(snapDir)
+		_ = os.RemoveAll(snapDir)
 		return nil, fmt.Errorf("copy layer: %w", err)
 	}
 
@@ -65,7 +65,7 @@ func (sm *SnapshotManager) Create(id string, metadata map[string]string) (*Snaps
 
 	// Save snapshot metadata.
 	if err := sm.saveSnapshot(snap); err != nil {
-		os.RemoveAll(snapDir)
+		_ = os.RemoveAll(snapDir)
 		return nil, err
 	}
 
@@ -127,7 +127,7 @@ func (sm *SnapshotManager) Restore(snapID, targetID string) error {
 	// BUG-02 fix: same path fix as Create — layers are under "<root>/layers/<id>".
 	targetDir := filepath.Join(sm.root, "layers", targetID)
 	// Remove existing target.
-	os.RemoveAll(targetDir)
+	_ = os.RemoveAll(targetDir)
 
 	// Copy snapshot to target.
 	if err := common.CopyDir(snapDir, targetDir); err != nil {
@@ -135,7 +135,7 @@ func (sm *SnapshotManager) Restore(snapID, targetID string) error {
 	}
 
 	// Remove snapshot metadata from target (it's a snapshot, not a container).
-	os.Remove(filepath.Join(targetDir, "snapshot.json"))
+	_ = os.Remove(filepath.Join(targetDir, "snapshot.json"))
 
 	return nil
 }

@@ -47,10 +47,10 @@ func runInit() {
 	mount("tmpfs", "/run", "tmpfs", 0, "")
 
 	// Create symlinks.
-	os.Symlink("/proc/self/fd", "/dev/fd")
-	os.Symlink("/proc/self/fd/0", "/dev/stdin")
-	os.Symlink("/proc/self/fd/1", "/dev/stdout")
-	os.Symlink("/proc/self/fd/2", "/dev/stderr")
+	_ = os.Symlink("/proc/self/fd", "/dev/fd")
+	_ = os.Symlink("/proc/self/fd/0", "/dev/stdin")
+	_ = os.Symlink("/proc/self/fd/1", "/dev/stdout")
+	_ = os.Symlink("/proc/self/fd/2", "/dev/stderr")
 
 	// Handle signals (forward to child).
 	sigCh := make(chan os.Signal, 32)
@@ -120,7 +120,7 @@ func startVsockServer() {
 		// On systems without vsock, use a dummy listener.
 		return
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	for {
 		conn, err := ln.Accept()
@@ -132,7 +132,7 @@ func startVsockServer() {
 }
 
 func handleVsockConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	dec := json.NewDecoder(conn)
 	enc := json.NewEncoder(conn)
@@ -157,7 +157,7 @@ func handleVsockConn(conn net.Conn) {
 			sendSignalToChild(sig)
 
 		case "health":
-			enc.Encode(map[string]string{"type": "health", "data": "healthy"})
+			_ = enc.Encode(map[string]string{"type": "health", "data": "healthy"})
 
 		case "exit":
 			code, _ := msg["code"].(float64)
@@ -180,14 +180,14 @@ func handleVsockExec(msg map[string]interface{}, enc *json.Encoder, conn net.Con
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 
-	cmd.Start()
+	_ = cmd.Start()
 
 	go func() {
 		buf := make([]byte, 4096)
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
-				enc.Encode(map[string]interface{}{
+				_ = enc.Encode(map[string]interface{}{
 					"type": "stdout",
 					"data": string(buf[:n]),
 				})
@@ -203,7 +203,7 @@ func handleVsockExec(msg map[string]interface{}, enc *json.Encoder, conn net.Con
 		for {
 			n, err := stderr.Read(buf)
 			if n > 0 {
-				enc.Encode(map[string]interface{}{
+				_ = enc.Encode(map[string]interface{}{
 					"type": "stderr",
 					"data": string(buf[:n]),
 				})
@@ -214,12 +214,12 @@ func handleVsockExec(msg map[string]interface{}, enc *json.Encoder, conn net.Con
 		}
 	}()
 
-	cmd.Wait()
+	_ = cmd.Wait()
 	exitCode := 0
 	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
 		exitCode = ws.ExitStatus()
 	}
-	enc.Encode(map[string]interface{}{
+	_ = enc.Encode(map[string]interface{}{
 		"type": "exit",
 		"code": exitCode,
 	})
@@ -229,7 +229,7 @@ func handleVsockExec(msg map[string]interface{}, enc *json.Encoder, conn net.Con
 // ─── Helpers ───────────────────────────────────────────────────────
 
 func mount(source, target, fstype string, flags uintptr, data string) {
-	syscall.Mount(source, target, fstype, flags, data)
+	_ = syscall.Mount(source, target, fstype, flags, data)
 }
 
 func readCmdline() string {
@@ -285,13 +285,13 @@ func sendSignalToChild(sig string) {
 	if err == nil {
 		switch sig {
 		case "SIGTERM":
-			proc.Signal(syscall.SIGTERM)
+			_ = proc.Signal(syscall.SIGTERM)
 		case "SIGKILL":
-			proc.Signal(syscall.SIGKILL)
+			_ = proc.Signal(syscall.SIGKILL)
 		case "SIGINT":
-			proc.Signal(syscall.SIGINT)
+			_ = proc.Signal(syscall.SIGINT)
 		case "SIGHUP":
-			proc.Signal(syscall.SIGHUP)
+			_ = proc.Signal(syscall.SIGHUP)
 		}
 	}
 }

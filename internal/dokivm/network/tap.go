@@ -54,7 +54,7 @@ func (t *TapManager) CreateTap(vmID string) (string, error) {
 
 // DeleteTap removes a TAP device.
 func (t *TapManager) DeleteTap(tapName string) error {
-	exec.Command("ip", "link", "del", tapName).Run()
+	_ = exec.Command("ip", "link", "del", tapName).Run()
 	return nil
 }
 
@@ -85,15 +85,15 @@ func (t *TapManager) SetupBridge() error {
 
 // TeardownBridge removes the bridge device.
 func (t *TapManager) TeardownBridge() {
-	exec.Command("ip", "link", "del", t.bridge).Run()
+	_ = exec.Command("ip", "link", "del", t.bridge).Run()
 }
 
 // EnableMasquerade enables NAT for the bridge subnet.
 func (t *TapManager) EnableMasquerade() error {
 	if iptables, _ := exec.LookPath("iptables"); iptables != "" {
-		exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", t.subnet, "-j", "MASQUERADE").Run()
-		exec.Command("iptables", "-A", "FORWARD", "-i", t.bridge, "-j", "ACCEPT").Run()
-		exec.Command("iptables", "-A", "FORWARD", "-o", t.bridge, "-j", "ACCEPT").Run()
+		_ = exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", t.subnet, "-j", "MASQUERADE").Run()
+		_ = exec.Command("iptables", "-A", "FORWARD", "-i", t.bridge, "-j", "ACCEPT").Run()
+		_ = exec.Command("iptables", "-A", "FORWARD", "-o", t.bridge, "-j", "ACCEPT").Run()
 	}
 	return nil
 }

@@ -22,7 +22,7 @@ func GenerateID(length int) string {
 		// Fallback to weak random if crypto/rand fails
 		for i := range b {
 			b[i] = byte(time.Now().UnixNano() & 0xff)
-			time.Sleep(1) // ensure nanosecond changes
+			time.Sleep(1 * time.Nanosecond)
 		}
 	}
 	return hex.EncodeToString(b)
@@ -268,10 +268,10 @@ func CopyDir(src, dst string) error {
 			if err != nil {
 				continue
 			}
-			os.Remove(dstPath)
+			_ = os.Remove(dstPath)
 			if err := os.Symlink(target, dstPath); err != nil {
 				if err := EnsureDir(dstPath); err == nil {
-					CopyDir(srcPath, dstPath)
+					_ = CopyDir(srcPath, dstPath)
 				}
 			}
 		} else if info.IsDir() {
@@ -293,7 +293,7 @@ func CopyDir(src, dst string) error {
 
 // WriteFileSafe writes content to a file, creating parent directories.
 func WriteFileSafe(path, content string, mode os.FileMode) error {
-	EnsureDir(filepath.Dir(path))
+	_ = EnsureDir(filepath.Dir(path))
 	return os.WriteFile(path, []byte(content), mode)
 }
 

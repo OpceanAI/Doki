@@ -126,7 +126,7 @@ type NetworkConfig struct {
 
 // NewManager creates a new network manager.
 func NewManager(root string, firewall *FirewallManager, dns *DNSServer) (*Manager, error) {
-	common.EnsureDir(root)
+	_ = common.EnsureDir(root)
 
 	m := &Manager{
 		root:             root,
@@ -144,20 +144,20 @@ func NewManager(root string, firewall *FirewallManager, dns *DNSServer) (*Manage
 
 func (m *Manager) createDefaultNetworks() {
 	// Default bridge network.
-	m.CreateNetwork(&NetworkConfig{
+	_, _ = m.CreateNetwork(&NetworkConfig{
 		Name:   "bridge",
 		Driver: "bridge",
 		Subnet: "172.17.0.0/16",
 	})
 
 	// Host network.
-	m.CreateNetwork(&NetworkConfig{
+	_, _ = m.CreateNetwork(&NetworkConfig{
 		Name:   "host",
 		Driver: "host",
 	})
 
 	// None network.
-	m.CreateNetwork(&NetworkConfig{
+	_, _ = m.CreateNetwork(&NetworkConfig{
 		Name:   "none",
 		Driver: "null",
 	})
@@ -345,9 +345,9 @@ func (m *Manager) Connect(networkID, containerID string, ipAddr string, aliases 
 	// Configure actual networking if container is running.
 	if containerPid > 0 && nw.Driver == "bridge" {
 		if os.Geteuid() == 0 {
-			setupBridgeNetwork(containerPid, nw, ep, m.firewall)
+			_ = setupBridgeNetwork(containerPid, nw, ep, m.firewall)
 		} else {
-			setupRootlessNetworking(containerPid)
+			_ = setupRootlessNetworking(containerPid)
 		}
 	}
 
@@ -376,7 +376,7 @@ func (m *Manager) Disconnect(networkID, containerID string, containerPid int) er
 
 	// Teardown networking if container is running.
 	if containerPid > 0 && nw.Driver == "bridge" {
-		teardownBridgeNetwork(nw, ep, m.firewall)
+		_ = teardownBridgeNetwork(nw, ep, m.firewall)
 	}
 
 	delete(nw.Containers, containerID)
@@ -404,6 +404,7 @@ func (m *Manager) RemoveNetwork(idOrName string) error {
 
 	delete(m.networks, nw.ID)
 	return os.Remove(m.networkPath(nw.ID))
+
 }
 
 // Prune removes all unused networks.
@@ -419,7 +420,7 @@ func (m *Manager) Prune() ([]string, error) {
 			nw.Name != "none" {
 			pruned = append(pruned, nw.Name)
 			delete(m.networks, id)
-			os.Remove(m.networkPath(id))
+			_ = os.Remove(m.networkPath(id))
 		}
 	}
 
@@ -488,11 +489,11 @@ func generateMacAddr() string {
 		if _, err := io.ReadFull(f, randBytes); err != nil {
 			// BUG-18 fix: if /dev/urandom fails, fall back to crypto/rand
 			// so MAC addresses are not all zeros (which causes collisions).
-			crypto_rand.Read(randBytes)
+			_, _ = crypto_rand.Read(randBytes)
 		}
-		f.Close()
+		_ = f.Close()
 	} else {
-		crypto_rand.Read(randBytes)
+		_, _ = crypto_rand.Read(randBytes)
 	}
 	for i := 2; i < 6; i++ {
 		mac[i] = randBytes[i-2]
@@ -679,7 +680,7 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 			if ipNet != nil {
 				ones, _ := ipNet.Mask.Size()
 				gwAddr := fmt.Sprintf("%s/%d", nw.Gateway, ones)
-				exec.Command("ip", "addr", "add", gwAddr, "dev", bridgeName).Run()
+				_ = exec.Command("ip", "addr", "add", gwAddr, "dev", bridgeName).Run()
 			}
 		}
 	}
@@ -723,7 +724,7 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 		ipAddr := fmt.Sprintf("%s/%d", containerIP, prefixLen)
 
 		// Rename interface inside netns.
-		exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+		_ = exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
 			"ip", "link", "set", vethContainer, "name", "eth0").Run()
 
 		// Assign IP.
@@ -733,14 +734,14 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 		}
 
 		// Bring up eth0 and lo.
-		exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+		_ = exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
 			"ip", "link", "set", "eth0", "up").Run()
-		exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+		_ = exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
 			"ip", "link", "set", "lo", "up").Run()
 
 		// Add default route.
 		if gateway != "" {
-			exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
+			_ = exec.Command("nsenter", "--net=/proc/"+netnsFlag+"/ns/net", "--",
 				"ip", "route", "add", "default", "via", gateway).Run()
 		}
 	}
@@ -748,7 +749,7 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 	// 6. Set up port mappings.
 	if firewall != nil && containerIP != "" && ep != nil {
 		for _, pm := range ep.PortMapping {
-			firewall.AddPortMapping(containerIP, int(pm.HostPort), int(pm.ContainerPort), pm.Proto)
+			_ = firewall.AddPortMapping(containerIP, int(pm.HostPort), int(pm.ContainerPort), pm.Proto)
 		}
 	}
 
@@ -783,7 +784,7 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 func teardownBridgeNetwork(nw *Network, ep *Endpoint, firewall *FirewallManager) error {
 	if firewall != nil && ep != nil {
 		for _, pm := range ep.PortMapping {
-			firewall.RemovePortMapping(ep.IPv4Address, int(pm.HostPort), int(pm.ContainerPort), pm.Proto)
+			_ = firewall.RemovePortMapping(ep.IPv4Address, int(pm.HostPort), int(pm.ContainerPort), pm.Proto)
 		}
 	}
 	// Clean up the container-side veth interface so it does not leak across container restarts.

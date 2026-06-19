@@ -145,7 +145,7 @@ func (p *ProgressTracker) writeToWriter(event ProgressEvent) {
 	case "complete":
 		prefix = "==> "
 	}
-	fmt.Fprintf(p.writer, "%s%s\n", prefix, event.Message)
+	_, _ = fmt.Fprintf(p.writer, "%s%s\n", prefix, event.Message)
 }
 
 // BuildProgressWriter is an io.Writer that captures build output and reports progress.

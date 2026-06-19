@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,7 +35,7 @@ func ParseDockerignore(path string) (*Dockerignore, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	di := &Dockerignore{}
 	scanner := bufio.NewScanner(f)
@@ -437,8 +436,6 @@ func detectHeredoc(line, instType string) (string, bool) {
 	return delim, stripTabs
 }
 
-var validVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
 func substituteVarsInSlice(args []string, envMap, argDefaults, buildArgs map[string]string) []string {
 	result := make([]string, len(args))
 	for i, arg := range args {
@@ -655,12 +652,12 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 		if err != nil {
 			return fmt.Errorf("create context temp dir: %w", err)
 		}
-		defer os.RemoveAll(tmpDir)
+		defer func() { _ = os.RemoveAll(tmpDir) }()
 		f, err := os.Open(cfg.ContextTar)
 		if err != nil {
 			return fmt.Errorf("open context tar: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		if err := ExtractTar(f, tmpDir); err != nil {
 			return fmt.Errorf("extract context tar: %w", err)
 		}
@@ -733,7 +730,7 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 	var workDirs []string
 	defer func() {
 		for _, d := range workDirs {
-			os.RemoveAll(d)
+			_ = os.RemoveAll(d)
 		}
 	}()
 
@@ -872,10 +869,10 @@ func (b *Builder) extractBaseImageToDir(imageRef, destDir string) error {
 			return fmt.Errorf("open layer %s: %w", layerDigest, err)
 		}
 		if err := ExtractTar(f, destDir); err != nil {
-			f.Close()
+			_ = f.Close()
 			return fmt.Errorf("extract layer %s: %w", layerDigest, err)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	return nil
@@ -1014,52 +1011,5 @@ func ListSupportedInstructions() []string {
 		"ADD", "COPY", "ENTRYPOINT", "VOLUME", "USER",
 		"WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL",
 		"HEALTHCHECK", "SHELL", "MAINTAINER",
-	}
-}
-
-// executeInstruction is the old dispatch from Build(); preserved for backwards compat
-// but now Build() uses ExecuteStage instead.
-func (b *Builder) executeInstruction(stage *Stage, inst *Instruction) error {
-	switch inst.Type {
-	case "RUN":
-		return b.executeRun(stage, inst, "/", "/")
-	case "COPY":
-		return b.executeCopy(stage, inst, ".", "/")
-	case "ADD":
-		return b.executeAdd(stage, inst, ".", "/")
-	case "ENV":
-		return b.executeEnv(stage, inst)
-	case "WORKDIR":
-		var dir string
-		if len(inst.Args) > 0 {
-			dir = inst.Args[0]
-		}
-		return b.executeWorkdir(stage, inst, "/", &dir)
-	case "USER":
-		return b.executeUser(stage, inst)
-	case "EXPOSE":
-		return b.executeExpose(stage, inst)
-	case "LABEL":
-		return b.executeLabel(stage, inst)
-	case "CMD":
-		return b.executeCmd(stage, inst)
-	case "ENTRYPOINT":
-		return b.executeEntrypoint(stage, inst)
-	case "VOLUME":
-		return b.executeVolume(stage, inst)
-	case "HEALTHCHECK":
-		return b.executeHealthcheck(stage, inst)
-	case "STOPSIGNAL":
-		return b.executeStopsignal(stage, inst)
-	case "SHELL":
-		return b.executeShell(stage, inst)
-	case "ARG":
-		return b.executeArg(stage, inst)
-	case "ONBUILD":
-		return b.executeOnbuild(stage, inst)
-	case "MAINTAINER":
-		return b.executeMaintainer(stage, inst)
-	default:
-		return nil
 	}
 }

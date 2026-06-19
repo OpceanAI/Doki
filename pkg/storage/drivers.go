@@ -28,14 +28,13 @@ func validateLayerID(id string) error {
 type BtrfsDriver struct {
 	root    string
 	subvols map[string]string
-	mu      sync.RWMutex
 }
 
 func NewBtrfsDriver(root string) (*BtrfsDriver, error) {
 	if !isBtrfs(root) {
 		return nil, fmt.Errorf("btrfs: %s is not a btrfs filesystem", root)
 	}
-	common.EnsureDir(root)
+	_ = common.EnsureDir(root)
 	return &BtrfsDriver{root: root, subvols: make(map[string]string)}, nil
 }
 
@@ -55,7 +54,7 @@ func (d *BtrfsDriver) Get(id, _ string) (string, error) {
 		return "", common.NewErrNotFound("layer", id)
 	}
 	mountPath := filepath.Join(d.root, "mnt", id)
-	common.EnsureDir(mountPath)
+	_ = common.EnsureDir(mountPath)
 	if err := mountSubvol(subvolPath, mountPath); err != nil {
 		return "", err
 	}
@@ -67,7 +66,7 @@ func (d *BtrfsDriver) Put(id, _ string) (string, error) {
 		return "", err
 	}
 	mountPath := filepath.Join(d.root, "mnt", id)
-	unmount(mountPath)
+	_ = unmount(mountPath)
 	return mountPath, nil
 }
 
@@ -97,7 +96,6 @@ type ZFSDriver struct {
 	root      string
 	pool      string
 	fsPrefix  string
-	mu        sync.RWMutex
 }
 
 func NewZFSDriver(root, pool, fsPrefix string) (*ZFSDriver, error) {
@@ -120,7 +118,7 @@ func (d *ZFSDriver) Get(id, _ string) (string, error) {
 	}
 	fsName := d.fsPrefix + "/" + id
 	mountPath := filepath.Join(d.root, id)
-	common.EnsureDir(mountPath)
+	_ = common.EnsureDir(mountPath)
 	cmd := exec.Command("zfs", "mount", fsName)
 	if err := cmd.Run(); err != nil {
 		return "", err
@@ -164,11 +162,10 @@ func (d *ZFSDriver) GetMetadata(id string) (map[string]string, error) {
 
 type VFSDriver struct {
 	root string
-	mu   sync.RWMutex
 }
 
 func NewVFSDriver(root string) (*VFSDriver, error) {
-	common.EnsureDir(root)
+	_ = common.EnsureDir(root)
 	return &VFSDriver{root: root}, nil
 }
 
@@ -248,7 +245,7 @@ func (g *GarbageCollector) collect() {
 		return
 	}
 	for _, id := range unused {
-		g.store.Remove(id)
+		_ = g.store.Remove(id)
 	}
 }
 
@@ -325,7 +322,7 @@ func (g *GarbageCollector) findUnusedLayers() ([]string, error) {
 // ─── Helpers ───────────────────────────────────────────────────────
 
 func mountSubvol(src, dst string) error {
-	common.EnsureDir(dst)
+	_ = common.EnsureDir(dst)
 	cmd := exec.Command("mount", "-o", "subvol="+filepath.Base(src), src, dst)
 	return cmd.Run()
 }

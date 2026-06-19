@@ -102,7 +102,7 @@ func (c *IPCClient) Exec(ctx context.Context, id string, cmd []string, env []str
 	// Close channel when container exits.
 	go func() {
 		defer func() {
-			recover() // protect against send on closed channel
+			_ = recover() // protect against send on closed channel
 			close(events)
 		}()
 		for event := range events {
@@ -188,8 +188,8 @@ func (c *IPCClient) sendAndWait(req *Request, expectedType MessageType) (*Respon
 		return nil, err
 	}
 	// Read response with timeout.
-	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	defer c.conn.SetReadDeadline(time.Time{})
+	_ = c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 	if !c.scanner.Scan() {
 		return nil, fmt.Errorf("read response: %w", c.scanner.Err())
 	}

@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1
+# escape=\
+
+# ============================================================
+# Stage 1: Builder — compile/prepare application
+# ============================================================
+FROM alpine:3.19 AS builder
+
+ARG APP_VERSION=1.0.0
+ARG BUILD_ENV=production
+
+ENV BUILD_TIME=2026-01-01
+
+WORKDIR /build
+
+# Copy source files from context
+COPY src/app.sh /build/app.sh
+RUN chmod +x /build/app.sh
+
+# Create version file using build arg
+RUN echo "version=${APP_VERSION}" > /build/version.txt && \
+    echo "env=${BUILD_ENV}" >> /build/version.txt && \
+    echo "time=${BUILD_TIME}" >> /build/version.txt
+
+# Test variable substitution
+RUN echo "Building version ${APP_VERSION} in ${BUILD_ENV} mode"
+
+# ============================================================
+# Stage 2: Runtime — minimal image with just what we need
+# ============================================================
+FROM alpine:3.19 AS runtime
+
+ARG APP_VERSION=1.0.0
+
+LABEL maintainer="OpceanAI"
+LABEL version="${APP_VERSION}"
+LABEL description="Complex multi-stage test app"
+
+ENV APP_VERSION=${APP_VERSION}
+ENV APP_ENV=production
+ENV APP_HOME=/opt/app
+
+WORKDIR /opt/app
+
+# Copy artifacts from builder
+COPY --from=builder /build/app.sh /opt/app/app.sh
+COPY --from=builder /build/version.txt /opt/app/config.txt
+COPY config/app.conf /opt/app/app.conf
+
+RUN chmod +x /opt/app/app.sh && \
+    echo "runtime_setup=done" >> /opt/app/config.txt
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s \
+    CMD echo OK || exit 1
+
+CMD ["/opt/app/app.sh"]

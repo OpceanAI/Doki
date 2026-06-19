@@ -1,0 +1,113 @@
+\contentsline {chapter}{Preface}{3}{chapter*.1}%
+\contentsline {chapter}{\numberline {1}Executive Summary}{1}{chapter.1}%
+\contentsline {section}{\numberline {1.1}What is Doki?}{1}{section.1.1}%
+\contentsline {section}{\numberline {1.2}The Problem}{1}{section.1.2}%
+\contentsline {section}{\numberline {1.3}Key Achievements}{1}{section.1.3}%
+\contentsline {section}{\numberline {1.4}Impact}{2}{section.1.4}%
+\contentsline {section}{\numberline {1.5}Document Structure}{2}{section.1.5}%
+\contentsline {chapter}{\numberline {2}Introduction}{3}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Background}{3}{section.2.1}%
+\contentsline {section}{\numberline {2.2}The Mobile Containerization Problem}{3}{section.2.2}%
+\contentsline {section}{\numberline {2.3}The Doki Approach}{4}{section.2.3}%
+\contentsline {section}{\numberline {2.4}Design Principles}{4}{section.2.4}%
+\contentsline {section}{\numberline {2.5}Contributions}{5}{section.2.5}%
+\contentsline {section}{\numberline {2.6}Document Organization}{5}{section.2.6}%
+\contentsline {chapter}{\numberline {3}System Architecture}{6}{chapter.3}%
+\contentsline {section}{\numberline {3.1}Overview}{6}{section.3.1}%
+\contentsline {section}{\numberline {3.2}Daemon Architecture}{6}{section.3.2}%
+\contentsline {subsection}{\numberline {3.2.1}Startup Sequence}{6}{subsection.3.2.1}%
+\contentsline {subsection}{\numberline {3.2.2}State Management}{7}{subsection.3.2.2}%
+\contentsline {section}{\numberline {3.3}CLI Architecture}{7}{section.3.3}%
+\contentsline {subsection}{\numberline {3.3.1}Command Structure}{7}{subsection.3.3.1}%
+\contentsline {subsection}{\numberline {3.3.2}Flag Parsing}{8}{subsection.3.3.2}%
+\contentsline {section}{\numberline {3.4}Communication Protocol}{8}{section.3.4}%
+\contentsline {section}{\numberline {3.5}Container Lifecycle}{9}{section.3.5}%
+\contentsline {section}{\numberline {3.6}Isolation Runtime Selection}{9}{section.3.6}%
+\contentsline {chapter}{\numberline {4}Subsystems and Components}{10}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Image Management}{10}{section.4.1}%
+\contentsline {subsection}{\numberline {4.1.1}Image Storage Layout}{10}{subsection.4.1.1}%
+\contentsline {subsection}{\numberline {4.1.2}Image Pull Process}{10}{subsection.4.1.2}%
+\contentsline {subsection}{\numberline {4.1.3}Search and Registry Interaction}{10}{subsection.4.1.3}%
+\contentsline {section}{\numberline {4.2}Container Runtime}{11}{section.4.2}%
+\contentsline {subsection}{\numberline {4.2.1}Proot Runner}{11}{subsection.4.2.1}%
+\contentsline {subsection}{\numberline {4.2.2}Namespace Runner}{11}{subsection.4.2.2}%
+\contentsline {subsection}{\numberline {4.2.3}Native Runner}{12}{subsection.4.2.3}%
+\contentsline {section}{\numberline {4.3}Dokifile Builder}{12}{section.4.3}%
+\contentsline {subsection}{\numberline {4.3.1}Supported Instructions}{12}{subsection.4.3.1}%
+\contentsline {subsection}{\numberline {4.3.2}Layer Cache}{12}{subsection.4.3.2}%
+\contentsline {section}{\numberline {4.4}Compose Engine}{12}{section.4.4}%
+\contentsline {subsection}{\numberline {4.4.1}Service Dependencies}{14}{subsection.4.4.1}%
+\contentsline {subsection}{\numberline {4.4.2}Profile Filtering}{14}{subsection.4.4.2}%
+\contentsline {chapter}{\numberline {5}Security and Isolation}{15}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Isolation Framework}{15}{section.5.1}%
+\contentsline {section}{\numberline {5.2}Isolation Levels}{15}{section.5.2}%
+\contentsline {section}{\numberline {5.3}Seccomp Filtering}{15}{section.5.3}%
+\contentsline {subsection}{\numberline {5.3.1}Default Deny List}{15}{subsection.5.3.1}%
+\contentsline {subsection}{\numberline {5.3.2}Custom Profiles}{15}{subsection.5.3.2}%
+\contentsline {section}{\numberline {5.4}Linux Capabilities}{17}{section.5.4}%
+\contentsline {section}{\numberline {5.5}AppArmor}{17}{section.5.5}%
+\contentsline {section}{\numberline {5.6}User Namespaces}{17}{section.5.6}%
+\contentsline {section}{\numberline {5.7}Isolation Level Selection}{17}{section.5.7}%
+\contentsline {chapter}{\numberline {6}Networking}{19}{chapter.6}%
+\contentsline {section}{\numberline {6.1}Network Architecture}{19}{section.6.1}%
+\contentsline {section}{\numberline {6.2}Bridge Networking}{19}{section.6.2}%
+\contentsline {subsection}{\numberline {6.2.1}Port Mapping}{20}{subsection.6.2.1}%
+\contentsline {section}{\numberline {6.3}Internal DNS}{20}{section.6.3}%
+\contentsline {subsection}{\numberline {6.3.1}Port Selection}{20}{subsection.6.3.1}%
+\contentsline {subsection}{\numberline {6.3.2}DNS Resolution Flow}{20}{subsection.6.3.2}%
+\contentsline {section}{\numberline {6.4}DokiLink-Lite Mesh Networking}{21}{section.6.4}%
+\contentsline {subsection}{\numberline {6.4.1}Encryption Layers}{21}{subsection.6.4.1}%
+\contentsline {subsection}{\numberline {6.4.2}DokiLink Sequence Diagram}{21}{subsection.6.4.2}%
+\contentsline {subsection}{\numberline {6.4.3}Peer Discovery}{22}{subsection.6.4.3}%
+\contentsline {subsection}{\numberline {6.4.4}Gossip Protocol}{22}{subsection.6.4.4}%
+\contentsline {section}{\numberline {6.5}Rootless Networking (pasta)}{22}{section.6.5}%
+\contentsline {section}{\numberline {6.6}IPv6 Support}{22}{section.6.6}%
+\contentsline {subsection}{\numberline {6.6.1}Reverse DNS}{22}{subsection.6.6.1}%
+\contentsline {subsection}{\numberline {6.6.2}Dual-Stack Configuration}{23}{subsection.6.6.2}%
+\contentsline {chapter}{\numberline {7}Storage}{24}{chapter.7}%
+\contentsline {section}{\numberline {7.1}Storage Drivers}{24}{section.7.1}%
+\contentsline {section}{\numberline {7.2}Overlay Filesystem}{24}{section.7.2}%
+\contentsline {subsection}{\numberline {7.2.1}Layer Structure}{24}{subsection.7.2.1}%
+\contentsline {section}{\numberline {7.3}Image Layer Management}{24}{section.7.3}%
+\contentsline {subsection}{\numberline {7.3.1}Layer Deduplication}{25}{subsection.7.3.1}%
+\contentsline {section}{\numberline {7.4}Volume Management}{25}{section.7.4}%
+\contentsline {subsection}{\numberline {7.4.1}Volume Types}{25}{subsection.7.4.1}%
+\contentsline {section}{\numberline {7.5}Filesystem Probes}{26}{section.7.5}%
+\contentsline {subsection}{\numberline {7.5.1}Detection Probes}{26}{subsection.7.5.1}%
+\contentsline {chapter}{\numberline {8}Development and Build System}{27}{chapter.8}%
+\contentsline {section}{\numberline {8.1}Build Process}{27}{section.8.1}%
+\contentsline {subsection}{\numberline {8.1.1}Compilation Targets}{27}{subsection.8.1.1}%
+\contentsline {subsection}{\numberline {8.1.2}Android ARMv7 Build Fix}{27}{subsection.8.1.2}%
+\contentsline {section}{\numberline {8.2}Dokifile Build System}{28}{section.8.2}%
+\contentsline {subsection}{\numberline {8.2.1}Build Pipeline}{28}{subsection.8.2.1}%
+\contentsline {section}{\numberline {8.3}Compose Orchestration}{28}{section.8.3}%
+\contentsline {subsection}{\numberline {8.3.1}Compose File Structure}{28}{subsection.8.3.1}%
+\contentsline {subsection}{\numberline {8.3.2}Service Dependency Resolution}{29}{subsection.8.3.2}%
+\contentsline {chapter}{\numberline {9}Evaluation and Metrics}{30}{chapter.9}%
+\contentsline {section}{\numberline {9.1}Evaluation Methodology}{30}{section.9.1}%
+\contentsline {section}{\numberline {9.2}Container Startup Time}{30}{section.9.2}%
+\contentsline {section}{\numberline {9.3}Memory Usage}{30}{section.9.3}%
+\contentsline {section}{\numberline {9.4}Network Throughput}{31}{section.9.4}%
+\contentsline {section}{\numberline {9.5}Image Layer Extraction}{31}{section.9.5}%
+\contentsline {section}{\numberline {9.6}Binary Size}{32}{section.9.6}%
+\contentsline {section}{\numberline {9.7}Summary}{32}{section.9.7}%
+\contentsline {chapter}{\numberline {10}Future Work and Roadmap}{33}{chapter.10}%
+\contentsline {section}{\numberline {10.1}Short-term (v0.10)}{33}{section.10.1}%
+\contentsline {section}{\numberline {10.2}Medium-term (v0.11)}{33}{section.10.2}%
+\contentsline {section}{\numberline {10.3}Long-term (v1.0)}{34}{section.10.3}%
+\contentsline {section}{\numberline {10.4}Feature Priority Matrix}{34}{section.10.4}%
+\contentsline {section}{\numberline {10.5}Development Timeline}{34}{section.10.5}%
+\contentsline {chapter}{\numberline {11}Conclusions}{36}{chapter.11}%
+\contentsline {section}{\numberline {11.1}Summary of Contributions}{36}{section.11.1}%
+\contentsline {section}{\numberline {11.2}Key Metrics}{36}{section.11.2}%
+\contentsline {section}{\numberline {11.3}Limitations}{36}{section.11.3}%
+\contentsline {section}{\numberline {11.4}Future Impact}{37}{section.11.4}%
+\def \@chapapp {\appendixname }
+\contentsline {chapter}{\numberline {A}Appendix}{40}{appendix.A}%
+\contentsline {section}{\numberline {A.1}A. Complete CLI Command Reference}{40}{section.A.1}%
+\contentsline {section}{\numberline {A.2}B. Configuration Reference}{40}{section.A.2}%
+\contentsline {section}{\numberline {A.3}C. Environment Variables}{41}{section.A.3}%
+\contentsline {section}{\numberline {A.4}D. Release Assets}{41}{section.A.4}%
+\contentsline {section}{\numberline {A.5}E. Glossary of Terms}{42}{section.A.5}%
+\contentsline {section}{\numberline {A.6}F. Error Codes Reference}{42}{section.A.6}%
+\providecommand \tocbasic@end@toc@file {}\tocbasic@end@toc@file 

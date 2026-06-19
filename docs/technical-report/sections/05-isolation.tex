@@ -1,0 +1,143 @@
+% 05-isolation.tex
+\chapter{Security and Isolation}
+\label{ch:isolation}
+
+\section{Isolation Framework}
+\label{sec:isolation-framework}
+
+Doki's isolation framework provides 12 levels of process isolation,
+from hardware-enforced microVMs to lightweight syscall interception.
+The framework is implemented as a registry of runtime modules, each
+providing a different isolation mechanism. At startup, the daemon
+probes the host system and selects the strongest available runtime.
+
+\section{Isolation Levels}
+\label{sec:isolation-levels}
+
+The following table summarizes the 12 isolation levels, their
+mechanisms, and their applicability to different environments.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Doki isolation levels with their mechanisms and
+   applicable environments.}
+  \label{tab:isolation-levels}
+  \small
+  \begin{tabularx}{\textwidth}{l l l X}
+    \toprule
+    \textbf{Level} & \textbf{Runtime} & \textbf{Mechanism} & \textbf{Applicable} \\
+    \midrule
+    1  & microVM    & Hardware virtualization (Firecracker/crosvm) & Cloud, server \\
+    2  & gVisor     & User-space kernel (Sentry) & Server, restricted kernel \\
+    3  & Namespaces & Kernel namespaces + cgroups & Linux with root \\
+    4  & Chroot     & Filesystem isolation & Linux with root \\
+    5  & Proot      & ptrace syscall interception & Android, rootless \\
+    6  & PKdroid    & Android-specific proot & Android/Termux \\
+    7  & QEMU-user  & User-mode emulation & Cross-architecture \\
+    8  & FEX-Emu    & x86 emulation on ARM & x86 binaries on ARM \\
+    9  & Legacy32   & 32-bit compatibility & 32-bit binaries \\
+    10 & Sysbox     & Rootless container runtime & Server, rootless \\
+    11 & WASM       & WebAssembly sandbox & Any platform \\
+    12 & Native     & Direct execution & Trusted environments \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Seccomp Filtering}
+\label{sec:seccomp}
+
+Doki uses seccomp (secure computing mode) to restrict the system calls
+available to container processes. The default seccomp profile allows
+approximately 80 syscalls, including modern interfaces such as
+\texttt{io\_uring\_*}, \texttt{pidfd\_*}, \texttt{rseq},
+\texttt{userfaultfd}, \texttt{copy\_file\_range}, and
+\texttt{landlock\_*}.
+
+\subsection{Default Deny List}
+\label{sec:default-deny}
+
+The following syscalls are denied by default, regardless of the
+isolation level:
+
+\begin{codebox}[title={Syscalls denied by default seccomp profile}]{text}
+init\_module, finit\_module, delete\_module,
+kexec\_load, kexec\_file\_load,
+iopl, ioperm, kcmp,
+process\_vm\_readv, process\_vm\_writev
+\end{codebox}
+
+These syscalls are blocked because they can be used to load kernel
+modules, modify I/O ports, or access the memory of other processes,
+all of which could compromise the host system.
+
+\subsection{Custom Profiles}
+\label{sec:custom-profiles}
+
+Users can customize the seccomp profile through the container
+configuration:
+
+\begin{codebox}[title={Custom seccomp configuration}]{json}
+\{
+  "SecurityOpt": \{
+    "seccomp": \{
+      "defaultAction": "SCMP\_ACT\_ERRNO",
+      "architectures": ["SCMP\_ARCH\_X86\_64"],
+      "syscalls": [
+        \{
+          "names": ["read", "write", "open", "close"],
+          "action": "SCMP\_ACT\_ALLOW"
+        \}
+      ]
+    \}
+  \}
+\}
+\end{codebox}
+
+\section{Linux Capabilities}
+\label{sec:capabilities}
+
+Doki manages Linux capabilities through the container configuration.
+By default, containers run with a reduced capability set that excludes
+dangerous operations such as \texttt{CAP\_SYS\_MODULE},
+\texttt{CAP\_SYS\_RAWIO}, and \texttt{CAP\_SYS\_ADMIN}.
+
+\section{AppArmor}
+\label{sec:apparmor}
+
+When available on the host system, Doki applies AppArmor profiles to
+container processes. AppArmor provides mandatory access control that
+restricts file access, network operations, and capability usage beyond
+what seccomp alone provides.
+
+\section{User Namespaces}
+\label{sec:user-namespaces}
+
+On systems that support user namespaces, Doki maps container user IDs
+to unprivileged host user IDs. This provides an additional isolation
+layer even when running as a non-root user, as container processes
+cannot access files owned by the host user outside their mapped range.
+
+\section{Isolation Level Selection}
+\label{sec:level-selection}
+
+The runtime registry in \texttt{pkg/runtime/registry.go} implements
+the following selection algorithm:
+
+\begin{enumerate}[leftmargin=*, itemsep=3pt]
+  \item Probe for microVM support (check for Firecracker/crosvm
+        binaries and KVM availability)
+  \item Check for gVisor (\texttt{runsc}) availability
+  \item Try unshare with all six namespace types
+  \item Attempt chroot (requires root or \texttt{chroot} capability)
+  \item Fall back to proot (always available on Linux)
+  \item If on Android, try PKdroid-specific optimizations
+  \item As last resort, use native execution
+\end{enumerate}
+
+The user can override automatic selection with the
+\texttt{--runtime} flag:
+
+\begin{codebox}[title={Forcing a specific runtime}]{bash}
+doki run --runtime proot alpine:3.18 sh
+doki run --runtime native ubuntu:22.04 bash
+\end{codebox}

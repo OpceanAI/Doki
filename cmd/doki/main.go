@@ -2,13 +2,11 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/OpceanAI/Doki/internal/proot"
 	"github.com/OpceanAI/Doki/pkg/cli"
@@ -1567,32 +1565,6 @@ func cleanIDs(args []string) []string {
 		ids = append(ids, a)
 	}
 	return ids
-}
-
-// forEachID iterates over non-flag arguments and calls fn for each.
-func forEachID(args []string, fn func(id string) error) {
-	ids := cleanIDs(args)
-	for _, id := range ids {
-		if err := fn(id); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		}
-	}
-}
-
-// printTable prints aligned tabular output.
-func printTable(headers []string, rows [][]string) {
-	w := tabwriter.NewWriter(os.Stdout, 14, 0, 1, ' ', 0)
-	fmt.Fprintln(w, strings.Join(headers, "\t"))
-	for _, row := range rows {
-		fmt.Fprintln(w, strings.Join(row, "\t"))
-	}
-	w.Flush()
-}
-
-// streamResponse copies a streaming response body to stdout and closes it.
-func streamResponse(body io.ReadCloser) {
-	defer body.Close()
-	io.Copy(os.Stdout, body)
 }
 
 // runWithDistro runs a command inside a predefined distro rootfs using proot.

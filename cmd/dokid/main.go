@@ -65,6 +65,7 @@ var (
 	rateLimitPerSec float64
 	rateLimitBurst  int
 	dnsListen       string
+	showVersion     bool
 )
 
 func init() {
@@ -93,7 +94,13 @@ func main() {
 	flag.Float64Var(&rateLimitPerSec, "rate-limit", 100, "Rate limit requests per second")
 	flag.IntVar(&rateLimitBurst, "rate-burst", 200, "Rate limit burst size")
 	flag.StringVar(&dnsListen, "dns-listen", dnsListen, "DNS server listen address (default: 127.0.0.11:8053 on Android, 127.0.0.11:53 on Linux)")
+	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("dokid version %s (API %s, min API %s)\n", common.Version, common.DokiAPIVersion, common.DokiMinClient)
+		os.Exit(0)
+	}
 
 	applyEnvOverrides()
 
@@ -219,9 +226,9 @@ func main() {
 						"install_id", identity.ShortID(),
 						"listen", meshListenAddr(),
 					)
-					meshStop = func() {
-						mesh.Stop()
-						cancel()
+				meshStop = func() {
+					_ = mesh.Stop()
+					cancel()
 					}
 				}
 			}

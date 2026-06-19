@@ -147,19 +147,9 @@ func AppendAndroidBinds(args []string) []string {
 func BuildEnv(userEnv []string, imageEnv []string) []string {
 	env := common.StripHostEnv(os.Environ())
 	env = append(env, common.AndroidEnv()...)
-	for _, e := range imageEnv {
-		env = append(env, e)
-	}
-	for _, e := range userEnv {
-		env = append(env, e)
-	}
+	env = append(env, imageEnv...)
+	env = append(env, userEnv...)
 	return env
-}
-
-// buildProotEnv is the legacy alias kept for callers that don't separate
-// image env from user env. It delegates to BuildEnv with the legacy merge.
-func buildProotEnv(userEnv []string) []string {
-	return BuildEnv(userEnv, nil)
 }
 
 // UnsetProotKillers clears the LD_PRELOAD family and the Termux/Android

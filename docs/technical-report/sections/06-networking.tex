@@ -1,0 +1,334 @@
+% 06-networking.tex
+\chapter{Networking}
+\label{ch:networking}
+
+\section{Network Architecture}
+\label{sec:network-architecture}
+
+Doki's networking stack provides bridge networks, CNI plugin support,
+port mapping, an internal DNS server, and DokiLink-Lite peer-to-peer
+mesh networking. The stack auto-detects available capabilities and
+adjusts behavior accordingly.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.5cm,
+    every node/.style={font=\sffamily\footnotesize},
+  ]
+    % Bridge network (left side)
+    \node[comp, minimum width=3.5cm] (bridge) {doki0 Bridge\\{\scriptsize\color{textgray} 10.0.0.0/24}};
+    \node[compSm, below left=0.5cm and 0.2cm of bridge] (c1) {Container 1\\{\scriptsize\color{textgray} 10.0.0.2}};
+    \node[compSm, below=0.5cm of bridge] (c2) {Container 2\\{\scriptsize\color{textgray} 10.0.0.3}};
+    \node[compSm, below right=0.5cm and 0.2cm of bridge] (c3) {Container 3\\{\scriptsize\color{textgray} 10.0.0.4}};
+
+    \draw[arrDash] (bridge) -- (c1);
+    \draw[arrDash] (bridge) -- (c2);
+    \draw[arrDash] (bridge) -- (c3);
+
+    % DNS (middle)
+    \node[compAlt, right=1cm of bridge] (dns) {DNS Server\\{\scriptsize\color{textgray} 127.0.0.11:8053}};
+
+    % DokiLink (right)
+    \node[compTeal, right=1cm of dns] (mesh) {DokiLink\\{\scriptsize\color{textgray} TLS 1.3}};
+
+    \draw[arr] (bridge) -- (dns);
+    \draw[arr] (dns) -- (mesh);
+
+    % Region
+    \node[region, fit=(bridge)(c1)(c3), label={[annotBold]above:Local Bridge Network}] {};
+  \end{tikzpicture}
+  \caption{Doki networking components: bridge network, DNS server,
+    and DokiLink mesh.}
+  \label{fig:networking-overview}
+\end{figure}
+
+\section{Bridge Networking}
+\label{sec:bridge}
+
+The default network type is a Linux bridge (\texttt{doki0}) with NAT,
+DNS, and port mapping. When running on Android without root, Doki
+falls back to socat-based port forwarding.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.6cm,
+    every node/.style={font=\sffamily\footnotesize},
+  ]
+    % Host network
+    \node[rectangle, rounded corners=3pt, draw=nodeblue!50, fill=fillblue!50, minimum width=3cm, minimum height=0.7cm, text=textdark, align=center, inner sep=4pt] (host) {Host Network};
+
+    % Bridge
+    \node[rectangle, rounded corners=3pt, draw=nodeorange!60, fill=fillorange!30, minimum width=3.5cm, minimum height=0.7cm, text=textdark, align=center, inner sep=4pt, below=0.8cm of host] (bridge) {doki0 Bridge\\{\scriptsize\color{textgray} 10.0.0.0/24}};
+
+    % Containers
+    \node[rectangle, rounded corners=2pt, draw=nodelteal!50, fill=fillteal!30, minimum width=1.8cm, minimum height=0.6cm, text=textdark, align=center, inner sep=3pt, below left=0.8cm and 0.3cm of bridge] (c1) {Container 1\\{\scriptsize\color{textgray} .0.2}};
+    \node[rectangle, rounded corners=2pt, draw=nodelteal!50, fill=fillteal!30, minimum width=1.8cm, minimum height=0.6cm, text=textdark, align=center, inner sep=3pt, below=0.8cm of bridge] (c2) {Container 2\\{\scriptsize\color{textgray} .0.3}};
+    \node[rectangle, rounded corners=2pt, draw=nodelteal!50, fill=fillteal!30, minimum width=1.8cm, minimum height=0.6cm, text=textdark, align=center, inner sep=3pt, below right=0.8cm and 0.3cm of bridge] (c3) {Container 3\\{\scriptsize\color{textgray} .0.4}};
+
+    % Port mapping
+    \node[rectangle, rounded corners=2pt, draw=nodepurple!50, fill=fillpurple!30, minimum width=2cm, minimum height=0.6cm, text=textdark, align=center, inner sep=3pt, left=1.5cm of c1] (port) {Port Mapping\\{\scriptsize\color{textgray} 8080$\to$80}};
+
+    % NAT
+    \node[rectangle, rounded corners=2pt, draw=nodecoral!50, fill=fillcoral!30, minimum width=1.5cm, minimum height=0.6cm, text=textdark, align=center, inner sep=3pt, right=1.5cm of c3] (nat) {NAT\\{\scriptsize\color{textgray} masquerade}};
+
+    % Arrows
+    \draw[arr] (host) -- (bridge);
+    \draw[arrDash] (bridge) -- (c1);
+    \draw[arrDash] (bridge) -- (c2);
+    \draw[arrDash] (bridge) -- (c3);
+    \draw[arr] (port) -- (c1);
+    \draw[arr] (c3) -- (nat);
+
+    % Labels
+    \node[annot, above right=0.1cm and 0.2cm of host.north east] {\textbf{Host}};
+    \node[annot, below=0.2cm of nat] {to internet};
+  \end{tikzpicture}
+  \caption{Network topology showing the bridge, containers, port mapping, and NAT.}
+  \label{fig:network-topology}
+\end{figure}
+
+\subsection{Port Mapping}
+\label{sec:port-mapping}
+
+Port mapping rules are applied to both the PREROUTING chain (for
+external traffic) and the OUTPUT chain (for locally-originated
+traffic). This ensures that port mappings work correctly regardless
+of where the connection originates.
+
+The nftables implementation constructs rules in the following format:
+
+\begin{codebox}[title={Port mapping rule structure}]{text}
+iptables -t nat -A DOKI -p tcp --dport [host\_port] \\
+  -j DNAT --to-destination [container\_ip]:[container\_port]
+\end{codebox}
+
+\section{Internal DNS}
+\label{sec:internal-dns}
+
+Doki runs an internal DNS server that resolves container names to IP
+addresses. The DNS server supports A, AAAA, and PTR records with an
+LRU cache of 1024 entries and a 5-minute TTL.
+
+\subsection{Port Selection}
+\label{sec:dns-port}
+
+On Android, the DNS server listens on \texttt{127.0.0.11:8053}
+instead of the standard port 53, which is blocked by SELinux policies.
+The \texttt{resolv.conf} generation uses
+\texttt{net.SplitHostPort()} to strip the port number, since
+\texttt{resolv.conf} does not support port specifications.
+
+\subsection{DNS Resolution Flow}
+\label{sec:dns-resolution}
+
+When a container performs a DNS lookup, the following steps occur:
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.5cm,
+    every node/.style={font=\sffamily\footnotesize},
+    dnsStep/.style={
+      rectangle, rounded corners=2pt,
+      draw=nodeblue!60, fill=fillblue,
+      minimum width=2.5cm, minimum height=0.7cm,
+      text=textdark, align=center, inner sep=4pt
+    }
+  ]
+    \node[dnsStep] (query) {1. Query\\{\scriptsize\color{textgray} from container}};
+    \node[dnsStep, right=0.8cm of query] (cache) {2. Cache\\{\scriptsize\color{textgray} lookup}};
+    \node[dnsStep, right=0.8cm of cache] (miss) {3. Cache\\{\scriptsize\color{textgray} miss}};
+    \node[dnsStep, right=0.8cm of miss] (upstream) {4. Upstream\\{\scriptsize\color{textgray} DNS query}};
+    \node[dnsStep, right=0.8cm of upstream] (tcp) {5. TCP\\{\scriptsize\color{textgray} retry (RFC 5966)}};
+    \node[dnsStep, right=0.8cm of tcp] (response) {6. Cache +\\{\scriptsize\color{textgray} return}};
+
+    \draw[arr] (query) -- (cache);
+    \draw[arr] (cache) -- (miss);
+    \draw[arr] (miss) -- (upstream);
+    \draw[arr] (upstream) -- (tcp);
+    \draw[arr] (tcp) -- (response);
+
+    % Cache hit arrow
+    \draw[arrDash, nodeorange] (cache.south) -- ++(0,-0.5)
+      node[below, font=\sffamily\tiny, text=nodeorange] {cache hit}
+      -- ++(2.5,0) |- (response.south);
+  \end{tikzpicture}
+  \caption{DNS resolution flow with cache and TCP fallback.}
+  \label{fig:dns-flow}
+\end{figure}
+
+When a container performs a DNS lookup, the following steps occur:
+
+\begin{enumerate}[leftmargin=*, itemsep=3pt]
+  \item The query arrives at \texttt{127.0.0.11:8053}
+  \item The server checks the LRU cache for a recent response
+  \item On cache miss, the server queries upstream DNS servers
+  \item If the response has the TC (truncated) bit set, the server
+        retries using TCP (RFC 5966)
+  \item The response is cached and returned to the container
+\end{enumerate}
+
+\section{DokiLink-Lite Mesh Networking}
+\label{sec:dokilink}
+
+DokiLink-Lite provides peer-to-peer encrypted communication between
+Doki instances. It uses a gossip protocol for peer discovery and
+supports three encryption layers.
+
+\subsection{Encryption Layers}
+\label{sec:encryption-layers}
+
+\begin{description}[leftmargin=*, style=nextline, font=\sffamily\bfseries]
+  \item[L1: TLS 1.3] (Default)
+    Each link certificate is signed by a per-install ECDSA P-256
+    Certificate Authority. Certificates include SAN DNS names for
+    identity verification. The CA and keypair are generated on first
+    start and stored at \texttt{\$DOKI\_DATA\_DIR/keys/}.
+
+  \item[L2: NaCl Secretbox] (Opt-in)
+    When \texttt{DOKI\_LINK\_PAYLOAD\_ENC=1} is set, a 32-byte
+    encryption key is derived from both peers' Ed25519 public keys
+    using SHA-256. The key is order-sensitive, ensuring both peers
+    derive the same key.
+
+  \item[L3: Noise Protocol] (Future)
+    The Noise protocol framework will provide forward secrecy and
+    post-quantum resistance in a future release.
+\end{description}
+
+\subsection{DokiLink Sequence Diagram}
+\label{sec:dokilink-sequence}
+
+The following sequence diagram shows the establishment of a DokiLink
+tunnel between two peers:
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.4cm,
+    every node/.style={font=\sffamily\footnotesize},
+    participant/.style={
+      rectangle, draw=nodeblue!70, fill=fillblue,
+      minimum width=2.5cm, minimum height=0.7cm,
+      text=textdark, align=center
+    },
+    msg/.style={
+      -{Stealth[length=2.5mm]}, draw=textdark, line width=0.5pt
+    },
+    msgRet/.style={
+      msg, dashed
+    }
+  ]
+    % Participants
+    \node[participant] (peerA) {Peer A};
+    \node[participant, right=5cm of peerA] (peerB) {Peer B};
+
+    % Lifelines
+    \draw[dashed, linegray] (peerA) -- ++(0,-7);
+    \draw[dashed, linegray] (peerB) -- ++(0,-7);
+
+    % Messages
+    \draw[msg] ([yshift=-1cm]peerA.south) -- 
+      node[above, font=\sffamily\tiny] {1. hello (ed25519 signature)} 
+      ([yshift=-1cm]peerB.north);
+
+    \draw[msg] ([yshift=-2cm]peerB.south) -- 
+      node[above, font=\sffamily\tiny] {2. peer list (signed)} 
+      ([yshift=-2cm]peerA.north);
+
+    \draw[msg] ([yshift=-3cm]peerA.south) -- 
+      node[above, font=\sffamily\tiny] {3. TLS ClientHello} 
+      ([yshift=-3cm]peerB.north);
+
+    \draw[msgRet] ([yshift=-4cm]peerB.south) -- 
+      node[above, font=\sffamily\tiny] {4. TLS ServerHello + cert} 
+      ([yshift=-4cm]peerA.north);
+
+    \draw[msg] ([yshift=-5cm]peerA.south) -- 
+      node[above, font=\sffamily\tiny] {5. Forward proxy request} 
+      ([yshift=-5cm]peerB.north);
+
+    \draw[msgRet] ([yshift=-6cm]peerB.south) -- 
+      node[above, font=\sffamily\tiny] {6. Proxied response} 
+      ([yshift=-6cm]peerA.north);
+
+    % Self-message for key generation
+    \draw[msg] ([yshift=-0.5cm]peerA.south) -- ++(1,0)
+      node[right, font=\sffamily\tiny, xshift=2pt] {gen CA + keys}
+      -- ++(0,-0.3) -- ++(-1,0);
+
+    % Loop fragment
+    \node[draw=linegray!60, dashed, rounded corners=2pt,
+      fit=(peerA|-{0,-4.8cm})(peerB|-{0,-5.5cm}),
+      inner sep=3pt, fill=white] (loop) {};
+    \node[font=\sffamily\tiny, text=textgray, anchor=north west]
+      at (loop.north west) {loop: gossip tick};
+  \end{tikzpicture}
+  \caption{DokiLink-Lite connection establishment sequence.}
+  \label{fig:dokilink-sequence}
+\end{figure}
+
+\subsection{Peer Discovery}
+\label{sec:peer-discovery}
+
+DokiLink supports two discovery mechanisms:
+
+\begin{itemize}[leftmargin=*, itemsep=3pt]
+  \item \textbf{Static peers:} Managed via \texttt{doki link add/rm}
+        and stored in \texttt{peers.json}. This is the primary
+        mechanism for cross-network peers.
+
+  \item \textbf{mDNS discovery:} Available when built with
+        \texttt{-tags netlink\_mdns}. Uses multicast DNS to discover
+        peers on the local network. Default builds include a no-op
+        stub.
+\end{itemize}
+
+\subsection{Gossip Protocol}
+\label{sec:gossip}
+
+The gossip protocol exchanges ed25519-signed JSON messages over TCP,
+capped at 4\,KiB per message. A 15-second tick discovers new peers,
+while a 30-second tick refreshes from the static configuration. The
+protocol supports three message types: \texttt{hello}, \texttt{peer},
+and \texttt{container}.
+
+\section{Rootless Networking (pasta)}
+\label{sec:pasta}
+
+For users without root, the pasta utility provides TCP/UDP connectivity
+without TAP devices. Doki's \texttt{pkg/network/rootless.go} shells
+out to \texttt{pasta} for port forwarding when the standard bridge
+network is unavailable.
+
+\section{IPv6 Support}
+\label{sec:ipv6}
+
+Doki supports dual-stack IPv4/IPv6 networking. When IPv6 is available
+on the host, containers receive both IPv4 and IPv6 addresses from
+the bridge network. The DNS server responds to both A (IPv4) and
+AAAA (IPv6) queries.
+
+\subsection{Reverse DNS}
+\label{sec:reverse-dns}
+
+The \texttt{arpaToIP} function handles reverse DNS lookups for both
+address families:
+
+\begin{itemize}[leftmargin=*, itemsep=3pt]
+  \item \textbf{IPv4:} \texttt{.in-addr.arpa.} suffix with 4 octets
+  \item \textbf{IPv6:} \texttt{.ip6.arpa.} suffix with 32 nibbles
+\end{itemize}
+
+This enables proper PTR record resolution for container-to-container
+communication in dual-stack environments.
+
+\subsection{Dual-Stack Configuration}
+\label{sec:dual-stack}
+
+When both IPv4 and IPv6 are available, the DNS server returns both
+A and AAAA records for container hostnames. The client resolver
+selects the appropriate address family based on host routing
+capabilities.

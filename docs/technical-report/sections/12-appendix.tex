@@ -1,0 +1,142 @@
+% 12-appendix.tex
+\chapter{Appendix}
+\label{ch:appendix}
+
+\section{A. Complete CLI Command Reference}
+\label{sec:cli-reference}
+
+Doki v0.9.3 ships 244 CLI commands across 9 categories. The following
+table provides a summary of the major command groups.
+
+\begin{table}[htbp]
+  \centering
+  \caption{CLI command categories and counts.}
+  \label{tab:cli-categories}
+  \begin{tabularx}{\textwidth}{l c X}
+    \toprule
+    \textbf{Category} & \textbf{Commands} & \textbf{Description} \\
+    \midrule
+    Container lifecycle & 12 & create, start, stop, kill, rm, ls, inspect, logs, exec, cp, attach, rename \\
+    Image management    & 8  & pull, push, build, ls, inspect, rm, tag, search \\
+    Networking          & 6  & create, ls, rm, inspect, connect, disconnect \\
+    Volume management   & 5  & create, ls, rm, inspect, prune \\
+    Compose             & 15 & up, down, ps, logs, build, pull, push, config, create, start, stop, restart, run, exec, rm \\
+    System              & 8  & info, version, df, events, ping, login, logout, passwd \\
+    DokiLink mesh       & 6  & mesh ls, mesh status, link add, link rm, link show \\
+    Kubernetes          & 4  & kube play, kube down, kube generate, apply -f \\
+    Security            & 5  & seccomp, apparmor, capabilities, audit, trust \\
+    \midrule
+    \textbf{Total}      & \textbf{244} & (including all subcommands) \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{B. Configuration Reference}
+\label{sec:config-reference}
+
+The Doki daemon reads configuration from
+\texttt{\$DOKI\_DATA\_DIR/config.json}. The following table lists the
+available configuration keys.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Daemon configuration keys.}
+  \label{tab:config-keys}
+  \begin{tabularx}{\textwidth}{l l l X}
+    \toprule
+    \textbf{Key} & \textbf{Type} & \textbf{Default} & \textbf{Description} \\
+    \midrule
+    \texttt{dns\_listen}   & string & \texttt{127.0.0.11:8053} & DNS listen address \\
+    \texttt{dns\_search}   & array  & \texttt{[]} & Default search domains \\
+    \texttt{dns\_opts}     & array  & \texttt{[ndots:0]} & Default DNS options \\
+    \texttt{storage\_dir}  & string & \texttt{\$DOKI\_DATA\_DIR/images} & Image storage path \\
+    \texttt{runtime}       & string & \texttt{auto} & Default runtime (auto/proot/native) \\
+    \texttt{seccomp}       & bool   & \texttt{true} & Enable seccomp filtering \\
+    \texttt{apparmor}      & bool   & \texttt{true} & Enable AppArmor profiles \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{C. Environment Variables}
+\label{sec:env-vars}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Environment variables recognized by Doki.}
+  \label{tab:env-vars}
+  \begin{tabularx}{\textwidth}{l X}
+    \toprule
+    \textbf{Variable} & \textbf{Description} \\
+    \midrule
+    \texttt{DOKI\_DATA\_DIR}    & Override data directory (default: \texttt{\$HOME/.doki}) \\
+    \texttt{DOKI\_DNS\_LISTEN}  & Override DNS listen address \\
+    \texttt{DOKI\_USE\_SOCAT}   & Force socat fallback for port forwarding \\
+    \texttt{DOKI\_LINK\_MESH}   & Set to 0 to disable mesh entirely \\
+    \texttt{DOKI\_LINK\_ADDR}   & Override gossip listen address \\
+    \texttt{DOKI\_LINK\_PAYLOAD\_ENC} & Enable NaCl secretbox encryption \\
+    \texttt{COMPOSE\_DEPENDENCY\_TIMEOUT} & Override 60s dependency timeout \\
+    \texttt{NO\_COLOR}          & Disable colored output \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{D. Release Assets}
+\label{sec:release-assets}
+
+Doki v0.9.3 is distributed as 6 release assets:
+
+\begin{itemize}[leftmargin=*, itemsep=3pt]
+  \item \texttt{doki-v0.9.3-android-arm64.tar.gz}
+  \item \texttt{doki-v0.9.3-android-armv7.tar.gz}
+  \item \texttt{doki-v0.9.3-linux-arm64.tar.gz}
+  \item \texttt{doki-v0.9.3-linux-armv7.tar.gz}
+  \item \texttt{doki-v0.9.3-darwin-arm64.tar.gz}
+  \item \texttt{SHA256SUMS.txt}
+\end{itemize}
+
+\section{E. Glossary of Terms}
+\label{sec:glossary}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Glossary of technical terms used in this report.}
+  \label{tab:glossary}
+  \begin{tabularx}{\textwidth}{l X}
+    \toprule
+    \textbf{Term} & \textbf{Definition} \\
+    \midrule
+    \texttt{proot}    & User-space implementation of chroot using ptrace syscall interception \\
+    \texttt{ptrace}   & Linux system call for process tracing and debugging \\
+    \texttt{seccomp}  & Secure computing mode for restricting system calls \\
+    \texttt{cgroups}  & Linux control groups for resource limiting and accounting \\
+    \texttt{overlayfs} & Union filesystem that layers read-only and writable directories \\
+    \texttt{gVisor}   & User-space kernel providing syscall filtering for containers \\
+    \texttt{WireGuard} & Modern VPN protocol using state-of-the-art cryptography \\
+    \texttt{TOFU}     & Trust On First Use --- initial key exchange without prior verification \\
+    \texttt{NaCl}     & Networking and Cryptography library for encryption \\
+    \texttt{DHT}      & Distributed Hash Table for decentralized peer discovery \\
+    \texttt{STUN}     & Session Traversal Utilities for NAT traversal \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{F. Error Codes Reference}
+\label{sec:error-codes}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Common error codes and their meanings.}
+  \label{tab:error-codes}
+  \begin{tabularx}{\textwidth}{l X}
+    \toprule
+    \textbf{Error Code} & \textbf{Description} \\
+    \midrule
+    \texttt{EACCES}      & Permission denied --- typically when port 53 is blocked by SELinux \\
+    \texttt{ECONNREFUSED} & Connection refused --- daemon not running or port in use \\
+    \texttt{ENOENT}      & No such file or directory --- image or container not found \\
+    \texttt{ENOSPC}      & No space left on device --- storage full \\
+    \texttt{EADDRINUSE}  & Address already in use --- port conflict \\
+    \texttt{EPERM}       & Operation not permitted --- root required for this operation \\
+    \bottomrule
+  \end{tabularx}
+\end{table}

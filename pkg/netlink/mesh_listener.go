@@ -60,7 +60,7 @@ func (ml *meshListener) close() {
 		return
 	}
 	ml.closed = true
-	ml.ln.Close()
+	_ = ml.ln.Close()
 	for _, ch := range ml.conns {
 		close(ch)
 	}
@@ -88,8 +88,8 @@ func (ml *meshListener) acceptLoop(ctx context.Context) {
 }
 
 func (ml *meshListener) serve(ctx context.Context, c net.Conn) {
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(10 * time.Second))
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	dec := json.NewDecoder(c)
 	dec.DisallowUnknownFields()
 	var msg GossipMessage
@@ -113,8 +113,8 @@ func (ml *meshListener) send(addr string, msg GossipMessage) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(5 * time.Second))
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 	body, err := json.Marshal(&msg)
 	if err != nil {
 		return err
@@ -148,10 +148,4 @@ func verifyEd25519(pub ed25519.PublicKey, msg []byte, sigB64 string) error {
 		return errors.New("verify: signature mismatch")
 	}
 	return nil
-}
-
-// fingerprintID derives a short id from a public key for log/debug use.
-// Matches the on-wire short_id format used by Identity.shortID.
-func fingerprintID(pub ed25519.PublicKey) string {
-	return shortID(pub)
 }

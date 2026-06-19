@@ -71,7 +71,7 @@ func (o *OverlayFS) mountFuseOverlayFS(lowerDirs []string, upperDir, workDir, ta
 	}
 	// fuse-overlayfs daemonizes or stays in foreground — run in background
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 
 	// Give it a moment to mount
@@ -168,7 +168,7 @@ func PrepareRootfs(rootfs string, files map[string]string, user ...string) error
 		}
 
 		for link, target := range symlinks {
-			os.Remove(filepath.Join(rootfs, link))
+			_ = os.Remove(filepath.Join(rootfs, link))
 			if err := os.Symlink(target, filepath.Join(rootfs, link)); err != nil {
 				return fmt.Errorf("create symlink %s -> %s: %w", link, target, err)
 			}
@@ -177,7 +177,7 @@ func PrepareRootfs(rootfs string, files map[string]string, user ...string) error
 
 	// Inject configured user into /etc/passwd and /etc/group.
 	if len(user) > 0 {
-		injectUser(rootfs, user[0])
+		_ = injectUser(rootfs, user[0])
 	}
 
 	return nil
@@ -192,7 +192,7 @@ func injectUser(rootfsDir, user string) error {
 	passwdPath := filepath.Join(rootfsDir, "etc", "passwd")
 	groupPath := filepath.Join(rootfsDir, "etc", "group")
 
-	os.MkdirAll(filepath.Dir(passwdPath), 0755)
+	_ = os.MkdirAll(filepath.Dir(passwdPath), 0755)
 
 	parts := strings.SplitN(user, ":", 2)
 	name := parts[0]
@@ -220,10 +220,10 @@ func injectUser(rootfsDir, user string) error {
 	if err != nil {
 		return fmt.Errorf("open passwd: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	homeDir := "/home/" + name
-	os.MkdirAll(filepath.Join(rootfsDir, homeDir), 0755)
+	_ = os.MkdirAll(filepath.Join(rootfsDir, homeDir), 0755)
 
 	entry := fmt.Sprintf("%s:x:%d:%d:%s:%s:/bin/sh\n", name, uid, gid, name, homeDir)
 	if _, err := f.WriteString(entry); err != nil {
@@ -232,7 +232,7 @@ func injectUser(rootfsDir, user string) error {
 
 	gf, err := os.OpenFile(groupPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
-		defer gf.Close()
+		defer func() { _ = gf.Close() }()
 		if _, err := gf.WriteString(fmt.Sprintf("%s:x:%d:\n", name, gid)); err != nil {
 			return fmt.Errorf("write group: %w", err)
 		}
@@ -315,7 +315,10 @@ func CopyDir(src, dst string) error {
 			return err
 		}
 
-		relPath, _ := filepath.Rel(src, path)
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
 		targetPath := filepath.Join(dst, relPath)
 
 		// C2: Preserve symlinks instead of reading their content.
@@ -324,7 +327,7 @@ func CopyDir(src, dst string) error {
 			if err != nil {
 				return err
 			}
-			os.Remove(targetPath)
+			_ = os.Remove(targetPath)
 			return os.Symlink(linkTarget, targetPath)
 		}
 
@@ -462,7 +465,7 @@ func CleanupMounts(path string) error {
 	for i := len(mounts) - 1; i >= 0; i-- {
 		mnt := strings.TrimSpace(mounts[i])
 		if mnt != "" {
-			syscall.Unmount(mnt, syscall.MNT_DETACH)
+			_ = syscall.Unmount(mnt, syscall.MNT_DETACH)
 		}
 	}
 

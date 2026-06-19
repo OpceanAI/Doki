@@ -44,7 +44,7 @@ func (c *BuildKitClient) IsAvailable() bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }
 
@@ -176,7 +176,7 @@ func StartBuildKitDaemon(ctx context.Context) (string, error) {
 
 	// Start buildkitd in the background.
 	sockPath := "/tmp/doki-buildkit/buildkitd.sock"
-	os.MkdirAll("/tmp/doki-buildkit", 0755)
+	_ = os.MkdirAll("/tmp/doki-buildkit", 0755)
 
 	cmd := exec.CommandContext(ctx, buildkitdPath,
 		"--addr", "unix://"+sockPath,
@@ -212,8 +212,6 @@ func parseBuildKitAddr(addr string) (network, address string) {
 // BuildKitProgressWriter parses BuildKit progress output and reports it.
 type BuildKitProgressWriter struct {
 	log     *slog.Logger
-	total   int64
-	current int64
 }
 
 func NewBuildKitProgressWriter(log *slog.Logger) *BuildKitProgressWriter {

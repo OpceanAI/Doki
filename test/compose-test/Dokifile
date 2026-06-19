@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+# escape=\
+
+# ============================================================
+# Stage 1: Builder — compila una app Go minimal
+# ============================================================
+FROM golang:1.22-alpine AS builder
+
+ARG APP_VERSION=1.0.0
+ARG BUILD_TARGET=linux/arm64
+
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+
+WORKDIR /src
+
+# Copiar go.mod primero (cache de dependencias)
+COPY go.mod go.sum* ./
+RUN go mod download 2>/dev/null || true
+
+# Copiar codigo fuente
+COPY . .
+
+# Compilar binario estatico
+RUN GOARCH=$(echo $BUILD_TARGET | cut -d/ -f2) \
+    go build -ldflags="-s -w -X main.version=${APP_VERSION}" \
+    -o /app ./cmd/doki
+
+# ============================================================
+# Stage 2: Comprimir binario con upx (si disponible)
+# ============================================================
+FROM builder AS compressor
+
+RUN apk add --no-cache upx 2>/dev/null && \
+    upx --best --lzma /app 2>/dev/null || \
+    cp /app /app.compressed
+
+# ============================================================
+# Stage 3: Runtime — imagen final minimal
+# ============================================================
+FROM alpine:3.19 AS runtime
+
+# Metadata
+LABEL maintainer="OpceanAI"
+LABEL version="1.0.0"
+LABEL description="Doki multi-stage test image"
+
+# Dependencias runtime
+RUN apk add --no-cache \
+    ca-certificates \
+    curl \
+    bash \
+    && rm -rf /var/cache/apk/*
+
+# Crear usuario no-root
+RUN addgroup -g 1001 appgroup && \
+    adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+
+# Copiar binario desde compressor stage
+COPY --from=compressor /app /usr/local/bin/doki
+
+# Copiar archivos de configuracion
+COPY --from=builder /src/pkg /opt/doki/pkg
+
+# Configurar permisos
+RUN chmod +x /usr/local/bin/doki && \
+    chown -R appuser:appgroup /opt/doki
+
+# Puerto por defecto
+EXPOSE 8080
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Usuario no-root
+USER appuser
+
+# Working directory
+WORKDIR /opt/doki
+
+# Comando por defecto
+CMD ["/usr/local/bin/doki"]

@@ -1,0 +1,32 @@
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {1.1}{\ignorespaces High-level overview of the Doki ecosystem components.}}{2}{figure.caption.5}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {3.1}{\ignorespaces Doki system architecture. The daemon selects the appropriate runtime based on available host capabilities.}}{6}{figure.caption.6}%
+\contentsline {figure}{\numberline {3.2}{\ignorespaces Container lifecycle state machine. States are shown as rectangles; transitions are labeled with the triggering command.}}{9}{figure.caption.8}%
+\contentsline {figure}{\numberline {3.3}{\ignorespaces The 12 isolation levels available in Doki, ordered from strongest (microVM) to weakest (native). The daemon automatically selects the strongest available level.}}{9}{figure.caption.9}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Image pull pipeline. Layers are downloaded in parallel when multiple layers are present.}}{10}{figure.caption.10}%
+\contentsline {figure}{\numberline {4.2}{\ignorespaces Example Compose service dependency graph. Services are started in topological order.}}{14}{figure.caption.13}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {6.1}{\ignorespaces Doki networking components: bridge network, DNS server, and DokiLink mesh.}}{19}{figure.caption.15}%
+\contentsline {figure}{\numberline {6.2}{\ignorespaces Network topology showing the bridge, containers, port mapping, and NAT.}}{19}{figure.caption.16}%
+\contentsline {figure}{\numberline {6.3}{\ignorespaces DNS resolution flow with cache and TCP fallback.}}{20}{figure.caption.17}%
+\contentsline {figure}{\numberline {6.4}{\ignorespaces DokiLink-Lite connection establishment sequence.}}{21}{figure.caption.18}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {7.1}{\ignorespaces Overlay filesystem layer structure. Multiple read-only image layers are merged with a writable container layer.}}{25}{figure.caption.20}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {8.1}{\ignorespaces Build pipeline from source to release archive.}}{27}{figure.caption.22}%
+\contentsline {figure}{\numberline {8.2}{\ignorespaces Dokifile build pipeline with layer cache optimization.}}{28}{figure.caption.24}%
+\contentsline {figure}{\numberline {8.3}{\ignorespaces Compose service dependency graph with start order.}}{29}{figure.caption.25}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {9.1}{\ignorespaces Container startup time comparison across five base images. Doki's proot runtime adds approximately 100--150\,ms overhead compared to Docker on a server.}}{30}{figure.caption.26}%
+\contentsline {figure}{\numberline {9.2}{\ignorespaces Memory usage vs.\ number of concurrent containers. Doki's proot overhead adds approximately 15\,MB per container compared to Docker.}}{31}{figure.caption.27}%
+\contentsline {figure}{\numberline {9.3}{\ignorespaces Network throughput with different encryption configurations. TLS 1.3 adds approximately 5--8\% overhead; NaCl secretbox adds an additional 3--5\%.}}{31}{figure.caption.28}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {10.1}{\ignorespaces Doki development roadmap timeline with key milestones.}}{34}{figure.caption.32}%
+\addvspace {10\p@ }
+\def \@chapapp {\appendixname }
+\addvspace {10\p@ }
+\providecommand \tocbasic@end@toc@file {}\tocbasic@end@toc@file 

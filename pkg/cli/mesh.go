@@ -38,15 +38,15 @@ func (c *DokiCLI) MeshLs() error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 8, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PEER ID\tNAME\tADDRESS\tLAST SEEN")
+	_, _ = fmt.Fprintln(w, "PEER ID\tNAME\tADDRESS\tLAST SEEN")
 	for _, p := range peers {
 		last := "-"
 		if !p.LastSeen.IsZero() {
 			last = formatDuration(timeSince(p.LastSeen))
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Addr, last)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Addr, last)
 	}
-	w.Flush()
+	_ = w.Flush()
 	return nil
 }
 

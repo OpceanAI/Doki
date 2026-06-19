@@ -1,0 +1,276 @@
+% 04-components.tex
+\chapter{Subsystems and Components}
+\label{ch:components}
+
+\section{Image Management}
+\label{sec:image-management}
+
+Doki implements a complete OCI-compliant image management system. Images
+are stored in a layout compatible with the Docker image specification,
+using content-addressable storage for layers and manifests.
+
+\subsection{Image Storage Layout}
+\label{sec:image-layout}
+
+Images are stored under \texttt{\$DOKI\_DATA\_DIR/images/} with the
+following structure:
+
+\begin{codebox}[title={Image storage directory layout}]{text}
+images/
+  manifests/
+    <sha256>.json          -- Image manifest
+  layers/
+    <sha256>/              -- Extracted layer contents
+  blobs/
+    sha256/
+      <sha256>             -- Compressed layer tarballs
+\end{codebox}
+
+Each manifest contains the image configuration (entrypoint, cmd, env,
+labels) and a list of layer digests. Layers are extracted sequentially
+into the \texttt{layers/} directory, with later layers overwriting
+earlier ones to produce the final filesystem.
+
+\subsection{Image Pull Process}
+\label{sec:image-pull}
+
+The image pull process follows the OCI distribution specification:
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.4cm,
+    every node/.style={font=\sffamily\footnotesize},
+    stage/.style={
+      rectangle, rounded corners=2pt,
+      draw=nodeblue!60, fill=fillblue,
+      minimum width=2.0cm, minimum height=0.8cm,
+      text=textdark, align=center, inner sep=4pt
+    }
+  ]
+    \node[stage] (resolve) {Resolve\\Tag};
+    \node[stage, right=0.8cm of resolve] (manifest) {Fetch\\Manifest};
+    \node[stage, right=0.8cm of manifest] (layers) {Download\\Layers};
+    \node[stage, right=0.8cm of layers] (extract) {Extract\\Layers};
+    \node[stage, right=0.8cm of extract] (config) {Apply\\Config};
+
+    \draw[arr] (resolve) -- (manifest);
+    \draw[arr] (manifest) -- (layers);
+    \draw[arr] (layers) -- (extract);
+    \draw[arr] (extract) -- (config);
+
+    % Parallel layer downloads
+    \draw[arrDash] ([yshift=-0.5cm]layers.south) -- ++(0,-0.4)
+      node[below, font=\sffamily\tiny, text=textgray] {Parallel download};
+  \end{tikzpicture}
+  \caption{Image pull pipeline. Layers are downloaded in parallel
+    when multiple layers are present.}
+  \label{fig:image-pull}
+\end{figure}
+
+\subsection{Search and Registry Interaction}
+\label{sec:search}
+
+Doki can search Docker Hub and private registries. The search command
+parses the Docker Hub v2 API response format, which uses
+\texttt{repo\_name} and \texttt{short\_description} as JSON keys.
+The \texttt{History} struct uses PascalCase JSON tags
+(\texttt{Created} as \texttt{int64}, \texttt{CreatedBy},
+\texttt{Size}, \texttt{Comment}) to match the daemon response format.
+
+The search flow consists of three stages:
+
+\begin{enumerate}[leftmargin=*, itemsep=3pt]
+  \item \textbf{API request.} The CLI sends a GET request to the
+        registry's search endpoint with the query term as a parameter.
+  \item \textbf{Response parsing.} The JSON response is decoded into
+        a list of repository structs containing name, description,
+        star count, and pull count.
+  \item \textbf{Display formatting.} Results are formatted as a table
+        with truncated descriptions and sorted by relevance.
+\end{enumerate}
+
+\section{Container Runtime}
+\label{sec:container-runtime}
+
+The container runtime manages process execution within isolated
+environments. It supports multiple isolation backends through a
+pluggable runner architecture.
+
+\subsection{Proot Runner}
+\label{sec:proot-runner}
+
+On Android/Termux, the proot runner is the primary isolation mechanism.
+It uses \texttt{ptrace()} to intercept system calls and provides:
+
+\begin{itemize}[leftmargin=*, itemsep=3pt]
+  \item Virtual filesystem views (bind mounts without root)
+  \item Process ID namespace virtualization
+  \item User ID mapping
+  \item Hostname and DNS configuration
+\end{itemize}
+
+The proot binary is located using \texttt{FindProotBinary()}, which
+searches \texttt{\$PATH} and falls back to Doki's bundled
+\texttt{doki-proot}. Environment variables \texttt{LD\_PRELOAD} and
+\texttt{LD\_LIBRARY\_PATH} are automatically stripped from the proot
+environment to prevent library injection attacks.
+
+\subsection{Namespace Runner}
+\label{sec:namespace-runner}
+
+On systems with root access, the namespace runner provides stronger
+isolation using kernel-level namespaces:
+
+\begin{itemize}[leftmargin=*, itemsep=3pt]
+  \item PID namespace (process isolation)
+  \item Mount namespace (filesystem isolation)
+  \item Network namespace (network isolation)
+  \item UTS namespace (hostname isolation)
+  \item IPC namespace (inter-process communication isolation)
+  \item User namespace (user ID mapping without root)
+\end{itemize}
+
+\subsection{Native Runner}
+\label{sec:native-runner}
+
+The native runner executes processes with minimal isolation, using only
+cgroups for resource limiting. It is the fastest runtime but provides
+the weakest isolation. It is typically used in trusted environments
+where performance is critical.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Runtime comparison: proot vs.\ native runner.}
+  \label{tab:runtime-comparison}
+  \begin{tabularx}{\textwidth}{l X X}
+    \toprule
+    \textbf{Feature} & \textbf{Proot Runner} & \textbf{Native Runner} \\
+    \midrule
+    Isolation level  & Medium (ptrace) & Low (cgroups only) \\
+    Startup time     & 100--150\,ms    & $<$10\,ms \\
+    Memory overhead  & 15\,MB          & $<$2\,MB \\
+    Root required    & No              & Optional \\
+    Use case         & Android, untrusted & Trusted, performance-critical \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Dokifile Builder}
+\label{sec:builder}
+
+Doki includes a complete Dockerfile-compatible builder that parses
+Dockerfile instructions and builds OCI-compliant images.
+
+\subsection{Supported Instructions}
+\label{sec:supported-instructions}
+
+The builder supports the following Dockerfile instructions:
+
+\begin{table}[htbp]
+  \centering
+  \caption{Supported Dockerfile instructions.}
+  \label{tab:dockerfile-instructions}
+  \begin{tabularx}{\textwidth}{l X}
+    \toprule
+    \textbf{Instruction} & \textbf{Description} \\
+    \midrule
+    \texttt{FROM}         & Base image specification (supports multi-stage) \\
+    \texttt{RUN}          & Execute shell commands during build \\
+    \texttt{COPY}         & Copy files from build context to image \\
+    \texttt{ADD}          & Copy files with auto-extraction for tarballs \\
+    \texttt{WORKDIR}      & Set working directory \\
+    \texttt{ENV}          & Set environment variables \\
+    \texttt{EXPOSE}       & Document listening ports \\
+    \texttt{CMD}          & Default command (overridable) \\
+    \texttt{ENTRYPOINT}   & Fixed entrypoint command \\
+    \texttt{USER}         & Set process user \\
+    \texttt{LABEL}        & Add metadata labels \\
+    \texttt{VOLUME}       & Declare mount points \\
+    \texttt{ARG}          & Build-time arguments \\
+    \texttt{ONBUILD}      & Trigger instructions for downstream images \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Layer Cache}
+\label{sec:layer-cache}
+
+The builder implements a layer cache that stores intermediate build
+results. Each instruction produces a layer that is cached by its
+content hash. On subsequent builds, unchanged layers are reused from
+cache, significantly reducing build times.
+
+The \texttt{extractBaseImageToDir} function handles the extraction of
+base image layers, including gzip-compressed tarballs with symlinks.
+Layer ordering is preserved to maintain filesystem semantics where
+later layers override earlier ones.
+
+\section{Compose Engine}
+\label{sec:compose-engine}
+
+The \texttt{doki-compose} binary provides Docker Compose compatibility,
+allowing users to define multi-container applications using YAML
+configuration files.
+
+\subsection{Service Dependencies}
+\label{sec:service-dependencies}
+
+The compose engine resolves service dependencies using a directed
+acyclic graph (DAG) traversal. Services are started in topological
+order, with dependency conditions including:
+
+\begin{itemize}[leftmargin=*, itemsep=3pt]
+  \item \texttt{service\_started} --- wait for the dependency container
+        to start
+  \item \texttt{service\_healthy} --- wait for a health check to pass
+        (parsed but not yet executed by the runtime)
+  \item \texttt{service\_completed\_successfully} --- wait for the
+        dependency container to exit with code 0
+\end{itemize}
+
+If a circular dependency is detected, the \texttt{orderServices}
+function returns an error rather than silently randomizing the start
+order.
+
+\subsection{Profile Filtering}
+\label{sec:profile-filtering}
+
+Services with a \texttt{profiles} key are only included when one of
+their profiles is activated via the \texttt{--profile} flag. This
+allows defining optional services (such as debug tools or monitoring
+stacks) that are not started by default.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+    node distance=1.0cm,
+    every node/.style={font=\sffamily\footnotesize},
+    svc/.style={
+      rectangle, rounded corners=2pt,
+      draw=nodeblue!60, fill=fillblue,
+      minimum width=2.0cm, minimum height=0.7cm,
+      text=textdark, align=center, inner sep=4pt
+    },
+    arr/.style={
+      -{Stealth[length=2.5mm, width=2mm]},
+      draw=linegray, line width=0.5pt
+    }
+  ]
+    \node[svc] (web) {web};
+    \node[svc, right=1.2cm of web] (api) {api};
+    \node[svc, right=1.2cm of api] (db) {db};
+    \node[svc, below=0.8cm of api] (redis) {redis};
+    \node[svc, below=0.8cm of web] (nginx) {nginx};
+
+    \draw[arr] (web) -- (api);
+    \draw[arr] (api) -- (db);
+    \draw[arr] (api) -- (redis);
+    \draw[arr] (nginx) -- (web);
+
+    \node[annot, below=0.3cm of db] {arrows = depends-on};
+  \end{tikzpicture}
+  \caption{Example Compose service dependency graph. Services are
+    started in topological order.}
+  \label{fig:compose-dag}
+\end{figure}

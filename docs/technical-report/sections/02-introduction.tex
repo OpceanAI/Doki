@@ -1,0 +1,178 @@
+% 02-introduction.tex
+\chapter{Introduction}
+\label{ch:introduction}
+
+\section{Background}
+\label{sec:background}
+
+Container technology has transformed how software is developed,
+deployed, and operated. Since the introduction of Docker in 2013,
+containers have become the standard unit of packaging applications,
+providing isolation, reproducibility, and portability across computing
+environments. The container ecosystem has expanded to include
+orchestration platforms~\cite{burns2016borg}, image registries,
+runtime specifications~\cite{open2021runtime}, and networking
+primitives that collectively enable modern cloud-native architectures.
+
+However, this ecosystem was designed for server-class hardware running
+Linux distributions with full kernel access. Mobile devices, which
+represent the majority of computing hardware deployed worldwide, have
+been largely excluded from the container revolution. Android, which
+powers over 3 billion active devices~\cite{statcounter2025}, presents
+fundamental barriers to containerization that existing tools cannot
+address.
+
+\section{The Mobile Containerization Problem}
+\label{sec:mobile-problem}
+
+Android devices face several constraints that prevent traditional
+container runtimes from functioning:
+
+\begin{enumerate}[leftmargin=*, itemsep=4pt]
+  \item \textbf{Restricted syscalls.} The Android kernel disables or
+        restricts numerous system calls required by container runtimes,
+        including \texttt{clone()} with certain namespace flags,
+        \texttt{pivot\_root()}, and \texttt{mount()} for bind mounts.
+        SELinux Mandatory Access Control (MAC) policies further limit
+        what operations are permitted.
+
+  \item \textbf{No root access.} Modern Android devices use verified
+        boot chains and dm-verity to prevent unauthorized modifications.
+        Gaining root access typically requires unlocking the bootloader,
+        which voids warranties and may compromise device security.
+
+  \item \textbf{Networking restrictions.} The \texttt{iptables}
+        subsystem is unavailable without root on most Android devices.
+        Port 53 (DNS) is blocked by SELinux policies. The network
+        stack cannot be manipulated through standard Linux networking
+        tools.
+
+  \item \textbf{Filesystem limitations.} Android uses ext4 or F2FS
+        with encrypted user partitions. Standard overlay filesystem
+        operations require kernel support that may not be available,
+        and the storage layout differs significantly from desktop
+        Linux distributions.
+
+  \item \textbf{Process management.} Android's Zygote process model
+        and application lifecycle management interfere with long-running
+        container processes. Background process restrictions can terminate
+        container runtimes unexpectedly.
+\end{enumerate}
+
+These constraints mean that Docker, containerd, and other
+server-oriented runtimes cannot operate on Android without significant
+modifications. The result is a gap in the tooling ecosystem that
+limits what developers can do on mobile devices.
+
+\section{The Doki Approach}
+\label{sec:approach}
+
+Doki addresses these challenges through a combination of techniques
+that work within Android's constraints rather than against them:
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{Proot-based syscall interception.} Instead of relying
+        on kernel-level namespaces, Doki uses
+        \texttt{proot}~\cite{proot2024} to intercept system calls via
+        \texttt{ptrace()}. This provides a virtualized filesystem view
+        and process namespace without requiring root access or kernel
+        modifications.
+
+  \item \textbf{Filesystem detection probes.} Doki detects its
+        execution environment by probing the filesystem (checking for
+        \texttt{/data/data/com.termux}) rather than relying on
+        \texttt{runtime.GOOS}, which returns \texttt{linux} on both
+        Android and standard Linux. This enables environment-specific
+        behavior without compile-time restrictions.
+
+  \item \textbf{Adaptive networking.} When \texttt{iptables} is
+        unavailable, Doki falls back to alternative port forwarding
+        mechanisms. DNS operates on a non-standard port (8053) to
+        avoid SELinux restrictions. The networking stack auto-detects
+        available capabilities and adjusts accordingly.
+
+  \item \textbf{Static compilation.} All Doki binaries are compiled
+        as statically linked executables with \texttt{CGO\_ENABLED=0}.
+        This eliminates runtime dependencies on shared libraries that
+        may not be present on Android devices.
+
+  \item \textbf{Multi-runtime architecture.} Doki supports 12
+        isolation levels, from WASM sandboxes to hardware-level
+        microVMs. The runtime registry probes the host at startup and
+        automatically selects the strongest isolation mode available,
+        providing graceful degradation across different device
+        capabilities.
+\end{itemize}
+
+\section{Design Principles}
+\label{sec:principles}
+
+Doki's design is guided by the following principles:
+
+\begin{description}[leftmargin=*, style=nextline, font=\sffamily\bfseries]
+  \item[Rootless by default.]
+    Every feature must work without root access. Root is never assumed,
+    requested, or required for core functionality.
+
+  \item[Progressive enhancement.]
+    Doki detects available capabilities at startup and enables features
+    accordingly. A device with limited kernel support still gets a
+    functional container runtime, just with weaker isolation.
+
+  \item[Docker compatibility.]
+    Where possible, Doki accepts Dockerfile syntax, Docker Compose
+    files, and OCI image formats. This lowers the barrier to adoption
+    for developers already familiar with the Docker ecosystem.
+
+  \item[Single-binary distribution.]
+    The entire system is distributed as four statically linked
+    binaries totaling approximately 28.3\,MB. No package manager,
+    runtime, or system-level installation is required beyond
+    extracting the archive.
+
+  \item[Security in depth.]
+    Isolation is achieved through multiple layered mechanisms:
+        syscall filtering (seccomp), mandatory access control
+        (AppArmor), Linux capabilities, and user namespaces.
+        Each layer provides independent protection even if another
+        layer is bypassed.
+\end{description}
+
+\section{Contributions}
+\label{sec:contributions}
+
+This report makes the following contributions:
+
+\begin{enumerate}[leftmargin=*, itemsep=4pt]
+  \item A comprehensive architecture for rootless containerization
+        on Android, demonstrating that Docker-like functionality is
+        achievable without root access or kernel modifications.
+
+  \item A 12-level isolation framework that automatically selects the
+        strongest available runtime based on host capabilities,
+        providing both security and compatibility.
+
+  \item DokiLink-Lite, a peer-to-peer mesh networking protocol with
+        TLS~1.3 encryption and optional NaCl secretbox payload
+        encryption for secure inter-device communication.
+
+  \item An empirical evaluation of container startup times, memory
+        usage, and network throughput across multiple isolation levels
+        and device configurations.
+\end{enumerate}
+
+\section{Document Organization}
+\label{sec:organization}
+
+The remainder of this report is organized as follows.
+\cref{ch:architecture} presents the system architecture, including
+the daemon design, CLI structure, and communication protocols.
+\cref{ch:components} describes the individual subsystems in detail.
+\cref{ch:isolation} covers the 12 isolation levels and their
+implementations. \cref{ch:networking} explains the networking stack,
+including bridge networking, internal DNS, and DokiLink-Lite mesh.
+\cref{ch:storage} describes image storage, layer management, and
+the overlay filesystem. \cref{ch:build} covers the build system,
+Dockerfile support, and Compose orchestration. \cref{ch:metrics}
+presents performance benchmarks and comparisons. \cref{ch:roadmap}
+outlines future development plans.

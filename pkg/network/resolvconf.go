@@ -26,7 +26,7 @@ func ParseResolvConf(path string) (*ResolvConf, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	rc := &ResolvConf{}
 	scanner := bufio.NewScanner(f)

@@ -94,7 +94,7 @@ type VolumeManager struct {
 
 // NewVolumeManager creates a new volume manager.
 func NewVolumeManager(root string) *VolumeManager {
-	common.EnsureDir(root)
+	_ = common.EnsureDir(root)
 	vm := &VolumeManager{
 		root:    root,
 		volumes: make(map[string]*common.VolumeInfo),
@@ -142,7 +142,7 @@ func (vm *VolumeManager) Create(name string, driver string, opts map[string]stri
 	}
 
 	mountpoint := filepath.Join(vm.root, name)
-	common.EnsureDir(mountpoint)
+	_ = common.EnsureDir(mountpoint)
 
 	if driver == "" {
 		driver = "local"
@@ -203,7 +203,7 @@ func (vm *VolumeManager) Remove(name string) error {
 	}
 
 	delete(vm.volumes, name)
-	os.RemoveAll(vol.Mountpoint)
+	_ = os.RemoveAll(vol.Mountpoint)
 	return nil
 }
 
@@ -217,7 +217,7 @@ func (vm *VolumeManager) Prune(referencedVolumes map[string]bool) ([]string, err
 			continue
 		}
 		delete(vm.volumes, name)
-		os.RemoveAll(vol.Mountpoint)
+		_ = os.RemoveAll(vol.Mountpoint)
 		pruned = append(pruned, name)
 	}
 	return pruned, nil
@@ -392,7 +392,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	_, _ = w.Write([]byte("OK"))
 }
 
 func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
@@ -562,7 +562,7 @@ func (s *Server) handleContainersList(w http.ResponseWriter, r *http.Request) {
 	// Parse filters.
 	var filters map[string][]string
 	if filtersStr != "" {
-		json.Unmarshal([]byte(filtersStr), &filters)
+		_ = json.Unmarshal([]byte(filtersStr), &filters)
 	}
 
 	containers := make([]common.ContainerInfo, 0)
@@ -1052,7 +1052,7 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request, 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request, id string) {
@@ -1207,7 +1207,7 @@ func (s *Server) handleContainerUnpause(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleContainerWait(w http.ResponseWriter, r *http.Request, id string) {
-	state, err := s.runtime.State(id)
+	_, err := s.runtime.State(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -1222,7 +1222,7 @@ func (s *Server) handleContainerWait(w http.ResponseWriter, r *http.Request, id 
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			state, err = s.runtime.State(id)
+			state, err := s.runtime.State(id)
 			if err != nil {
 				// BUG-09 fix: state may be nil if the container was deleted.
 				s.writeJSON(w, http.StatusOK, map[string]int{"StatusCode": -1})
@@ -1292,7 +1292,7 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 		s.writeError(w, http.StatusNotFound, "no log file available")
 		return
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 
 	w.WriteHeader(http.StatusOK)
 
@@ -1346,16 +1346,16 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, id 
 					return
 				}
 				if _, err := f.Seek(offset, io.SeekStart); err != nil {
-					f.Close()
+					_ = f.Close()
 					return
 				}
 				newContent := make([]byte, fi.Size()-offset)
 				n, err := io.ReadFull(f, newContent)
 				if err != nil {
-					f.Close()
+					_ = f.Close()
 					return
 				}
-				f.Close()
+				_ = f.Close()
 				offset += int64(n)
 
 				newLines := strings.Split(string(newContent[:n]), "\n")
@@ -1413,8 +1413,8 @@ func (s *Server) writeLogLine(w io.Writer, line string, stdout, stderr bool, str
 	header := make([]byte, 8)
 	header[0] = streamType
 	binary.BigEndian.PutUint32(header[4:], uint32(len(data)))
-	w.Write(header)
-	w.Write([]byte(data))
+	_, _ = w.Write(header)
+	_, _ = w.Write([]byte(data))
 }
 
 func (s *Server) handleContainerDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -1460,8 +1460,8 @@ func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request, id
 
 	w.WriteHeader(http.StatusOK)
 	data, _ := json.Marshal(stats)
-	w.Write(data)
-	w.Write([]byte("\n"))
+	_, _ = w.Write(data)
+	_, _ = w.Write([]byte("\n"))
 	flusher.Flush()
 }
 
@@ -1485,14 +1485,14 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 	if err != nil {
 		return
 	}
-	defer conn.Close()
-	conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n"))
+	defer func() { _ = conn.Close() }()
+	_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n"))
 	
 	// Stream container logs
 	if state.LogPath != "" {
 		// Read existing logs
 		if data, err := os.ReadFile(state.LogPath); err == nil {
-			conn.Write(data)
+			_, _ = conn.Write(data)
 		}
 		
 		// Follow new logs
@@ -1501,16 +1501,16 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 			if err != nil {
 				return
 			}
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 			
 			// Seek to end
-			file.Seek(0, io.SeekEnd)
+			_, _ = file.Seek(0, io.SeekEnd)
 			
 			buf := make([]byte, 4096)
 			for {
 				n, err := file.Read(buf)
 				if n > 0 {
-					conn.Write(buf[:n])
+					_, _ = conn.Write(buf[:n])
 				}
 				if err != nil {
 					time.Sleep(100 * time.Millisecond)
@@ -1521,7 +1521,7 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 	}
 	
 	// Keep connection alive
-	io.Copy(io.Discard, conn)
+	_, _ = io.Copy(io.Discard, conn)
 }
 
 // G5: handleContainerHealth returns health status for a container.
@@ -1555,7 +1555,7 @@ func (s *Server) handleContainerExport(w http.ResponseWriter, r *http.Request, i
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.tar", id[:12]))
 	tw := tar.NewWriter(w)
-	defer tw.Close()
+	defer func() { _ = tw.Close() }()
 	if err := filepath.Walk(rootfsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -1582,10 +1582,10 @@ func (s *Server) handleContainerExport(w http.ResponseWriter, r *http.Request, i
 				return err
 			}
 			if _, err := io.Copy(tw, f); err != nil {
-				f.Close()
+				_ = f.Close()
 				return err
 			}
-			f.Close()
+			_ = f.Close()
 		}
 		return nil
 	}); err != nil {
@@ -1638,7 +1638,7 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 func getRootfsChanges(rootfsDir string) []map[string]string {
 	var changes []map[string]string
 	// Walk rootfs and report added/modified/deleted files
-	filepath.Walk(rootfsDir, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(rootfsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
@@ -1804,8 +1804,8 @@ func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID 
 		header[5] = byte(len(stdout) >> 16)
 		header[6] = byte(len(stdout) >> 8)
 		header[7] = byte(len(stdout))
-		w.Write(header)
-		w.Write(stdout)
+		_, _ = w.Write(header)
+		_, _ = w.Write(stdout)
 	}
 	if len(stderr) > 0 {
 		header := make([]byte, 8)
@@ -1814,8 +1814,8 @@ func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID 
 		header[5] = byte(len(stderr) >> 16)
 		header[6] = byte(len(stderr) >> 8)
 		header[7] = byte(len(stderr))
-		w.Write(header)
-		w.Write(stderr)
+		_, _ = w.Write(header)
+		_, _ = w.Write(stderr)
 	}
 }
 
@@ -1853,20 +1853,26 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send initial status
-	json.NewEncoder(w).Encode(map[string]string{"status": "Pulling from " + imageName, "id": imageName})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "Pulling from " + imageName, "id": imageName}); err != nil {
+		slog.Warn("encode", "err", err)
+	}
 	flusher.Flush()
 
 	record, err := s.image.Pull(imageName)
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]string{"status": "error: " + err.Error(), "id": imageName})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "error: " + err.Error(), "id": imageName}); err != nil {
+			slog.Warn("encode", "err", err)
+		}
 		flusher.Flush()
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"status": "Pull complete",
 		"id":     common.ShortID(record.ID),
-	})
+	}); err != nil {
+		slog.Warn("encode", "err", err)
+	}
 	flusher.Flush()
 }
 
@@ -1964,7 +1970,9 @@ func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request, id stri
 		if detail != "" {
 			msg["progressDetail"] = detail
 		}
-		json.NewEncoder(w).Encode(msg)
+		if err := json.NewEncoder(w).Encode(msg); err != nil {
+			slog.Warn("encode", "err", err)
+		}
 		flusher.Flush()
 	}
 
@@ -2034,6 +2042,11 @@ func (s *Server) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleImagesSearch(w http.ResponseWriter, r *http.Request) {
 	term := r.URL.Query().Get("term")
 	limit := 25
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
 
 	results, err := s.image.Search(term, limit)
 	if err != nil {
@@ -2169,9 +2182,11 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 	if len(tags) > 0 {
 		tagName = tags[0]
 	}
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"stream": fmt.Sprintf("Successfully built %s\n", tagName),
-	})
+	}); err != nil {
+		slog.Warn("encode", "err", err)
+	}
 }
 
 func (s *Server) handleImageLoad(w http.ResponseWriter, r *http.Request) {
@@ -2293,7 +2308,9 @@ func (s *Server) handleNetworkDispatch(w http.ResponseWriter, r *http.Request) {
 		if req.EndpointConfig != nil {
 			aliases = req.EndpointConfig.Aliases
 		}
-		s.network.Connect(networkID, req.Container, "", aliases, nil, pid)
+		if err := s.network.Connect(networkID, req.Container, "", aliases, nil, pid); err != nil {
+			slog.Warn("network connect", "network", networkID, "container", req.Container, "err", err)
+		}
 		w.WriteHeader(http.StatusOK)
 	case action == "disconnect" && r.Method == "POST":
 		var req struct {
@@ -2307,7 +2324,9 @@ func (s *Server) handleNetworkDispatch(w http.ResponseWriter, r *http.Request) {
 		if state, err := s.runtime.State(req.Container); err == nil && state != nil {
 			pid = state.Pid
 		}
-		s.network.Disconnect(networkID, req.Container, pid)
+		if err := s.network.Disconnect(networkID, req.Container, pid); err != nil {
+			slog.Warn("network disconnect", "network", networkID, "container", req.Container, "err", err)
+		}
 		w.WriteHeader(http.StatusOK)
 	case r.Method == "DELETE":
 		if err := s.network.RemoveNetwork(networkID); err != nil {
@@ -2564,14 +2583,6 @@ func detectOS() string {
 	return goruntime.GOOS
 }
 
-func handleNotImplemented(msg string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotImplemented)
-		fmt.Fprintf(w, `{"message":"%s not yet implemented"}`, msg)
-	}
-}
-
 // handleCommit creates a new image from a container's changes.
 func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -2665,12 +2676,6 @@ func (s *Server) handleKubePlay(w http.ResponseWriter, r *http.Request) {
 		"message":    "play kube: created resources",
 		"containers": containers,
 	})
-}
-
-type kubeSimple struct {
-	Kind     string                 `yaml:"kind"`
-	Metadata map[string]interface{} `yaml:"metadata"`
-	Spec     map[string]interface{} `yaml:"spec"`
 }
 
 func parseKubeYAML(yamlStr string, s *Server) []string {
@@ -2837,7 +2842,7 @@ spec:
 	}
 	w.Header().Set("Content-Type", "text/yaml")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(strings.Join(yamlParts, "---\n")))
+	_, _ = w.Write([]byte(strings.Join(yamlParts, "---\n")))
 }
 
 // handleGenerateDispatch handles generate sub-commands.
@@ -2981,12 +2986,12 @@ spec:
 	}
 	if len(yamlParts) == 0 {
 		w.Header().Set("Content-Type", "text/yaml")
-		w.Write([]byte("# No running containers\n"))
+		_, _ = w.Write([]byte("# No running containers\n"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/yaml")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(strings.Join(yamlParts, "---\n")))
+	_, _ = w.Write([]byte(strings.Join(yamlParts, "---\n")))
 }
 
 func parseSignal(s string) syscall.Signal {

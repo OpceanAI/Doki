@@ -123,14 +123,14 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 		if err := r.nsMgr.SetupUserNamespace(cmd.Process.Pid, &ns.Config{
 			User: true, Rootless: true,
 		}); err != nil {
-			cmd.Process.Kill()
+			_ = cmd.Process.Kill()
 			return 0, fmt.Errorf("setup user namespace: %w", err)
 		}
 	}
 
 	// Bring up loopback in new network namespace.
 	if state.Config.NetworkMode != common.NetworkHost && state.Config.NetworkMode != common.NetworkNone {
-		exec.Command("nsenter", "-t", strconv.Itoa(cmd.Process.Pid), "-n",
+		_ = exec.Command("nsenter", "-t", strconv.Itoa(cmd.Process.Pid), "-n",
 			"ip", "link", "set", "lo", "up").Run()
 	}
 

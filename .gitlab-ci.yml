@@ -5,7 +5,7 @@ stages:
   - release
 
 variables:
-  GO_VERSION: "1.22"
+  GO_VERSION: "1.26"
   BINARY_NAME: "doki"
 
 .build_template: &build_definition

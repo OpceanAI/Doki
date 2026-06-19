@@ -1,0 +1,289 @@
+% DOKI TECHNICAL REPORT — Anthropic-Inspired Design
+% Engine: XeLaTeX | Class: KOMA-Script scrreprt
+\documentclass[12pt,a4paper,headings=optiontoheadings]{scrreprt}
+
+% PACKAGES
+% --- Fonts & Typography ---
+\usepackage{fontspec}
+\usepackage{microtype}
+
+% --- Page Layout ---
+\usepackage[
+  top=28mm,
+  bottom=30mm,
+  left=25mm,
+  right=25mm,
+  headheight=16pt
+]{geometry}
+\usepackage{parskip}
+
+% --- Colors ---
+\usepackage[dvipsnames,svgnames,x11names]{xcolor}
+
+% --- Graphics ---
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+% --- Tables ---
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{siunitx}
+\sisetup{table-number-alignment=center, detect-all}
+
+% --- Math ---
+\usepackage{amsmath,amssymb}
+\usepackage{mathtools}
+\usepackage{bm}
+
+% --- Code ---
+\usepackage[most]{tcolorbox}
+
+% --- Lists ---
+\usepackage{enumitem}
+
+% --- Captions ---
+\usepackage{caption}
+\usepackage{subcaption}
+
+% --- Header/Footer ---
+\usepackage{scrlayer-scrpage}
+\clearpairofpagestyles
+\ohead{\headmark}
+\ofoot{\pagemark}
+
+% --- Bibliography ---
+\usepackage[
+  backend=biber,
+  style=numeric,
+  maxcitenames=2,
+  maxbibnames=99
+]{biblatex}
+
+% --- Hyperlinks (load near last) ---
+\usepackage[
+  colorlinks=true,
+  linkcolor=accentClay,
+  citecolor=accentClay!70!black,
+  urlcolor=accentClay!60!black,
+  pdftitle={Doki: A Complete Container Ecosystem for Android},
+  pdfauthor={OpceanAI},
+  pdfsubject={Technical Report},
+  pdfkeywords={containers, Android, proot, Doki, DokiLink}
+]{hyperref}
+\usepackage{bookmark}
+\usepackage[nameinlink,noabbrev]{cleveref}
+
+% --- TikZ Libraries ---
+\usetikzlibrary{
+  arrows.meta,
+  positioning,
+  shapes.geometric,
+  calc,
+  fit,
+  backgrounds,
+  decorations.pathreplacing,
+  matrix,
+  automata
+}
+
+% ============================================================
+% ANTHROPIC-INSPIRED COLOR PALETTE
+% ============================================================
+% --- Brand Colors ---
+\definecolor{bgWarm}{HTML}{FAF9F5}       % Warm ivory background
+\definecolor{inkDark}{HTML}{141413}       % Primary text (near-black)
+\definecolor{accentClay}{HTML}{D97757}    % Terracotta accent
+\definecolor{accentSky}{HTML}{6A9BCC}     % Secondary blue
+\definecolor{accentOlive}{HTML}{788C5D}   % Tertiary green
+
+% --- Diagram Palette (Muted, Professional) ---
+\definecolor{nodeblue}{HTML}{4477AA}      % Muted blue
+\definecolor{nodeorange}{HTML}{EE7733}    % Muted orange
+\definecolor{nodelteal}{HTML}{66CCEE}     % Soft teal
+\definecolor{nodepurple}{HTML}{9977AA}    % Muted purple
+\definecolor{nodegreen}{HTML}{55AA77}     % Soft green
+\definecolor{nodecoral}{HTML}{CC3311}     % Muted coral
+\definecolor{fillblue}{HTML}{E8F4FD}      % Light blue fill
+\definecolor{fillorange}{HTML}{FDF2E9}    % Light orange fill
+\definecolor{fillteal}{HTML}{E8F8F5}      % Light teal fill
+\definecolor{fillpurple}{HTML}{F0EBF8}    % Light purple fill
+\definecolor{fillcoral}{HTML}{FDEDEC}     % Light coral fill
+\definecolor{fillgray}{HTML}{F5F5F5}      % Light gray fill
+\definecolor{textdark}{HTML}{2C3E50}      % Dark text
+\definecolor{textgray}{HTML}{5D6D7E}      % Secondary text
+\definecolor{linegray}{HTML}{95A5A6}      % Connection lines
+\definecolor{gridgray}{HTML}{E0E0E0}      % Chart grid
+
+% ============================================================
+% CONSOLIDATED TIKZ STYLES (NO empty lines inside tikzset)
+% ============================================================
+\tikzset{
+  comp/.style={rectangle, rounded corners=2pt, draw=nodeblue!60, line width=0.6pt, fill=fillblue, minimum width=2.2cm, minimum height=0.9cm, font=\sffamily\small, text=textdark, align=center, inner sep=4pt},
+  compAlt/.style={comp, draw=nodeorange!60, fill=fillorange},
+  compTeal/.style={comp, draw=nodelteal!60, fill=fillteal},
+  compPurple/.style={comp, draw=nodepurple!60, fill=fillpurple},
+  compSm/.style={comp, minimum width=1.5cm, minimum height=0.7cm, font=\sffamily\scriptsize},
+  region/.style={rectangle, rounded corners=5pt, draw=linegray!80, line width=0.8pt, fill=white, inner sep=8pt, font=\sffamily\scriptsize, text=textgray},
+  layer/.style={rectangle, minimum width=10cm, minimum height=1.1cm, font=\sffamily\small, text=white, align=center, inner sep=4pt},
+  layerSm/.style={layer, minimum width=8cm, minimum height=0.9cm, font=\sffamily\footnotesize},
+  arr/.style={-{Stealth[length=3mm, width=2mm]}, draw=linegray, line width=0.6pt},
+  arrThick/.style={-{Stealth[length=4mm, width=2.5mm]}, draw=textdark, line width=0.9pt},
+  arrDash/.style={arr, dashed},
+  arrBidir/.style={{Stealth[length=3mm, width=2mm]}-{Stealth[length=3mm, width=2mm]}, draw=linegray, line width=0.6pt},
+  arrBlock/.style={-{Stealth[length=5mm, width=3mm]}, draw=textdark, line width=1pt},
+  annot/.style={font=\sffamily\tiny, text=textgray},
+  annotBold/.style={font=\sffamily\footnotesize\bfseries, text=textdark},
+  dokiNode/.style={rectangle, rounded corners=3pt, draw=nodeblue!70, fill=fillblue, minimum width=2.5cm, minimum height=1.0cm, font=\sffamily\small, text=textdark, align=center, inner sep=5pt},
+  dokiNodeAlt/.style={dokiNode, draw=nodeorange!70, fill=fillorange},
+  dokiNodeTeal/.style={dokiNode, draw=nodelteal!70, fill=fillteal},
+  dokiNodePurple/.style={dokiNode, draw=nodepurple!70, fill=fillpurple},
+  dokiRegion/.style={rectangle, rounded corners=6pt, draw=linegray!60, line width=0.7pt, fill=white, inner sep=10pt},
+  stateNode/.style={rectangle, rounded corners=4pt, draw=nodeblue!70, fill=fillblue, minimum width=2.0cm, minimum height=0.8cm, font=\sffamily\footnotesize, text=textdark, align=center, inner sep=4pt},
+  participant/.style={rectangle, draw=nodeblue!70, fill=fillblue, minimum width=2.5cm, minimum height=0.7cm, font=\sffamily\footnotesize, text=textdark, align=center},
+  seqmsg/.style={-{Stealth[length=2.5mm]}, draw=textdark, line width=0.5pt},
+  seqmsgReturn/.style={seqmsg, dashed},
+  lyr/.style={rectangle, minimum width=10cm, minimum height=1.1cm, font=\sffamily\small, text=white, align=center, inner sep=4pt},
+  reg/.style={rectangle, rounded corners=5pt, draw=linegray!80, line width=0.7pt, fill=white, inner sep=8pt, font=\sffamily\scriptsize, text=textgray},
+  ar/.style={-{Stealth[length=3mm, width=2mm]}, draw=linegray, line width=0.5pt},
+  arTh/.style={-{Stealth[length=4mm, width=2.5mm]}, draw=textdark, line width=0.8pt},
+  barfill/.style={fill opacity=0.85},
+  chartgrid/.style={major grid style={draw=gridgray}}
+}
+
+% ============================================================
+% PGFPLOTS STYLES
+% ============================================================
+\pgfplotsset{
+  professional chart/.style={
+    width=12cm,
+    height=7cm,
+    grid=major,
+    major grid style={draw=gridgray, line width=0.3pt},
+    axis line style={draw=linegray},
+    tick style={draw=none},
+    ticklabel style={font=\sffamily\tiny, text=textdark},
+    xlabel style={font=\sffamily\footnotesize, text=textdark},
+    ylabel style={font=\sffamily\footnotesize, text=textdark},
+    legend style={
+      font=\sffamily\tiny,
+      draw=none, fill=none,
+      legend columns=-1,
+      /tikz/every even column/.append style={column sep=4pt}
+    }
+  },
+  grouped bar/.style={
+    ybar,
+    bar width=8pt,
+    professional chart,
+    ymin=0,
+    enlarge x limits=0.15,
+    legend style={
+      at={(0.5,-0.18)}, anchor=north,
+      font=\sffamily\tiny,
+      draw=none, fill=none,
+      legend columns=-1
+    },
+    tick align=outside,
+    major tick length=0pt
+  },
+  line plot/.style={
+    professional chart,
+    mark size=1.5pt,
+    mark repeat=5,
+    thick
+  }
+}
+
+% ============================================================
+% CUSTOM TCOLORBOXES (Anthropic-Style)
+% ============================================================
+\newtcolorbox{codebox}[2][]{
+  breakable,
+  colback=bgWarm!50,
+  colframe=accentClay!30,
+  arc=4pt,
+  boxrule=0.5pt,
+  fonttitle=\sffamily\small\bfseries,
+  coltitle=inkDark,
+  title=#2,
+  #1
+}
+
+\newtcolorbox{notebox}[1][]{
+  breakable,
+  colback=fillblue!30,
+  colframe=nodeblue!40,
+  arc=4pt,
+  boxrule=0.5pt,
+  fonttitle=\sffamily\small\bfseries,
+  title={Note},
+  #1
+}
+
+% ============================================================
+% HEADING TYPOGRAPHY (Anthropic-Style)
+% ============================================================
+\addtokomafont{chapter}{\sffamily\Large\bfseries}
+\addtokomafont{section}{\sffamily\large\bfseries}
+\addtokomafont{subsection}{\sffamily\normalsize\bfseries}
+
+% Caption styling
+\addtokomafont{caption}{\sffamily\small}
+\addtokomafont{captionlabel}{\bfseries}
+
+% Table formatting
+\setlength{\arrayrulewidth}{0.4pt}
+\setlength{\tabcolsep}{10pt}
+\renewcommand{\arraystretch}{1.4}
+
+% ============================================================
+% BIBLIOGRAPHY RESOURCE
+% ============================================================
+\addbibresource{references.bib}
+
+% ============================================================
+% BEGIN DOCUMENT
+% ============================================================
+\begin{document}
+
+% --- Apply Anthropic theme ---
+\pagecolor{bgWarm}
+\color{inkDark}
+
+% --- Cover Page ---
+\input{sections/00-cover}
+
+% --- Front Matter ---
+\pagenumbering{roman}
+\tableofcontents
+\listoffigures
+\listoftables
+\cleardoublepage
+
+% --- Main Content ---
+\pagenumbering{arabic}
+
+\input{sections/01-resumen}
+\input{sections/02-introduction}
+\input{sections/03-architecture}
+\input{sections/04-components}
+\input{sections/05-isolation}
+\input{sections/06-networking}
+\input{sections/07-storage}
+\input{sections/08-build}
+\input{sections/09-metrics}
+\input{sections/10-roadmap}
+\input{sections/11-conclusions}
+
+% --- Back Matter ---
+\cleardoublepage
+\printbibliography[title={References}]
+
+% --- Appendix ---
+\appendix
+\input{sections/12-appendix}
+
+\end{document}

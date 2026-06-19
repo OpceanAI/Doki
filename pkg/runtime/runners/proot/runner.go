@@ -105,9 +105,9 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 		for event := range events {
 			switch event.Type {
 			case proot.EventStdout:
-				os.Stdout.Write([]byte(event.Data))
+				_, _ = os.Stdout.Write([]byte(event.Data))
 			case proot.EventStderr:
-				os.Stderr.Write([]byte(event.Data))
+				_, _ = os.Stderr.Write([]byte(event.Data))
 			case proot.EventExit:
 				r.log.Info("container exited via IPC", "id", common.ShortID(id), "code", event.ExitCode)
 			}
@@ -177,7 +177,7 @@ func (r *Runner) Stop(_ context.Context, id string, timeout time.Duration) error
 			if timeout > 0 {
 				time.Sleep(timeout)
 			}
-			r.ipc.Signal(id, "SIGKILL")
+			_ = r.ipc.Signal(id, "SIGKILL")
 			return nil
 		}
 	}

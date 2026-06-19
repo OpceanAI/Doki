@@ -179,7 +179,7 @@ func (p *TCPProxy) untrackConn(c net.Conn) {
 
 func (p *TCPProxy) handleConn(ctx context.Context, client net.Conn) {
 	defer p.untrackConn(client)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if p.idleTimeout > 0 {
 		_ = client.SetDeadline(time.Now().Add(p.idleTimeout))
@@ -191,7 +191,7 @@ func (p *TCPProxy) handleConn(ctx context.Context, client net.Conn) {
 			"upstream", p.upstream, "err", err)
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 
 	if p.idleTimeout > 0 {
 		_ = upstream.SetDeadline(time.Now().Add(p.idleTimeout))

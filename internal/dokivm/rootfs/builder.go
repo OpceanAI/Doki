@@ -37,7 +37,7 @@ func (b *Builder) BuildRootfs(vmID string, rootfsDir string, sizeMB int) (string
 	}
 
 	vmDir := filepath.Join(b.workDir, vmID)
-	common.EnsureDir(vmDir)
+	_ = common.EnsureDir(vmDir)
 
 	rootfsPath := filepath.Join(vmDir, "rootfs.ext4")
 
@@ -73,14 +73,14 @@ func (b *Builder) BuildRootfs(vmID string, rootfsDir string, sizeMB int) (string
 // Searches for doki-init-rust first, falls back to doki-init (Go).
 func (b *Builder) BuildMinimalRootfs(vmID string, layersDir string, dokiInitPath string) (string, error) {
 	vmDir := filepath.Join(b.workDir, vmID)
-	common.EnsureDir(vmDir)
+	_ = common.EnsureDir(vmDir)
 
 	stagingDir := filepath.Join(vmDir, "staging")
-	common.EnsureDir(stagingDir)
+	_ = common.EnsureDir(stagingDir)
 
 	// Create essential directories.
 	for _, dir := range []string{"bin", "sbin", "dev", "proc", "sys", "tmp", "etc", "var", "run"} {
-		common.EnsureDir(filepath.Join(stagingDir, dir))
+		_ = common.EnsureDir(filepath.Join(stagingDir, dir))
 	}
 
 	// Find doki-init binary: try doki-init-rust first, then doki-init (Go).

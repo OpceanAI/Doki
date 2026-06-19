@@ -36,19 +36,3 @@ func main() {
 	}
 	fmt.Printf("  ✓ Config: %d bytes\n", len(config))
 }
-
-// Test also node:22-alpine
-func testNode() {
-	client := registry.NewClient(false)
-	fmt.Println("\n▶ Pulling node:22-alpine...")
-	ref, _ := registry.ParseImageRef("node:22-alpine")
-	manifest, digest, err := client.ResolveManifest(ref.Registry, ref.Name, ref.Tag)
-	if err != nil {
-		fmt.Printf("  ERROR: %v\n", err)
-		return
-	}
-
-	fmt.Printf("  ✓ Manifest digest: %s\n", digest)
-	fmt.Printf("  Layers: %d\n", len(manifest.Layers))
-	fmt.Printf("  Config: %s\n", manifest.Config.Digest)
-}
