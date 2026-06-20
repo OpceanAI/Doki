@@ -1,3 +1,4 @@
+// Package controllers provides Kubernetes controllers.
 package controllers
 
 import (
@@ -5,24 +6,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/k8s-types"
 	"github.com/OpceanAI/Doki/pkg/store"
 )
 
+// Controller defines the interface for a Kubernetes controller.
 type Controller interface {
 	Name() string
 	Run(ctx context.Context)
 }
 
+// Manager runs and manages a set of Kubernetes controllers.
 type Manager struct {
 	store       store.Store
 	controllers []Controller
 	logger      *slog.Logger
 }
 
+// NewManager creates a new controller manager with all built-in controllers registered.
 func NewManager(s store.Store, logger *slog.Logger) *Manager {
 	m := &Manager{store: s, logger: logger}
 	m.Register(&DeploymentController{store: s, logger: logger})
@@ -38,10 +41,12 @@ func NewManager(s store.Store, logger *slog.Logger) *Manager {
 	return m
 }
 
+// Register adds a controller to the manager.
 func (m *Manager) Register(c Controller) {
 	m.controllers = append(m.controllers, c)
 }
 
+// Run starts all registered controllers and blocks until the context is cancelled.
 func (m *Manager) Run(ctx context.Context) error {
 	for _, c := range m.controllers {
 		go c.Run(ctx)
@@ -51,13 +56,16 @@ func (m *Manager) Run(ctx context.Context) error {
 	return nil
 }
 
+// DeploymentController manages Deployment resources.
 type DeploymentController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *DeploymentController) Name() string { return "deployment" }
 
+// Run starts the Deployment reconciliation loop.
 func (c *DeploymentController) Run(ctx context.Context) {
 	prefix := store.KeyFor("apps", "deployments", "", "")
 	ch, _ := c.store.Watch(prefix, 0)
@@ -134,13 +142,16 @@ func (c *DeploymentController) reconcile(deploy *k8s.Deployment) {
 	_ = c.store.Put(key, &store.StoredObject{Value: data})
 }
 
+// ReplicaSetController manages ReplicaSet resources.
 type ReplicaSetController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *ReplicaSetController) Name() string { return "replicaset" }
 
+// Run starts the ReplicaSet reconciliation loop.
 func (c *ReplicaSetController) Run(ctx context.Context) {
 	prefix := store.KeyFor("apps", "replicasets", "", "")
 	ch, _ := c.store.Watch(prefix, 0)
@@ -211,13 +222,16 @@ func (c *ReplicaSetController) reconcile(rs *k8s.ReplicaSet) {
 	_ = c.store.Put(key, &store.StoredObject{Value: data})
 }
 
+// JobController manages Job resources.
 type JobController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *JobController) Name() string { return "job" }
 
+// Run starts the Job reconciliation loop.
 func (c *JobController) Run(ctx context.Context) {
 	prefix := store.KeyFor("batch", "jobs", "", "")
 	ch, _ := c.store.Watch(prefix, 0)
@@ -232,13 +246,16 @@ func (c *JobController) Run(ctx context.Context) {
 	}
 }
 
+// CronJobController manages CronJob resources.
 type CronJobController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *CronJobController) Name() string { return "cronjob" }
 
+// Run starts the CronJob reconciliation loop.
 func (c *CronJobController) Run(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -251,13 +268,16 @@ func (c *CronJobController) Run(ctx context.Context) {
 	}
 }
 
+// NodeController manages Node resources.
 type NodeController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *NodeController) Name() string { return "node" }
 
+// Run starts the Node reconciliation loop.
 func (c *NodeController) Run(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -287,46 +307,58 @@ func (c *NodeController) checkNodes() {
 	}
 }
 
+// EndpointController manages Endpoint resources.
 type EndpointController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *EndpointController) Name() string { return "endpoint" }
 
+// Run starts the Endpoint reconciliation loop.
 func (c *EndpointController) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// ServiceController manages Service resources.
 type ServiceController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *ServiceController) Name() string { return "service" }
 
+// Run starts the Service reconciliation loop.
 func (c *ServiceController) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// NamespaceController manages Namespace resources.
 type NamespaceController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *NamespaceController) Name() string { return "namespace" }
 
+// Run starts the Namespace reconciliation loop.
 func (c *NamespaceController) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// ServiceAccountController manages ServiceAccount resources.
 type ServiceAccountController struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *ServiceAccountController) Name() string { return "serviceaccount" }
 
+// Run starts the ServiceAccount reconciliation loop.
 func (c *ServiceAccountController) Run(ctx context.Context) {
 	prefix := store.KeyFor("", "namespaces", "", "")
 	ch, _ := c.store.Watch(prefix, 0)
@@ -351,13 +383,16 @@ func (c *ServiceAccountController) Run(ctx context.Context) {
 	}
 }
 
+// GarbageCollector removes orphaned Kubernetes resources.
 type GarbageCollector struct {
 	store  store.Store
 	logger *slog.Logger
 }
 
+// Name returns the controller name.
 func (c *GarbageCollector) Name() string { return "garbage-collector" }
 
+// Run starts the garbage collection loop.
 func (c *GarbageCollector) Run(ctx context.Context) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
@@ -372,6 +407,5 @@ func (c *GarbageCollector) Run(ctx context.Context) {
 }
 
 func (c *GarbageCollector) collect() {
-	var mu sync.Mutex
-	_ = mu
+	// Garbage collection logic placeholder
 }

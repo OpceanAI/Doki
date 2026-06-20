@@ -34,7 +34,7 @@ type VsockMessage struct {
 }
 
 // Exec sends an exec command to the guest via vsock.
-func (v *VsockClient) Exec(ctx context.Context, cmd []string, env []string, cwd string, tty bool, stdout, stderr io.Writer) error {
+func (v *VsockClient) Exec(_ context.Context, cmd []string, env []string, cwd string, tty bool, stdout, stderr io.Writer) error {
 	conn, err := v.dial()
 	if err != nil {
 		return fmt.Errorf("vsock dial: %w", err)
@@ -82,7 +82,7 @@ func (v *VsockClient) Exec(ctx context.Context, cmd []string, env []string, cwd 
 }
 
 // Signal sends a signal to the guest process.
-func (v *VsockClient) Signal(ctx context.Context, sig string) error {
+func (v *VsockClient) Signal(_ context.Context, sig string) error {
 	conn, err := v.dial()
 	if err != nil {
 		return err
@@ -94,7 +94,7 @@ func (v *VsockClient) Signal(ctx context.Context, sig string) error {
 }
 
 // HealthCheck sends a health check probe.
-func (v *VsockClient) HealthCheck(ctx context.Context) (string, error) {
+func (v *VsockClient) HealthCheck(_ context.Context) (string, error) {
 	conn, err := v.dial()
 	if err != nil {
 		return "unhealthy", err

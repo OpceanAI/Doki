@@ -3,6 +3,7 @@ package podman
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -20,7 +21,9 @@ func NewManifestManager(root string) *ManifestManager {
 		manifests: make(map[string]*ManifestList),
 		store:     filepath.Join(root, "manifests"),
 	}
-	_ = os.MkdirAll(mm.store, 0755)
+	if err := os.MkdirAll(mm.store, 0755); err != nil {
+		log.Printf("podman: create manifest store %s: %v", mm.store, err)
+	}
 	mm.loadManifests()
 	return mm
 }
@@ -29,6 +32,9 @@ func (mm *ManifestManager) Create(name string, images []string) (*ManifestList, 
 	mm.mu.Lock()
 	defer mm.mu.Unlock()
 
+	if name == "" {
+		return nil, fmt.Errorf("manifest name is required")
+	}
 	if _, exists := mm.manifests[name]; exists {
 		return nil, fmt.Errorf("manifest list %q already exists", name)
 	}
@@ -49,7 +55,10 @@ func (mm *ManifestManager) Create(name string, images []string) (*ManifestList, 
 	}
 
 	mm.manifests[name] = ml
-	mm.saveManifest(ml)
+	if err := mm.saveManifest(ml); err != nil {
+		delete(mm.manifests, name)
+		return nil, err
+	}
 	return ml, nil
 }
 
@@ -79,8 +88,7 @@ func (mm *ManifestManager) Add(name, image string, platform Platform) error {
 		Platform: platform,
 	})
 	ml.Modified = time.Now()
-	mm.saveManifest(ml)
-	return nil
+	return mm.saveManifest(ml)
 }
 
 func (mm *ManifestManager) Remove(name, image string) error {
@@ -100,8 +108,7 @@ func (mm *ManifestManager) Remove(name, image string) error {
 	}
 	ml.Images = filtered
 	ml.Modified = time.Now()
-	mm.saveManifest(ml)
-	return nil
+	return mm.saveManifest(ml)
 }
 
 func (mm *ManifestManager) Delete(name string) error {
@@ -113,7 +120,10 @@ func (mm *ManifestManager) Delete(name string) error {
 	}
 
 	delete(mm.manifests, name)
-	_ = os.Remove(filepath.Join(mm.store, name+".json"))
+	path := filepath.Join(mm.store, name+".json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove manifest file: %w", err)
+	}
 	return nil
 }
 
@@ -148,33 +158,43 @@ func (mm *ManifestManager) Annotate(name, image string, platform Platform) error
 		if entry.Image == image {
 			ml.Images[i].Platform = platform
 			ml.Modified = time.Now()
-			mm.saveManifest(ml)
-			return nil
+			return mm.saveManifest(ml)
 		}
 	}
 	return fmt.Errorf("image %s not found in manifest list %s", image, name)
 }
 
-func (mm *ManifestManager) saveManifest(ml *ManifestList) {
-	data, _ := json.MarshalIndent(ml, "", "  ")
-	_ = os.WriteFile(filepath.Join(mm.store, ml.Name+".json"), data, 0644)
+func (mm *ManifestManager) saveManifest(ml *ManifestList) error {
+	data, err := json.MarshalIndent(ml, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal manifest %s: %w", ml.Name, err)
+	}
+	path := filepath.Join(mm.store, ml.Name+".json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write manifest %s: %w", ml.Name, err)
+	}
+	return nil
 }
 
 func (mm *ManifestManager) loadManifests() {
 	entries, err := os.ReadDir(mm.store)
 	if err != nil {
+		log.Printf("podman: read manifest store %s: %v", mm.store, err)
 		return
 	}
 	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".json" {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(mm.store, entry.Name()))
+		path := filepath.Join(mm.store, entry.Name())
+		data, err := os.ReadFile(path)
 		if err != nil {
+			log.Printf("podman: read manifest file %s: %v", path, err)
 			continue
 		}
 		var ml ManifestList
 		if err := json.Unmarshal(data, &ml); err != nil {
+			log.Printf("podman: parse manifest file %s: %v", path, err)
 			continue
 		}
 		mm.manifests[ml.Name] = &ml

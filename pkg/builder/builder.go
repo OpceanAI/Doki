@@ -1,3 +1,4 @@
+// Package builder provides container image building.
 package builder
 
 import (
@@ -511,7 +512,7 @@ func (b *Builder) ensureCacheDir() string {
 	return b.cacheDir
 }
 
-func (b *Builder) saveLayer(rootDir string, createdBy string) (string, int64, error) {
+func (b *Builder) saveLayer(rootDir string, _ string) (string, int64, error) {
 	var buf bytes.Buffer
 	if err := CreateTar(rootDir, &buf); err != nil {
 		return "", 0, fmt.Errorf("create tar: %w", err)
@@ -603,7 +604,7 @@ func applyChowChmod(path string, chown, chmod string) error {
 }
 
 func applyChowChmodRecursive(root string, chown, chmod string) error {
-	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	return filepath.Walk(root, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

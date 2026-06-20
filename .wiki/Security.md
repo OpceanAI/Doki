@@ -1,6 +1,6 @@
 # Security
 
-Doki takes a defense-in-depth approach: seccomp + AppArmor + capabilities + user namespaces + TLS + image verification + rate limiting. v0.9.3 added DokiLink-Lite with TLS 1.3 encryption for mesh traffic.
+Doki takes a defense-in-depth approach: seccomp + AppArmor + capabilities + user namespaces + TLS + image verification + rate limiting. v0.10.0 added DokiLink-Lite with TLS 1.3 encryption for mesh traffic.
 
 ## Threat Model
 
@@ -267,7 +267,35 @@ Per-IP token-bucket rate limiter on the API:
 
 100 requests per second sustained, with bursts up to 200. Exceeding this returns HTTP 429.
 
-## Image Verification
+## Landlock Sandbox (new in v0.10)
+
+Doki includes an unprivileged sandbox via the Linux Landlock LSM (Landlock ABI v9, Linux 5.13+). Unlike seccomp (syscall filtering) and AppArmor (path-based MAC), Landlock provides filesystem access control that any user can configure without root.
+
+```go
+// pkg/landlock/landlock.go
+cfg := &SandboxConfig{
+    FSRules: []FSRule{
+        {Path: rootfs, Access: LandlockAccessFSExecute},
+    },
+    NetRules: []NetRule{
+        {Port: 443, Access: LandlockAccessNetBindTCP},
+    },
+}
+```
+
+### Features
+
+| Access Type | Controls |
+|:------------|:---------|
+| **Filesystem** | execute, write_file, read_file, read_dir, remove_dir, remove_file, make_char, make_dir, make_reg, make_sock, make_fifo, make_block, make_sym, refer, truncate, ioctl_dev, resolve_unix |
+| **Network** | bind_tcp, connect_tcp |
+| **Scope** | abstract_unix_socket, signal |
+
+### Auto-detection
+
+Doki probes the highest supported Landlock ABI on the host (v1 through v9). If Landlock is unavailable (kernel < 5.13 or not compiled with `CONFIG_SECURITY_LANDLOCK`), the sandbox is skipped gracefully.
+
+
 
 Doki's image extraction has multiple layers of verification:
 

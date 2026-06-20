@@ -1,3 +1,4 @@
+// Package main is the Doki Kubernetes control plane.
 package main
 
 import (

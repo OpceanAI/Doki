@@ -50,6 +50,7 @@ type Server struct {
 	}
 }
 
+// ServeHTTP dispatches the request to the configured middleware chain and router.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
@@ -223,7 +224,7 @@ func (vm *VolumeManager) Prune(referencedVolumes map[string]bool) ([]string, err
 	return pruned, nil
 }
 
-func (s *Server) handleVolumesPrune(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleVolumesPrune(w http.ResponseWriter, _ *http.Request) {
 	// Build list of volumes referenced by running containers.
 	referencedVolumes := make(map[string]bool)
 	if containers, err := s.runtime.List(); err == nil {
@@ -389,13 +390,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // Handler implementations follow.
 
-func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePing(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("OK"))
 }
 
-func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSystemInfo(w http.ResponseWriter, _ *http.Request) {
 	containers, err := s.runtime.List()
 	if err != nil {
 		slog.Warn("system info: list containers", "err", err)
@@ -438,7 +439,7 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, info)
 }
 
-func (s *Server) handleSystemVersion(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSystemVersion(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, common.GetVersion())
 }
 
@@ -474,7 +475,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleSystemDf(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSystemDf(w http.ResponseWriter, _ *http.Request) {
 	containers, err := s.runtime.List()
 	if err != nil {
 		slog.Warn("system df: list containers", "err", err)
@@ -543,7 +544,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleSwarmNoop(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSwarmNoop(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Swarm mode not available in Doki",
 	})
@@ -986,7 +987,7 @@ func (s *Server) handleContainerDispatch(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerInspect(w http.ResponseWriter, _ *http.Request, id string) {
 	state, err := s.runtime.State(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -1055,7 +1056,7 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request, 
 	_, _ = w.Write(data)
 }
 
-func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerStart(w http.ResponseWriter, _ *http.Request, id string) {
 	if err := s.runtime.Start(id); err != nil {
 		if common.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1186,7 +1187,7 @@ func (s *Server) handleContainerKill(w http.ResponseWriter, r *http.Request, id 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleContainerPause(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerPause(w http.ResponseWriter, _ *http.Request, id string) {
 	if err := s.runtime.Pause(id); err != nil {
 		if common.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1198,7 +1199,7 @@ func (s *Server) handleContainerPause(w http.ResponseWriter, r *http.Request, id
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleContainerUnpause(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerUnpause(w http.ResponseWriter, _ *http.Request, id string) {
 	if err := s.runtime.Unpause(id); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1465,7 +1466,7 @@ func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request, id
 	flusher.Flush()
 }
 
-func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerAttach(w http.ResponseWriter, _ *http.Request, id string) {
 	state, err := s.runtime.State(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -1525,7 +1526,7 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 }
 
 // G5: handleContainerHealth returns health status for a container.
-func (s *Server) handleContainerChanges(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerChanges(w http.ResponseWriter, _ *http.Request, id string) {
 	state, err := s.runtime.State(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -1541,7 +1542,7 @@ func (s *Server) handleContainerChanges(w http.ResponseWriter, r *http.Request, 
 	s.writeJSON(w, http.StatusOK, changes)
 }
 
-func (s *Server) handleContainerExport(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerExport(w http.ResponseWriter, _ *http.Request, id string) {
 	state, err := s.runtime.State(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -1649,7 +1650,7 @@ func getRootfsChanges(rootfsDir string) []map[string]string {
 	return changes
 }
 
-func (s *Server) handleContainerHealth(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerHealth(w http.ResponseWriter, _ *http.Request, id string) {
 	state, err := s.runtime.State(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -1666,7 +1667,7 @@ func (s *Server) handleContainerHealth(w http.ResponseWriter, r *http.Request, i
 	s.writeJSON(w, http.StatusOK, state.HealthStatus)
 }
 
-func (s *Server) handleContainersPrune(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleContainersPrune(w http.ResponseWriter, _ *http.Request) {
 	states, err := s.runtime.List()
 	if err != nil {
 		slog.Warn("prune: list containers", "err", err)
@@ -1764,7 +1765,7 @@ func (s *Server) handleExecDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID string) {
+func (s *Server) handleExecStart(w http.ResponseWriter, _ *http.Request, execID string) {
 	s.execMu.Lock()
 	cfg, ok := s.execStore[execID]
 	if !ok {
@@ -1819,7 +1820,7 @@ func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID 
 	}
 }
 
-func (s *Server) handleImagesList(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleImagesList(w http.ResponseWriter, _ *http.Request) {
 	images, err := s.image.List()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -1904,7 +1905,7 @@ func (s *Server) handleImageDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleImageInspect(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleImageInspect(w http.ResponseWriter, _ *http.Request, id string) {
 	record, err := s.image.Get(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -1943,7 +1944,7 @@ func (s *Server) handleImageInspect(w http.ResponseWriter, r *http.Request, id s
 	s.writeJSON(w, http.StatusOK, dockerImage)
 }
 
-func (s *Server) handleImageHistory(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleImageHistory(w http.ResponseWriter, _ *http.Request, id string) {
 	history, err := s.image.History(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -1953,7 +1954,7 @@ func (s *Server) handleImageHistory(w http.ResponseWriter, r *http.Request, id s
 	s.writeJSON(w, http.StatusOK, history)
 }
 
-func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleImagePush(w http.ResponseWriter, _ *http.Request, id string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		s.writeError(w, http.StatusInternalServerError, "streaming not supported")
@@ -2014,7 +2015,7 @@ func (s *Server) handleImageTag(w http.ResponseWriter, r *http.Request, id strin
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (s *Server) handleImageRemove(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleImageRemove(w http.ResponseWriter, _ *http.Request, id string) {
 	if err := s.image.Remove(id); err != nil {
 		if common.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, fmt.Sprintf("No such image: %s", id))
@@ -2026,7 +2027,7 @@ func (s *Server) handleImageRemove(w http.ResponseWriter, r *http.Request, id st
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleImagesPrune(w http.ResponseWriter, _ *http.Request) {
 	removed, err := s.image.Prune()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -2212,7 +2213,7 @@ func (s *Server) handleImageGet(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleNetworksList(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleNetworksList(w http.ResponseWriter, _ *http.Request) {
 	networks, err := s.network.ListNetworks()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -2343,7 +2344,7 @@ func (s *Server) handleNetworkDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleNetworksPrune(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleNetworksPrune(w http.ResponseWriter, _ *http.Request) {
 	pruned, err := s.network.Prune()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -2355,7 +2356,7 @@ func (s *Server) handleNetworksPrune(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleVolumesList(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleVolumesList(w http.ResponseWriter, _ *http.Request) {
 	vols := s.volumes.List()
 	if vols == nil {
 		vols = []*common.VolumeInfo{}
@@ -2624,7 +2625,7 @@ func (s *Server) handlePodCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePodList returns all pods.
-func (s *Server) handlePodList(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePodList(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, []interface{}{})
 }
 
@@ -2856,7 +2857,7 @@ func (s *Server) handleGenerateDispatch(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleAutoUpdate checks for newer image versions and updates containers.
-func (s *Server) handleAutoUpdate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAutoUpdate(w http.ResponseWriter, _ *http.Request) {
 	containers, err := s.runtime.List()
 	if err != nil {
 		slog.Warn("auto-update: list containers", "err", err)
@@ -2933,7 +2934,7 @@ func (s *Server) handleScout(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleImageVerify checks if an image has a signature.
-func (s *Server) handleImageVerify(w http.ResponseWriter, r *http.Request, imageName string) {
+func (s *Server) handleImageVerify(w http.ResponseWriter, _ *http.Request, imageName string) {
 	if imageName == "" {
 		s.writeError(w, http.StatusBadRequest, "image name required")
 		return
@@ -2955,7 +2956,7 @@ func (s *Server) handleImageVerify(w http.ResponseWriter, r *http.Request, image
 }
 
 // handleKubeGenerate provides kubectl-like generate functionality.
-func (s *Server) handleKubeGenerate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleKubeGenerate(w http.ResponseWriter, _ *http.Request) {
 	containers, err := s.runtime.List()
 	if err != nil {
 		slog.Warn("kube generate: list containers", "err", err)

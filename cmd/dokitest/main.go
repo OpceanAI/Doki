@@ -1,3 +1,4 @@
+// Package main is the Doki integration test suite.
 package main
 
 import (

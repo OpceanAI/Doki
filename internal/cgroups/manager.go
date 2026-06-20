@@ -1,3 +1,4 @@
+// Package cgroups provides cgroup management for containers.
 package cgroups
 
 import (
@@ -97,7 +98,7 @@ func (m *Manager) applyLimits(cgroupPath string, cfg *Config) error {
 	}
 
 	if cfg.NanoCpus > 0 {
-		period := int64(cfg.CPUPeriod)
+		period := common.SafeInt64FromUint64(cfg.CPUPeriod)
 		if period == 0 {
 			period = 100000
 		}

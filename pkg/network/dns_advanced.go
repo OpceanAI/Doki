@@ -13,6 +13,7 @@ import (
 	"github.com/miekg/dns"
 )
 
+// AdvancedDNS provides SRV resolution, DNSSEC validation, persistent caching, and domain rules.
 type AdvancedDNS struct {
 	srvRecords   []SRVRecord
 	dnssec       *DNSSECValidator
@@ -20,6 +21,7 @@ type AdvancedDNS struct {
 	domains      *DomainResolver
 }
 
+// SRVRecord represents a DNS SRV record.
 type SRVRecord struct {
 	Name     string `json:"name"`
 	Priority uint16 `json:"priority"`
@@ -29,12 +31,14 @@ type SRVRecord struct {
 	TTL      uint32 `json:"ttl"`
 }
 
+// DNSSECConfig holds DNSSEC validation settings.
 type DNSSECConfig struct {
 	Enabled    bool     `json:"enabled"`
 	Anchors    []string `json:"anchors"`
 	Validate   bool     `json:"validate"`
 }
 
+// CacheConfig holds persistent DNS cache settings.
 type CacheConfig struct {
 	Persistent  bool   `json:"persistent"`
 	Path        string `json:"path"`
@@ -43,17 +47,20 @@ type CacheConfig struct {
 	NegativeTTL string `json:"negative_ttl"`
 }
 
+// DomainRule defines a pattern-based domain resolution rule.
 type DomainRule struct {
 	Pattern string `json:"pattern"`
 	Target  string `json:"target"`
 	TTL     uint32 `json:"ttl"`
 }
 
+// DNSSECValidator validates DNS responses using DNSSEC trust anchors.
 type DNSSECValidator struct {
 	enabled      bool
 	trustAnchors []string
 }
 
+// PersistentCache stores DNS responses in a SQLite database.
 type PersistentCache struct {
 	db         *sql.DB
 	maxEntries int
@@ -62,19 +69,23 @@ type PersistentCache struct {
 	mu         sync.RWMutex
 }
 
+// DomainResolver resolves domain names using pattern-based rules.
 type DomainResolver struct {
 	rules []DomainRule
 	mu    sync.RWMutex
 }
 
+// NewAdvancedDNS creates a new AdvancedDNS instance.
 func NewAdvancedDNS() *AdvancedDNS {
 	return &AdvancedDNS{}
 }
 
+// ConfigureSRV sets the SRV records for the advanced DNS resolver.
 func (a *AdvancedDNS) ConfigureSRV(records []SRVRecord) {
 	a.srvRecords = records
 }
 
+// ConfigureDNSSEC enables DNSSEC validation with the given configuration.
 func (a *AdvancedDNS) ConfigureDNSSEC(cfg DNSSECConfig) {
 	if cfg.Enabled {
 		a.dnssec = &DNSSECValidator{
@@ -84,6 +95,7 @@ func (a *AdvancedDNS) ConfigureDNSSEC(cfg DNSSECConfig) {
 	}
 }
 
+// ConfigureCache initializes the persistent DNS cache with the given configuration.
 func (a *AdvancedDNS) ConfigureCache(cfg CacheConfig) error {
 	if !cfg.Persistent || cfg.Path == "" {
 		return nil
@@ -111,10 +123,12 @@ func (a *AdvancedDNS) ConfigureCache(cfg CacheConfig) error {
 	return a.cache.init(cfg.Path)
 }
 
+// ConfigureDomains sets domain resolution rules.
 func (a *AdvancedDNS) ConfigureDomains(rules []DomainRule) {
 	a.domains = &DomainResolver{rules: rules}
 }
 
+// HandleSRV returns matching SRV DNS resource records for a given name.
 func (a *AdvancedDNS) HandleSRV(name string) []dns.RR {
 	var records []dns.RR
 	for _, srv := range a.srvRecords {
@@ -164,6 +178,7 @@ func (c *PersistentCache) init(path string) error {
 	return nil
 }
 
+// Get retrieves a cached DNS response for a name and query type.
 func (c *PersistentCache) Get(name string, qtype uint16) (*dns.Msg, bool) {
 	if c == nil || c.db == nil {
 		return nil, false
@@ -188,6 +203,7 @@ func (c *PersistentCache) Get(name string, qtype uint16) (*dns.Msg, bool) {
 	return msg, true
 }
 
+// Put stores a DNS response in the persistent cache.
 func (c *PersistentCache) Put(name string, qtype uint16, msg *dns.Msg, ttl time.Duration) {
 	if c == nil || c.db == nil {
 		return
@@ -210,13 +226,15 @@ func (c *PersistentCache) Put(name string, qtype uint16, msg *dns.Msg, ttl time.
 	_, _ = c.db.Exec("DELETE FROM cache WHERE rowid NOT IN (SELECT rowid FROM cache ORDER BY created DESC LIMIT ?)", c.maxEntries)
 }
 
+// Close releases the database connection held by the cache.
 func (c *PersistentCache) Close() {
 	if c != nil && c.db != nil {
 		_ = c.db.Close()
 	}
 }
 
-func (r *DomainResolver) Resolve(name string, qtype uint16) ([]net.IP, bool) {
+// Resolve resolves a domain name using configured domain rules.
+func (r *DomainResolver) Resolve(name string, _ uint16) ([]net.IP, bool) {
 	if r == nil {
 		return nil, false
 	}

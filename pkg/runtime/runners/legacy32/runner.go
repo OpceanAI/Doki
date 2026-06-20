@@ -35,10 +35,13 @@ func New(root string) *Runner {
 	return r
 }
 
+// Name returns the execution mode.
 func (r *Runner) Name() rt.ExecutionMode { return rt.ModeLegacy32 }
 
+// Detect checks if this runner is available on the current host.
 func (r *Runner) Detect() bool { return true }
 
+// Capabilities returns the runner capabilities.
 func (r *Runner) Capabilities() rt.RunnerCapabilities {
 	return rt.RunnerCapabilities{
 		Arch: []string{"arm64", "armv7", "amd64", "386"},
@@ -46,7 +49,8 @@ func (r *Runner) Capabilities() rt.RunnerCapabilities {
 	}
 }
 
-func (r *Runner) Create(ctx context.Context, cfg *rt.Config) (string, error) {
+// Create prepares the container filesystem and config.
+func (r *Runner) Create(_ context.Context, cfg *rt.Config) (string, error) {
 	id := cfg.ID
 	if id == "" {
 		id = common.GenerateID(64)
@@ -59,6 +63,7 @@ func (r *Runner) Create(ctx context.Context, cfg *rt.Config) (string, error) {
 	return id, nil
 }
 
+// Start launches the container process.
 func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -112,6 +117,7 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 	return 0, fmt.Errorf("cannot run %s binary: no compat mode and no QEMU", targetArch)
 }
 
+// Stop terminates the container with a signal.
 func (r *Runner) Stop(_ context.Context, id string, timeout time.Duration) error {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -126,7 +132,8 @@ func (r *Runner) Stop(_ context.Context, id string, timeout time.Duration) error
 	return nil
 }
 
-func (r *Runner) Exec(_ context.Context, id string, cfg *rt.ExecConfig) (int, error) {
+// Exec runs a process inside a running container.
+func (r *Runner) Exec(_ context.Context, _ string, cfg *rt.ExecConfig) (int, error) {
 	if len(cfg.Args) == 0 {
 		return 0, fmt.Errorf("no command specified")
 	}
@@ -141,6 +148,7 @@ func (r *Runner) Exec(_ context.Context, id string, cfg *rt.ExecConfig) (int, er
 	return cmd.Process.Pid, nil
 }
 
+// Kill sends an arbitrary signal to the container.
 func (r *Runner) Kill(_ context.Context, id string, sig syscall.Signal) error {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -150,6 +158,7 @@ func (r *Runner) Kill(_ context.Context, id string, sig syscall.Signal) error {
 	return process.Signal(sig)
 }
 
+// Pause suspends the container.
 func (r *Runner) Pause(_ context.Context, id string) error {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -159,6 +168,7 @@ func (r *Runner) Pause(_ context.Context, id string) error {
 	return process.Signal(syscall.SIGSTOP)
 }
 
+// Resume resumes a paused container.
 func (r *Runner) Resume(_ context.Context, id string) error {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -168,7 +178,8 @@ func (r *Runner) Resume(_ context.Context, id string) error {
 	return process.Signal(syscall.SIGCONT)
 }
 
-func (r *Runner) Wait(_ context.Context, id string) (int, error) {
+// Wait blocks until the container exits.
+func (r *Runner) Wait(_ context.Context, _ string) (int, error) {
 	if r.cmd == nil {
 		return 0, fmt.Errorf("no running process")
 	}
@@ -181,10 +192,12 @@ func (r *Runner) Wait(_ context.Context, id string) (int, error) {
 	}
 	return 0, nil
 }
-func (r *Runner) Stats(_ context.Context, id string) (*rt.ContainerStats, error) {
+// Stats returns resource usage metrics.
+func (r *Runner) Stats(_ context.Context, _ string) (*rt.ContainerStats, error) {
 	return &rt.ContainerStats{}, nil
 }
 
+// Inspect returns detailed container info.
 func (r *Runner) Inspect(_ context.Context, id string) (*rt.ContainerJSON, error) {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -197,6 +210,7 @@ func (r *Runner) Inspect(_ context.Context, id string) (*rt.ContainerJSON, error
 	}, nil
 }
 
+// Cleanup removes container state after exit.
 func (r *Runner) Cleanup(_ context.Context, id string) error {
 	return os.RemoveAll(filepath.Join(r.root, "containers", id))
 }

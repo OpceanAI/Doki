@@ -1,6 +1,6 @@
 # Referencia de CLI
 
-Doki v0.9.3 distribuye **244 comandos** en 9 categorías. Esta página es la referencia canónica; el [Inicio Rápido](Quick-Start.es) recorre los comunes.
+Doki v0.10.0 distribuye **244 comandos** en 9 categorías. Esta página es la referencia canónica; el [Inicio Rápido](Quick-Start.es) recorre los comunes.
 
 ## Flags globales
 

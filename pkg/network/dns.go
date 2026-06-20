@@ -734,7 +734,7 @@ func nameToWire(name string) []byte {
 	return buf
 }
 
-func buildServFail(query []byte, qEnd int, name string, qtype uint16) []byte {
+func buildServFail(query []byte, qEnd int, _ string, _ uint16) []byte {
 	hdr := buildDNSHeaderWithAnswers(query, dnsRcodeServFail, 0)
 	resp := make([]byte, 0, 512)
 	resp = append(resp, hdr...)
@@ -762,12 +762,12 @@ func appendName(buf []byte, name string) []byte {
 
 func appendUint32(buf []byte, v uint32) []byte {
 	return append(buf,
-		byte(v>>24), byte(v>>16), byte(v>>8), byte(v),
+		byte(v>>24), byte(v>>16), byte(v>>8), byte(v), // #nosec G115 -- DNS wire format encoding, shift guarantees byte range
 	)
 }
 
 func appendUint16(buf []byte, v uint16) []byte {
-	return append(buf, byte(v>>8), byte(v))
+	return append(buf, byte(v>>8), byte(v)) // #nosec G115 -- DNS wire format encoding
 }
 
 // arpaToIP converts a reverse lookup DNS name (e.g. "2.0.17.172.in-addr.arpa")

@@ -6,11 +6,11 @@ Bienvenido a la wiki de documentación de Doki (Motor de Contenedores Universal)
 
 ## Última versión
 
-**v0.9.3** (junio 2026) — DokiLink-Lite Mesh, 190+ fixes de bugs, soporte armv7
+**v0.10.0** (junio 2026) — DokiLink-Lite Mesh, 190+ fixes de bugs, soporte armv7
 
 - [Release notes](../RELEASE_NOTES.md)
-- [Descargar binarios](https://github.com/OpceanAI/Doki/releases/tag/v0.9.3)
-- [Qué hay de nuevo en v0.9.3](../README.md#qu%C3%A9-hay-de-nuevo)
+- [Descargar binarios](https://github.com/OpceanAI/Doki/releases/tag/v0.10.0)
+- [Qué hay de nuevo en v0.10.0](../README.md#qu%C3%A9-hay-de-nuevo)
 
 ## Tabla de contenidos
 

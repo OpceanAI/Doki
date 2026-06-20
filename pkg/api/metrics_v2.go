@@ -53,7 +53,7 @@ func NewMetricsCollector() *MetricsCollector {
 // RecordRequest records an HTTP request.
 func (m *MetricsCollector) RecordRequest(duration time.Duration) {
 	m.requestsTotal.Add(1)
-	m.requestDurationSum.Add(uint64(duration.Milliseconds()))
+	m.requestDurationSum.Add(common.SafeUint64FromInt64(duration.Milliseconds()))
 	m.requestDurationCount.Add(1)
 }
 
@@ -186,7 +186,7 @@ func (m *MetricsCollector) Snapshot() MetricsSnapshot {
 }
 
 // MetricsHandler serves Prometheus-compatible metrics.
-func MetricsHandlerV2(w http.ResponseWriter, r *http.Request) {
+func MetricsHandlerV2(w http.ResponseWriter, _ *http.Request) {
 	snap := metrics.Snapshot()
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
@@ -208,14 +208,14 @@ func MetricsHandlerV2(w http.ResponseWriter, r *http.Request) {
 	writeCounter(w, "doki_exec_calls_total", snap.ExecCalls, "Total exec calls")
 	writeGauge(w, "doki_goroutines", int64(snap.Goroutines), "Number of goroutines")
 	writeGauge(w, "doki_uptime_seconds", int64(snap.UptimeSeconds), "Daemon uptime in seconds")
-	writeGauge(w, "doki_memory_alloc_bytes", int64(snap.AllocBytes), "Allocated memory bytes")
-	writeGauge(w, "doki_memory_sys_bytes", int64(snap.SysBytes), "System memory bytes")
+	writeGauge(w, "doki_memory_alloc_bytes", common.SafeInt64FromUint64(snap.AllocBytes), "Allocated memory bytes")
+	writeGauge(w, "doki_memory_sys_bytes", common.SafeInt64FromUint64(snap.SysBytes), "System memory bytes")
 	writeCounter(w, "doki_gc_cycles_total", uint64(snap.NumGC), "Total GC cycles")
 	writeGauge(w, "doki_avg_request_ms", int64(snap.AvgRequestMs), "Average request duration in ms")
 }
 
 // HealthHandlerV2 returns comprehensive health status.
-func HealthHandlerV2(w http.ResponseWriter, r *http.Request) {
+func HealthHandlerV2(w http.ResponseWriter, _ *http.Request) {
 	snap := metrics.Snapshot()
 
 	status := "healthy"

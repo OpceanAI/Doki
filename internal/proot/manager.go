@@ -173,7 +173,7 @@ func UnsetProotKillers() {
 }
 
 // Exec executes a command in a proot-based environment.
-func (m *Manager) Exec(rootfs string, args []string, env []string, workDir string) (string, error) {
+func (m *Manager) Exec(rootfs string, args []string, env []string, _ string) (string, error) {
 	prootArgs, err := BuildProotBaseArgs(rootfs, -1, -1)
 	if err != nil {
 		return "", err

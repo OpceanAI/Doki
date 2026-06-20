@@ -1,3 +1,4 @@
+// Package storage provides storage driver management.
 package storage
 
 import (
@@ -25,11 +26,13 @@ func validateLayerID(id string) error {
 
 // ─── Btrfs Driver ──────────────────────────────────────────────────
 
+// BtrfsDriver implements the storage driver using btrfs subvolumes.
 type BtrfsDriver struct {
 	root    string
 	subvols map[string]string
 }
 
+// NewBtrfsDriver creates a new btrfs storage driver rooted at root.
 func NewBtrfsDriver(root string) (*BtrfsDriver, error) {
 	if !isBtrfs(root) {
 		return nil, fmt.Errorf("btrfs: %s is not a btrfs filesystem", root)
@@ -38,6 +41,7 @@ func NewBtrfsDriver(root string) (*BtrfsDriver, error) {
 	return &BtrfsDriver{root: root, subvols: make(map[string]string)}, nil
 }
 
+// Name returns the name of the btrfs driver.
 func (d *BtrfsDriver) Name() string { return "btrfs" }
 
 func isBtrfs(path string) bool {
@@ -45,6 +49,7 @@ func isBtrfs(path string) bool {
 	return false
 }
 
+// Get mounts the btrfs subvolume for the given layer id and returns its mount path.
 func (d *BtrfsDriver) Get(id, _ string) (string, error) {
 	if err := validateLayerID(id); err != nil {
 		return "", err
@@ -61,6 +66,7 @@ func (d *BtrfsDriver) Get(id, _ string) (string, error) {
 	return mountPath, nil
 }
 
+// Put unmounts the btrfs subvolume for the given layer id and returns its mount path.
 func (d *BtrfsDriver) Put(id, _ string) (string, error) {
 	if err := validateLayerID(id); err != nil {
 		return "", err
@@ -70,6 +76,7 @@ func (d *BtrfsDriver) Put(id, _ string) (string, error) {
 	return mountPath, nil
 }
 
+// Exists checks whether a btrfs subvolume for the given layer id exists.
 func (d *BtrfsDriver) Exists(id string) bool {
 	if err := validateLayerID(id); err != nil {
 		return false
@@ -77,6 +84,7 @@ func (d *BtrfsDriver) Exists(id string) bool {
 	return common.PathExists(filepath.Join(d.root, id))
 }
 
+// Remove deletes the btrfs subvolume for the given layer id.
 func (d *BtrfsDriver) Remove(id string) error {
 	if err := validateLayerID(id); err != nil {
 		return err
@@ -85,19 +93,24 @@ func (d *BtrfsDriver) Remove(id string) error {
 	return exec.Command("btrfs", "subvolume", "delete", subvolPath).Run()
 }
 
+// Cleanup releases resources held by the btrfs driver.
 func (d *BtrfsDriver) Cleanup() error  { return nil }
-func (d *BtrfsDriver) GetMetadata(id string) (map[string]string, error) {
+
+// GetMetadata returns metadata for the given layer.
+func (d *BtrfsDriver) GetMetadata(_ string) (map[string]string, error) {
 	return nil, nil
 }
 
 // ─── ZFS Driver ────────────────────────────────────────────────────
 
+// ZFSDriver implements the storage driver using ZFS filesystems.
 type ZFSDriver struct {
 	root      string
 	pool      string
 	fsPrefix  string
 }
 
+// NewZFSDriver creates a new ZFS storage driver.
 func NewZFSDriver(root, pool, fsPrefix string) (*ZFSDriver, error) {
 	if !isZFS() {
 		return nil, fmt.Errorf("zfs: not available")
@@ -110,8 +123,10 @@ func isZFS() bool {
 	return err == nil
 }
 
+// Name returns the name of the ZFS driver.
 func (d *ZFSDriver) Name() string { return "zfs" }
 
+// Get mounts the ZFS filesystem for the given layer id and returns its mount path.
 func (d *ZFSDriver) Get(id, _ string) (string, error) {
 	if err := validateLayerID(id); err != nil {
 		return "", err
@@ -126,6 +141,7 @@ func (d *ZFSDriver) Get(id, _ string) (string, error) {
 	return mountPath, nil
 }
 
+// Put unmounts the ZFS filesystem for the given layer id and returns its mount path.
 func (d *ZFSDriver) Put(id, _ string) (string, error) {
 	if err := validateLayerID(id); err != nil {
 		return "", err
@@ -137,6 +153,7 @@ func (d *ZFSDriver) Put(id, _ string) (string, error) {
 	return filepath.Join(d.root, id), nil
 }
 
+// Exists checks whether a ZFS filesystem for the given layer id exists.
 func (d *ZFSDriver) Exists(id string) bool {
 	if err := validateLayerID(id); err != nil {
 		return false
@@ -145,6 +162,7 @@ func (d *ZFSDriver) Exists(id string) bool {
 	return exec.Command("zfs", "list", fsName).Run() == nil
 }
 
+// Remove destroys the ZFS filesystem for the given layer id.
 func (d *ZFSDriver) Remove(id string) error {
 	if err := validateLayerID(id); err != nil {
 		return err
@@ -153,24 +171,31 @@ func (d *ZFSDriver) Remove(id string) error {
 	return exec.Command("zfs", "destroy", "-r", fsName).Run()
 }
 
+// Cleanup releases resources held by the ZFS driver.
 func (d *ZFSDriver) Cleanup() error  { return nil }
-func (d *ZFSDriver) GetMetadata(id string) (map[string]string, error) {
+
+// GetMetadata returns metadata for the given layer.
+func (d *ZFSDriver) GetMetadata(_ string) (map[string]string, error) {
 	return nil, nil
 }
 
 // ─── VFS Driver (naive, for testing) ──────────────────────────────
 
+// VFSDriver implements the storage driver using the host filesystem directly.
 type VFSDriver struct {
 	root string
 }
 
+// NewVFSDriver creates a new VFS storage driver.
 func NewVFSDriver(root string) (*VFSDriver, error) {
 	_ = common.EnsureDir(root)
 	return &VFSDriver{root: root}, nil
 }
 
+// Name returns the name of the VFS driver.
 func (d *VFSDriver) Name() string { return "vfs" }
 
+// Get returns the filesystem path for the given layer id.
 func (d *VFSDriver) Get(id, _ string) (string, error) {
 	path := filepath.Join(d.root, id)
 	if !common.PathExists(path) {
@@ -179,25 +204,32 @@ func (d *VFSDriver) Get(id, _ string) (string, error) {
 	return path, nil
 }
 
+// Put returns the filesystem path for the given layer id.
 func (d *VFSDriver) Put(id, _ string) (string, error) {
 	return filepath.Join(d.root, id), nil
 }
 
+// Exists checks whether the directory for the given layer id exists.
 func (d *VFSDriver) Exists(id string) bool {
 	return common.PathExists(filepath.Join(d.root, id))
 }
 
+// Remove deletes the directory for the given layer id.
 func (d *VFSDriver) Remove(id string) error {
 	return os.RemoveAll(filepath.Join(d.root, id))
 }
 
+// Cleanup releases resources held by the VFS driver.
 func (d *VFSDriver) Cleanup() error  { return nil }
-func (d *VFSDriver) GetMetadata(id string) (map[string]string, error) {
+
+// GetMetadata returns metadata for the given layer.
+func (d *VFSDriver) GetMetadata(_ string) (map[string]string, error) {
 	return nil, nil
 }
 
 // ─── Garbage Collection ────────────────────────────────────────────
 
+// GCConfig holds configuration for garbage collection.
 type GCConfig struct {
 	Enabled       bool
 	Interval      time.Duration
@@ -205,6 +237,7 @@ type GCConfig struct {
 	MinFreeSpace  int64
 }
 
+// GarbageCollector runs periodic garbage collection on unused layers.
 type GarbageCollector struct {
 	store *Manager
 	cfg   GCConfig
@@ -212,10 +245,12 @@ type GarbageCollector struct {
 	once  sync.Once
 }
 
+// NewGarbageCollector creates a new garbage collector for the given storage manager.
 func NewGarbageCollector(store *Manager, cfg GCConfig) *GarbageCollector {
 	return &GarbageCollector{store: store, cfg: cfg, stop: make(chan struct{})}
 }
 
+// Start begins periodic garbage collection.
 func (g *GarbageCollector) Start() {
 	if !g.cfg.Enabled {
 		return
@@ -234,6 +269,7 @@ func (g *GarbageCollector) Start() {
 	}()
 }
 
+// Stop halts the garbage collector.
 func (g *GarbageCollector) Stop() {
 	g.once.Do(func() { close(g.stop) })
 }

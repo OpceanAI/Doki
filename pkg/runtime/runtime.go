@@ -1,3 +1,4 @@
+// Package runtime provides the container runtime.
 package runtime
 
 import (
@@ -48,6 +49,7 @@ type Runtime struct {
 	dnsAddr  string // Internal DNS server address (e.g., "127.0.0.11:53")
 }
 
+// Config holds the configuration for a container.
 type Config struct {
 	ID            string
 	Rootfs        string
@@ -90,6 +92,7 @@ type Config struct {
 	Platform      string // "linux/arm64", "linux/amd64", "wasi/wasm", etc.
 }
 
+// HealthCheckConfig defines the health check parameters for a container.
 type HealthCheckConfig struct {
 	Test     []string
 	Interval time.Duration
@@ -97,6 +100,7 @@ type HealthCheckConfig struct {
 	Retries  int
 }
 
+// Resources defines the resource limits for a container.
 type Resources struct {
 	CPUShares      int64
 	Memory         int64
@@ -112,6 +116,7 @@ type Resources struct {
 	ShmSize        int64
 }
 
+// ImageOCIConfig represents the OCI image configuration extracted from an image manifest.
 type ImageOCIConfig struct {
 	Entrypoint  []string
 	Cmd         []string
@@ -125,6 +130,7 @@ type ImageOCIConfig struct {
 	HealthCheck *HealthCheckConfig
 }
 
+// ContainerState represents the current state of a container persisted to disk.
 type ContainerState struct {
 	ID           string                `json:"id"`
 	Pid          int                   `json:"pid"`
@@ -161,6 +167,7 @@ func WithDNSAddr(addr string) RuntimeOption {
 	}
 }
 
+// NewRuntime creates a new container runtime instance.
 func NewRuntime(root string, store *storage.Manager, opts ...RuntimeOption) *Runtime {
 	rt := &Runtime{
 		root:     root,
@@ -207,6 +214,7 @@ func (rt *Runtime) detectMode() {
 	}
 }
 
+// Mode returns the current execution mode of the runtime.
 func (rt *Runtime) Mode() ExecutionMode { return rt.mode }
 
 func (rt *Runtime) isAndroid() bool {
@@ -224,6 +232,7 @@ func (rt *Runtime) isAndroid() bool {
 
 // ─── Container lifecycle ───────────────────────────────────────────
 
+// Create creates a new container with the given configuration.
 func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -430,7 +439,7 @@ func extractTarGz(tarPath, dest string) error {
 				}
 				return err
 			}
-			if err := out.Chmod(os.FileMode(hdr.Mode)); err != nil {
+			if err := out.Chmod(common.SafeFileMode(hdr.Mode)); err != nil {
 				if cerr := out.Close(); cerr != nil {
 					slog.Warn("close failed", "error", cerr)
 				}
@@ -558,7 +567,7 @@ func extractTarGz(tarPath, dest string) error {
 				}
 				return err
 			}
-			if err := out.Chmod(os.FileMode(hdr.Mode)); err != nil {
+			if err := out.Chmod(common.SafeFileMode(hdr.Mode)); err != nil {
 				if cerr := out.Close(); cerr != nil {
 					slog.Warn("close failed", "error", cerr)
 				}
@@ -593,6 +602,7 @@ func extractXattrs(hdr *tar.Header, target string) {
 	}
 }
 
+// Start starts an existing container by its id.
 func (rt *Runtime) Start(id string) error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -1177,6 +1187,7 @@ func (rt *Runtime) setupMounts(rootfsDir string, cfg *Config) error {
 
 // ─── Container operations ──────────────────────────────────────────
 
+// Exec runs a command inside a running container.
 func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user string) ([]byte, []byte, error) {
 	var stdoutBuf, stderrBuf bytes.Buffer
 
@@ -1268,6 +1279,7 @@ func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user
 	}
 }
 
+// Stop stops a running container by its id with a configurable timeout.
 func (rt *Runtime) Stop(id string, timeout int) error {
 	rt.mu.Lock()
 	state, err := rt.loadState(id)
@@ -1370,6 +1382,7 @@ func (rt *Runtime) Stop(id string, timeout int) error {
 	return nil
 }
 
+// Kill sends a signal to a running container.
 func (rt *Runtime) Kill(id string, signal syscall.Signal) error {
 	state, err := rt.State(id)
 	if err != nil {
@@ -1420,6 +1433,7 @@ func (rt *Runtime) Kill(id string, signal syscall.Signal) error {
 	return nil
 }
 
+// Pause suspends a running container.
 func (rt *Runtime) Pause(id string) error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -1442,6 +1456,7 @@ func (rt *Runtime) Pause(id string) error {
 	return rt.saveState(state)
 }
 
+// Unpause resumes a paused container.
 func (rt *Runtime) Unpause(id string) error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -1464,12 +1479,14 @@ func (rt *Runtime) Unpause(id string) error {
 	return rt.saveState(state)
 }
 
+// State returns the current state of a container.
 func (rt *Runtime) State(id string) (*ContainerState, error) {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
 	return rt.loadState(id)
 }
 
+// Delete removes a container and its associated resources.
 func (rt *Runtime) Delete(id string, force bool) error {
 	rt.mu.Lock()
 	state, err := rt.loadState(id)
@@ -1502,6 +1519,7 @@ func (rt *Runtime) Delete(id string, force bool) error {
 	return nil
 }
 
+// List returns all containers managed by the runtime.
 func (rt *Runtime) List() ([]*ContainerState, error) {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
@@ -1524,6 +1542,7 @@ func (rt *Runtime) List() ([]*ContainerState, error) {
 	return states, nil
 }
 
+// Stats returns resource usage statistics for a container.
 func (rt *Runtime) Stats(id string) (map[string]interface{}, error) {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
@@ -1569,6 +1588,7 @@ func getNetworkStats() map[string]uint64 {
 	return result
 }
 
+// GetLogs returns the logs of a container, optionally tailing the last N lines.
 func (rt *Runtime) GetLogs(id string, tail int) (string, error) {
 	state, err := rt.State(id)
 	if err != nil {
@@ -1631,6 +1651,7 @@ func (rt *Runtime) rotateLog(logPath string, maxSize int64, keep int) {
 	}
 }
 
+// Processes returns process information for a running container.
 func (rt *Runtime) Processes(id string) ([]string, error) {
 	state, err := rt.State(id)
 	if err != nil || state.Status != common.StateRunning {
@@ -1748,9 +1769,9 @@ func (rt *Runtime) buildCgroupConfig(cfg *Config) *cgroups.Config {
 		return &cgroups.Config{}
 	}
 	return &cgroups.Config{
-		CPUPeriod:      uint64(cfg.Resources.CPUPeriod),
+		CPUPeriod:      common.SafeUint64FromInt64(cfg.Resources.CPUPeriod),
 		CPUQuota:       cfg.Resources.CPUQuota,
-		CPUShares:      uint64(cfg.Resources.CPUShares),
+		CPUShares:      common.SafeUint64FromInt64(cfg.Resources.CPUShares),
 		CpusetCpus:     cfg.Resources.CpusetCpus,
 		CpusetMems:     cfg.Resources.CpusetMems,
 		Memory:         cfg.Resources.Memory,

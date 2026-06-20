@@ -1,3 +1,4 @@
+// Package network provides VM networking.
 package network
 
 import (
@@ -101,7 +102,7 @@ func (t *TapManager) EnableMasquerade() error {
 // ─── CNI Integration ──────────────────────────────────────────────
 
 // CNISetup runs a CNI plugin to configure networking.
-func CNISetup(vmID, tapName, cniConfDir, cniBinDir string) error {
+func CNISetup(_, _, _, cniBinDir string) error {
 	// Basic CNI ADD via bridge plugin.
 	if cniBinDir == "" {
 		cniBinDir = "/usr/lib/cni"
@@ -116,6 +117,6 @@ func CNISetup(vmID, tapName, cniConfDir, cniBinDir string) error {
 }
 
 // CNITeardown removes CNI configuration for a VM.
-func CNITeardown(vmID, tapName, cniConfDir, cniBinDir string) error {
+func CNITeardown(_, _, _, _ string) error {
 	return nil
 }

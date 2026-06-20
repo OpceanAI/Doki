@@ -1,3 +1,4 @@
+// Package rootfs builds root filesystems for VMs.
 package rootfs
 
 import (
@@ -71,7 +72,7 @@ func (b *Builder) BuildRootfs(vmID string, rootfsDir string, sizeMB int) (string
 // BuildMinimalRootfs builds a minimal rootfs with just the OCI layers
 // and the doki-init binary injected.
 // Searches for doki-init-rust first, falls back to doki-init (Go).
-func (b *Builder) BuildMinimalRootfs(vmID string, layersDir string, dokiInitPath string) (string, error) {
+func (b *Builder) BuildMinimalRootfs(vmID string, _ string, dokiInitPath string) (string, error) {
 	vmDir := filepath.Join(b.workDir, vmID)
 	_ = common.EnsureDir(vmDir)
 

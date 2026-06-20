@@ -1,3 +1,4 @@
+// Package kubeproxy provides the Kubernetes kube-proxy.
 package kubeproxy
 
 import (

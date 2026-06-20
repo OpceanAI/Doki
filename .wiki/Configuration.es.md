@@ -111,7 +111,7 @@ Sobrescribe con el flag `--config PATH` o la env var `DOKI_CONFIG`.
 | `dns_search` | array | `[]` | Dominios de búsqueda por defecto |
 | `dns_opts` | array | `["ndots:0"]` | Opciones DNS por defecto |
 
-**Nota v0.9.2**: En Android, `dns_listen` por defecto es `:8053` porque el puerto 53 está bloqueado por SELinux. Sobrescribe con la env var `DOKI_DNS_LISTEN`.
+**Nota v0.9.3**: En Android, `dns_listen` por defecto es `:8053` porque el puerto 53 está bloqueado por SELinux. Sobrescribe con la env var `DOKI_DNS_LISTEN`.
 
 ### Registries
 
@@ -164,7 +164,7 @@ Sobrescribe con el flag `--config PATH` o la env var `DOKI_CONFIG`.
 | `seccomp.allow` | array | `[]` | Syscalls extra a permitir más allá del perfil por defecto |
 | `seccomp.deny` | array | `[]` | Syscalls a denegar (override de allow) |
 
-**Perfil default de v0.9.2** permite: ~80 syscalls incluyendo `io_uring_*`, `pidfd_*`, `rseq`, `userfaultfd`, `copy_file_range`, `landlock_*`.
+**Perfil default de v0.9.3** permite: ~80 syscalls incluyendo `io_uring_*`, `pidfd_*`, `rseq`, `userfaultfd`, `copy_file_range`, `landlock_*`.
 
 **Denegados por defecto**: `init_module`, `finit_module`, `delete_module`, `kexec_load`, `kexec_file_load`, `iopl`, `ioperm`, `kcmp`, `process_vm_readv`, `process_vm_writev`.
 

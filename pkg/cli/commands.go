@@ -1,3 +1,4 @@
+// Package cli provides the Doki command-line interface.
 package cli
 
 import (
@@ -26,12 +27,26 @@ import (
 	"github.com/OpceanAI/Doki/pkg/common"
 )
 
+// ExitError signals that the invoked process (typically a container) terminated
+// with the given exit code. Callers (cmd/doki/main.go) detect this type via
+// errors.As and propagate the code to os.Exit, so library code in pkg/ never
+// calls os.Exit directly.
+type ExitError struct {
+	Code int
+}
+
+func (e *ExitError) Error() string {
+	return fmt.Sprintf("process exited with code %d", e.Code)
+}
+
+// DokiCLI is the Doki command-line client that communicates with the Doki daemon via Unix socket.
 type DokiCLI struct {
 	socket  string
 	client  *http.Client
 	version string
 }
 
+// New creates a new DokiCLI client connected to the given Unix socket.
 func New(socket string) *DokiCLI {
 	if socket == "" {
 		socket = os.Getenv("DOKI_HOST")
@@ -52,12 +67,13 @@ func New(socket string) *DokiCLI {
 			},
 			Timeout: 300 * time.Second,
 		},
-		version: common.Version,
+		version: common.DokiVersion,
 	}
 }
 
 // ---- Container Commands (26 commands, 1:1 with Docker) ----
 
+// Run creates and starts a new container from an image with the given arguments and flags.
 func (c *DokiCLI) Run(args []string) error {
 	image, cmd, flags := ParseRunFlags(args)
 	var containerID string
@@ -322,13 +338,13 @@ func (c *DokiCLI) Run(args []string) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
-		Id       string   `json:"Id"`
+		ID       string   `json:"Id"`
 		Warnings []string `json:"Warnings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
-	containerID = result.Id
+	containerID = result.ID
 
 	for _, w := range result.Warnings {
 		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
@@ -359,11 +375,11 @@ func (c *DokiCLI) Run(args []string) error {
 		_, _ = c.doAPI("DELETE", "/containers/"+containerID+"?force=true", nil)
 	}
 
-	os.Exit(exitCode)
-	return nil
+	return &ExitError{Code: exitCode}
 }
 
-func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int, size bool) error {
+// Ps lists running containers in a table or JSON format.
+func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, _ int, _ bool) error {
 	path := "/containers/json"
 	params := []string{}
 	if all {
@@ -449,6 +465,7 @@ func (c *DokiCLI) Ps(all, quiet, noTrunc bool, filter, format string, lastN int,
 	return nil
 }
 
+// Create registers a new container from the given image without starting it.
 func (c *DokiCLI) Create(image string, cmd []string, opts *RunFlags) (string, error) {
 	body := map[string]interface{}{
 		"Image": image,
@@ -695,7 +712,7 @@ func (c *DokiCLI) Create(image string, cmd []string, opts *RunFlags) (string, er
 	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
-		Id       string   `json:"Id"`
+		ID       string   `json:"Id"`
 		Warnings []string `json:"Warnings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -704,9 +721,10 @@ func (c *DokiCLI) Create(image string, cmd []string, opts *RunFlags) (string, er
 	for _, w := range result.Warnings {
 		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
-	return result.Id, nil
+	return result.ID, nil
 }
 
+// Exec runs a command inside an existing container.
 func (c *DokiCLI) Exec(containerID string, cmd []string, tty, detach, interactive bool, env []string, workdir, user string) error {
 	body := map[string]interface{}{
 		"Cmd":          cmd,
@@ -789,7 +807,8 @@ func demuxStream(r io.Reader, stdout, stderr io.Writer) {
 	}
 }
 
-func (c *DokiCLI) Logs(containerID string, follow, timestamps bool, tail int, since string) error {
+// Logs fetches and displays the logs of a container.
+func (c *DokiCLI) Logs(containerID string, follow, timestamps bool, tail int, _ string) error {
 	return c.logs(containerID, follow, tail, timestamps)
 }
 
@@ -816,6 +835,7 @@ func (c *DokiCLI) logs(containerID string, follow bool, tail int, timestamps boo
 	return nil
 }
 
+// Stats displays resource usage statistics for one or more containers.
 func (c *DokiCLI) Stats(containerIDs []string, noStream bool) error {
 	if len(containerIDs) == 0 {
 		containers, _ := c.listContainers(true)
@@ -853,6 +873,7 @@ func (c *DokiCLI) Stats(containerIDs []string, noStream bool) error {
 	return nil
 }
 
+// Top displays the running processes of a container.
 func (c *DokiCLI) Top(containerID string, psArgs string) error {
 	resp, err := c.doAPI("GET", "/containers/"+containerID+"/top?ps_args="+psArgs, nil)
 	if err != nil {
@@ -876,7 +897,11 @@ func (c *DokiCLI) Top(containerID string, psArgs string) error {
 	return nil
 }
 
+// Inspect returns detailed information about containers or images in JSON format.
 func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
+	if len(containerIDs) == 0 {
+		return fmt.Errorf("inspect: requires at least 1 argument")
+	}
 	var hadError bool
 	for _, id := range containerIDs {
 		resp, err := c.doAPI("GET", "/containers/"+id+"/json", nil)
@@ -916,12 +941,13 @@ func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
 		}
 	}
 	if hadError {
-		os.Exit(1)
+		return fmt.Errorf("inspect: one or more objects not found")
 	}
 	return nil
 }
 
-func (c *DokiCLI) Commit(containerID, repo, tag, author, message string, pause bool, changes []string) error {
+// Commit creates a new image from a container's changes.
+func (c *DokiCLI) Commit(_, repo, tag, author, _ string, pause bool, _ []string) error {
 	body := map[string]interface{}{
 		"Hostname": "",
 	}
@@ -954,6 +980,7 @@ func (c *DokiCLI) Commit(containerID, repo, tag, author, message string, pause b
 	return nil
 }
 
+// Diff shows changes to files and directories in a container.
 func (c *DokiCLI) Diff(containerID string) error {
 	resp, err := c.doAPI("GET", "/containers/"+containerID+"/changes", nil)
 	if err != nil {
@@ -982,6 +1009,7 @@ func (c *DokiCLI) Diff(containerID string) error {
 	return nil
 }
 
+// Port displays the public-facing port for a container.
 func (c *DokiCLI) Port(containerID, privatePort string) error {
 	resp, err := c.doAPI("GET", "/containers/"+containerID+"/json", nil)
 	if err != nil {
@@ -1002,6 +1030,7 @@ func (c *DokiCLI) Port(containerID, privatePort string) error {
 	return nil
 }
 
+// Update modifies the resource configuration of a container.
 func (c *DokiCLI) Update(containerID string, flags *RunFlags) error {
 	body := map[string]interface{}{}
 	if flags.CPUShares > 0 {
@@ -1022,6 +1051,7 @@ func (c *DokiCLI) Update(containerID string, flags *RunFlags) error {
 	return nil
 }
 
+// Wait blocks until a container stops and returns its exit code.
 func (c *DokiCLI) Wait(containerID string) (int, error) {
 	resp, err := c.doAPI("POST", "/containers/"+containerID+"/wait", nil)
 	if err != nil {
@@ -1036,6 +1066,7 @@ func (c *DokiCLI) Wait(containerID string) (int, error) {
 	return result.StatusCode, nil
 }
 
+// Export exports a container filesystem as a tar archive.
 func (c *DokiCLI) Export(containerID string, output string) error {
 	resp, err := c.doAPI("GET", "/containers/"+containerID+"/export", nil)
 	if err != nil {
@@ -1056,7 +1087,8 @@ func (c *DokiCLI) Export(containerID string, output string) error {
 	return nil
 }
 
-func (c *DokiCLI) Cp(containerID, srcPath, destPath string, followLink, copyUIDGID bool) error {
+// Cp copies files from a container to the local filesystem.
+func (c *DokiCLI) Cp(containerID, srcPath, destPath string, _, _ bool) error {
 	path := "/containers/" + containerID + "/archive?path=" + url.QueryEscape(srcPath)
 	resp, err := c.doAPI("GET", path, nil)
 	if err != nil {
@@ -1116,7 +1148,8 @@ func (c *DokiCLI) Cp(containerID, srcPath, destPath string, followLink, copyUIDG
 	return nil
 }
 
-func (c *DokiCLI) CpToContainer(containerID, srcPath, destPath string, followLink, copyUIDGID bool) error {
+// CpToContainer copies files from the local filesystem into a container.
+func (c *DokiCLI) CpToContainer(containerID, srcPath, destPath string, _ bool, _ bool) error {
 	// Create a tar archive containing the source file
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -1181,6 +1214,7 @@ func (c *DokiCLI) CpToContainer(containerID, srcPath, destPath string, followLin
 	return nil
 }
 
+// Rename renames a container.
 func (c *DokiCLI) Rename(containerID, newName string) error {
 	resp, err := c.doAPI("POST", "/containers/"+containerID+"/rename?name="+newName, nil)
 	if err != nil {
@@ -1190,7 +1224,11 @@ func (c *DokiCLI) Rename(containerID, newName string) error {
 	return nil
 }
 
+// Start starts one or more stopped containers.
 func (c *DokiCLI) Start(ids []string) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("start: requires at least 1 argument")
+	}
 	for _, id := range ids {
 		resp, err := c.doAPI("POST", "/containers/"+id+"/start", nil)
 		if err != nil {
@@ -1201,6 +1239,7 @@ func (c *DokiCLI) Start(ids []string) error {
 	return nil
 }
 
+// Stop stops one or more running containers.
 func (c *DokiCLI) Stop(ids []string, timeout int) error {
 	for _, id := range ids {
 		path := "/containers/" + id + "/stop"
@@ -1216,6 +1255,7 @@ func (c *DokiCLI) Stop(ids []string, timeout int) error {
 	return nil
 }
 
+// Restart restarts one or more containers.
 func (c *DokiCLI) Restart(ids []string, timeout int) error {
 	for _, id := range ids {
 		path := "/containers/" + id + "/restart"
@@ -1231,6 +1271,7 @@ func (c *DokiCLI) Restart(ids []string, timeout int) error {
 	return nil
 }
 
+// Kill sends a signal to one or more containers.
 func (c *DokiCLI) Kill(ids []string, signal string) error {
 	for _, id := range ids {
 		path := "/containers/" + id + "/kill"
@@ -1246,6 +1287,7 @@ func (c *DokiCLI) Kill(ids []string, signal string) error {
 	return nil
 }
 
+// Pause suspends one or more running containers.
 func (c *DokiCLI) Pause(ids []string) error {
 	for _, id := range ids {
 		resp, err := c.doAPI("POST", "/containers/"+id+"/pause", nil)
@@ -1257,6 +1299,7 @@ func (c *DokiCLI) Pause(ids []string) error {
 	return nil
 }
 
+// Unpause resumes one or more paused containers.
 func (c *DokiCLI) Unpause(ids []string) error {
 	for _, id := range ids {
 		resp, err := c.doAPI("POST", "/containers/"+id+"/unpause", nil)
@@ -1268,7 +1311,8 @@ func (c *DokiCLI) Unpause(ids []string) error {
 	return nil
 }
 
-func (c *DokiCLI) Rm(ids []string, force, volumes, link bool) error {
+// Rm removes one or more containers.
+func (c *DokiCLI) Rm(ids []string, force, volumes, _ bool) error {
 	var firstErr error
 	for _, id := range ids {
 		params := []string{}
@@ -1315,7 +1359,8 @@ func (c *DokiCLI) Rm(ids []string, force, volumes, link bool) error {
 	return firstErr
 }
 
-func (c *DokiCLI) Attach(containerID string, detachKeys, sigProxy string) error {
+// Attach attaches to a running container.
+func (c *DokiCLI) Attach(containerID string, _ string, _ string) error {
 	resp, err := c.doAPI("POST", "/containers/"+containerID+"/attach?stream=true&stdin=true&stdout=true&stderr=true", nil)
 	if err != nil {
 		return err
@@ -1325,7 +1370,8 @@ func (c *DokiCLI) Attach(containerID string, detachKeys, sigProxy string) error 
 	return nil
 }
 
-func (c *DokiCLI) Prune(all bool, filter string) error {
+// Prune removes all stopped containers.
+func (c *DokiCLI) Prune(_ bool, _ string) error {
 	path := "/containers/prune"
 	resp, err := c.doAPI("POST", path, nil)
 	if err != nil {
@@ -1349,7 +1395,8 @@ func (c *DokiCLI) Prune(all bool, filter string) error {
 
 // ---- Image Commands (14 commands, 1:1 with Docker) ----
 
-func (c *DokiCLI) Pull(imageName string, allTags, quiet bool) error {
+// Pull downloads an image from a registry.
+func (c *DokiCLI) Pull(imageName string, _ bool, quiet bool) error {
 	tag := ""
 	ref, err := common.ParseImageRef(imageName)
 	if err == nil && ref.Tag != "" {
@@ -1396,6 +1443,7 @@ func (c *DokiCLI) Pull(imageName string, allTags, quiet bool) error {
 	return nil
 }
 
+// Push uploads an image to a registry.
 func (c *DokiCLI) Push(imageName string, allTags, quiet bool) error {
 	path := "/images/" + imageName + "/push"
 	if allTags {
@@ -1429,6 +1477,7 @@ func (c *DokiCLI) Push(imageName string, allTags, quiet bool) error {
 	return nil
 }
 
+// Images lists available images.
 func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 	path := "/images/json"
 	params := []string{}
@@ -1495,7 +1544,8 @@ for _, img := range images {
 	return nil
 }
 
-func (c *DokiCLI) Rmi(ids []string, force, noPrune bool) error {
+// Rmi removes one or more images.
+func (c *DokiCLI) Rmi(ids []string, force, _ bool) error {
 	for _, id := range ids {
 		path := "/images/" + id
 		if force {
@@ -1512,6 +1562,7 @@ func (c *DokiCLI) Rmi(ids []string, force, noPrune bool) error {
 	return nil
 }
 
+// Tag assigns a new tag to an image.
 func (c *DokiCLI) Tag(source, target string) error {
 	parts := strings.SplitN(target, ":", 2)
 	body := map[string]string{"repo": parts[0]}
@@ -1526,7 +1577,8 @@ func (c *DokiCLI) Tag(source, target string) error {
 	return nil
 }
 
-func (c *DokiCLI) History(imageName string, noTrunc, quiet bool) error {
+// History shows the history of an image.
+func (c *DokiCLI) History(imageName string, noTrunc, _ bool) error {
 	resp, err := c.doAPI("GET", "/images/"+imageName+"/history", nil)
 	if err != nil {
 		return err
@@ -1558,6 +1610,7 @@ func (c *DokiCLI) History(imageName string, noTrunc, quiet bool) error {
 	return nil
 }
 
+// Save exports one or more images to a tar archive.
 func (c *DokiCLI) Save(imageNames []string, output string) error {
 	path := "/images/get?names=" + strings.Join(imageNames, ",")
 	resp, err := c.doAPI("GET", path, nil)
@@ -1579,6 +1632,7 @@ func (c *DokiCLI) Save(imageNames []string, output string) error {
 	return nil
 }
 
+// Load imports an image from a tar archive.
 func (c *DokiCLI) Load(input string, quiet bool) error {
 	var in io.Reader = os.Stdin
 	if input != "" {
@@ -1600,7 +1654,8 @@ func (c *DokiCLI) Load(input string, quiet bool) error {
 	return nil
 }
 
-func (c *DokiCLI) Import(source, repo, tag string, changes []string, message string) error {
+// Import creates an image from a tarball or URL.
+func (c *DokiCLI) Import(source, repo, tag string, _ []string, _ string) error {
 	path := "/images/create?fromSrc=" + source
 	if repo != "" {
 		path += "&repo=" + repo
@@ -1617,6 +1672,7 @@ func (c *DokiCLI) Import(source, repo, tag string, changes []string, message str
 	return nil
 }
 
+// Build builds an image from a Dockerfile.
 func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs map[string]string, noCache, pull, quiet, rm bool, target string) error {
 	// Resolve context dir to absolute path.
 	absDir, err := filepath.Abs(contextDir)
@@ -1661,7 +1717,8 @@ func (c *DokiCLI) Build(contextDir, dokifile string, tags []string, buildArgs ma
 	return nil
 }
 
-func (c *DokiCLI) Search(term string, limit int, noTrunc bool, filterStars int) error {
+// Search searches the Docker Hub for images.
+func (c *DokiCLI) Search(term string, limit int, _ bool, _ int) error {
 	path := "/images/search?term=" + url.QueryEscape(term)
 	if limit > 0 {
 		path += "&limit=" + strconv.Itoa(limit)
@@ -1686,7 +1743,8 @@ func (c *DokiCLI) Search(term string, limit int, noTrunc bool, filterStars int) 
 	return nil
 }
 
-func (c *DokiCLI) ImagesPrune(all bool, filter string) error {
+// ImagesPrune removes unused images.
+func (c *DokiCLI) ImagesPrune(_ bool, _ string) error {
 	path := "/images/prune"
 	resp, err := c.doAPI("POST", path, nil)
 	if err != nil {
@@ -1699,7 +1757,8 @@ func (c *DokiCLI) ImagesPrune(all bool, filter string) error {
 
 // ---- Network Commands (7 commands, 1:1 with Docker) ----
 
-func (c *DokiCLI) NetworkLs(quiet bool, noTrunc bool, filter, format string) error {
+// NetworkLs lists networks.
+func (c *DokiCLI) NetworkLs(_ bool, _ bool, _ string, _ string) error {
 	resp, err := c.doAPI("GET", "/networks", nil)
 	if err != nil {
 		return err
@@ -1720,7 +1779,8 @@ func (c *DokiCLI) NetworkLs(quiet bool, noTrunc bool, filter, format string) err
 	return nil
 }
 
-func (c *DokiCLI) NetworkCreate(name, driver string, internal, ipv6 bool, subnet, gateway string, labels map[string]string) error {
+// NetworkCreate creates a new network.
+func (c *DokiCLI) NetworkCreate(name, driver string, internal, ipv6 bool, subnet, gateway string, _ map[string]string) error {
 	body := map[string]interface{}{
 		"Name":       name,
 		"Driver":     driver,
@@ -1751,6 +1811,7 @@ func (c *DokiCLI) NetworkCreate(name, driver string, internal, ipv6 bool, subnet
 	return nil
 }
 
+// NetworkRm removes one or more networks.
 func (c *DokiCLI) NetworkRm(ids []string) error {
 	for _, id := range ids {
 		resp, err := c.doAPI("DELETE", "/networks/"+id, nil)
@@ -1762,6 +1823,7 @@ func (c *DokiCLI) NetworkRm(ids []string) error {
 	return nil
 }
 
+// NetworkInspect shows detailed information about networks.
 func (c *DokiCLI) NetworkInspect(ids []string) error {
 	for _, id := range ids {
 		resp, err := c.doAPI("GET", "/networks/"+id, nil)
@@ -1774,6 +1836,7 @@ func (c *DokiCLI) NetworkInspect(ids []string) error {
 	return nil
 }
 
+// NetworkConnect connects a container to a network.
 func (c *DokiCLI) NetworkConnect(networkID, containerID string, aliases []string) error {
 	body := map[string]interface{}{
 		"Container": containerID,
@@ -1789,6 +1852,7 @@ func (c *DokiCLI) NetworkConnect(networkID, containerID string, aliases []string
 	return nil
 }
 
+// NetworkDisconnect disconnects a container from a network.
 func (c *DokiCLI) NetworkDisconnect(networkID, containerID string, force bool) error {
 	body := map[string]interface{}{"Container": containerID, "Force": force}
 	resp, err := c.doAPI("POST", "/networks/"+networkID+"/disconnect", body)
@@ -1799,7 +1863,8 @@ func (c *DokiCLI) NetworkDisconnect(networkID, containerID string, force bool) e
 	return nil
 }
 
-func (c *DokiCLI) NetworkPrune(filter string) error {
+// NetworkPrune removes all unused networks.
+func (c *DokiCLI) NetworkPrune(_ string) error {
 	resp, err := c.doAPI("POST", "/networks/prune", nil)
 	if err != nil {
 		return err
@@ -1811,7 +1876,8 @@ func (c *DokiCLI) NetworkPrune(filter string) error {
 
 // ---- Volume Commands (5 commands, 1:1 with Docker) ----
 
-func (c *DokiCLI) VolumeLs(quiet bool, filter string) error {
+// VolumeLs lists volumes.
+func (c *DokiCLI) VolumeLs(_ bool, _ string) error {
 	resp, err := c.doAPI("GET", "/volumes", nil)
 	if err != nil {
 		return err
@@ -1834,6 +1900,7 @@ func (c *DokiCLI) VolumeLs(quiet bool, filter string) error {
 	return nil
 }
 
+// VolumeCreate creates a new volume.
 func (c *DokiCLI) VolumeCreate(name, driver string, opts, labels map[string]string) error {
 	body := map[string]interface{}{
 		"Name":       name,
@@ -1855,7 +1922,8 @@ func (c *DokiCLI) VolumeCreate(name, driver string, opts, labels map[string]stri
 	return nil
 }
 
-func (c *DokiCLI) VolumeRm(ids []string, force bool) error {
+// VolumeRm removes one or more volumes.
+func (c *DokiCLI) VolumeRm(ids []string, _ bool) error {
 	for _, id := range ids {
 		resp, err := c.doAPI("DELETE", "/volumes/"+id, nil)
 		if err != nil {
@@ -1866,6 +1934,7 @@ func (c *DokiCLI) VolumeRm(ids []string, force bool) error {
 	return nil
 }
 
+// VolumeInspect shows detailed information about volumes.
 func (c *DokiCLI) VolumeInspect(ids []string) error {
 	for _, id := range ids {
 		resp, err := c.doAPI("GET", "/volumes/"+id, nil)
@@ -1878,7 +1947,8 @@ func (c *DokiCLI) VolumeInspect(ids []string) error {
 	return nil
 }
 
-func (c *DokiCLI) VolumePrune(filter string) error {
+// VolumePrune removes all unused volumes.
+func (c *DokiCLI) VolumePrune(_ string) error {
 	resp, err := c.doAPI("POST", "/volumes/prune", nil)
 	if err != nil {
 		return err
@@ -1890,6 +1960,7 @@ func (c *DokiCLI) VolumePrune(filter string) error {
 
 // ---- System Commands (6 commands, 1:1 with Docker) ----
 
+// SystemInfo displays system-wide information.
 func (c *DokiCLI) SystemInfo() error {
 	resp, err := c.doAPI("GET", "/info", nil)
 	if err != nil {
@@ -1900,6 +1971,7 @@ func (c *DokiCLI) SystemInfo() error {
 	return nil
 }
 
+// SystemVersion shows the Doki version information.
 func (c *DokiCLI) SystemVersion() error {
 	fmt.Printf("Client: Doki\n")
 	fmt.Printf(" Version:    %s\n", c.version)
@@ -1909,7 +1981,8 @@ func (c *DokiCLI) SystemVersion() error {
 	return nil
 }
 
-func (c *DokiCLI) SystemEvents(since, until, filter string) error {
+// SystemEvents streams real-time events from the daemon.
+func (c *DokiCLI) SystemEvents(_ string, _ string, _ string) error {
 	resp, err := c.doAPI("GET", "/events", nil)
 	if err != nil {
 		return err
@@ -1922,24 +1995,172 @@ func (c *DokiCLI) SystemEvents(since, until, filter string) error {
 	go func() {
 		<-sig
 		_ = resp.Body.Close()
-		os.Exit(0)
 	}()
 
 	_, _ = io.Copy(os.Stdout, resp.Body)
 	return nil
 }
 
+// dfImage, dfContainer, dfVolume and dfCache mirror the Docker /system/df payload.
+type dfImage struct {
+	Repository  string `json:"Repository"`
+	Tag         string `json:"Tag"`
+	ImageID     string `json:"ImageID"`
+	Created     int64  `json:"Created"`
+	Size        int64  `json:"Size"`
+	SharedSize  int64  `json:"SharedSize"`
+	VirtualSize int64  `json:"VirtualSize"`
+	Containers  int    `json:"Containers"`
+}
+
+type dfContainer struct {
+	Image   string `json:"Image"`
+	ImageID string `json:"ImageID"`
+	Name    string `json:"Name"`
+	Size    struct {
+		RootFsSize int64 `json:"root_fs_size"`
+		RwSize     int64 `json:"rw_size"`
+	} `json:"Size"`
+	Created int64  `json:"Created"`
+	State   string `json:"State"`
+	Status  string `json:"Status"`
+}
+
+type dfVolume struct {
+	Name       string `json:"Name"`
+	Driver     string `json:"Driver"`
+	Mountpoint string `json:"Mountpoint"`
+	Size       int64  `json:"Size"`
+	CreatedAt  string `json:"CreatedAt"`
+}
+
+type dfCache struct {
+	ID   string `json:"ID"`
+	Size int64  `json:"Size"`
+}
+
+// SystemDf shows disk usage by images, containers, and volumes.
 func (c *DokiCLI) SystemDf(verbose bool) error {
 	resp, err := c.doAPI("GET", "/system/df", nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(os.Stdout, resp.Body)
+
+	var df struct {
+		LayerSize  int64         `json:"LayersSize"`
+		Images     []dfImage     `json:"Images"`
+		Containers []dfContainer `json:"Containers"`
+		Volumes    []dfVolume    `json:"Volumes"`
+		BuildCache []dfCache     `json:"BuildCache"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&df); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+
+	// Images: ACTIVE = sum of in-use containers; SIZE = sum of image sizes;
+	// RECLAIMABLE = sum of sizes of images with no active container.
+	var imageSize, imageReclaimable int64
+	imageActive := 0
+	for _, img := range df.Images {
+		imageSize += img.Size
+		imageActive += img.Containers
+		if img.Containers == 0 {
+			imageReclaimable += img.Size
+		}
+	}
+
+	// Containers: ACTIVE = running ones; RECLAIMABLE = rw size of stopped ones.
+	containerTotal := int64(len(df.Containers))
+	containerActive := 0
+	var containerSize, containerReclaimable int64
+	for _, ct := range df.Containers {
+		containerSize += ct.Size.RootFsSize + ct.Size.RwSize
+		if ct.State == "exited" || ct.State == "stopped" {
+			containerReclaimable += ct.Size.RwSize
+		} else {
+			containerActive++
+		}
+	}
+
+	// Volumes: ACTIVE = those referenced by a container; SIZE = total on-disk.
+	volumeRefs := make(map[string]bool)
+	for _, ct := range df.Containers {
+		volumeRefs[ct.Image] = true
+	}
+	volumeTotal := int64(len(df.Volumes))
+	volumeActive := int64(0)
+	var volumeSize, volumeReclaimable int64
+	for _, v := range df.Volumes {
+		volumeSize += v.Size
+		if volumeRefs[v.Name] {
+			volumeActive++
+		} else {
+			volumeReclaimable += v.Size
+		}
+	}
+
+	// Build cache: everything is reclaimable.
+	var cacheSize, cacheReclaimable int64
+	for _, b := range df.BuildCache {
+		cacheSize += b.Size
+		cacheReclaimable += b.Size
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 10, 0, 1, ' ', 0)
+	_, _ = fmt.Fprintln(w, "TYPE\tTOTAL\tACTIVE\tSIZE\tRECLAIMABLE")
+	_, _ = fmt.Fprintf(w, "Images\t%d\t%d\t%s\t%s\n",
+		len(df.Images), imageActive, formatSize(imageSize), formatSize(imageReclaimable))
+	_, _ = fmt.Fprintf(w, "Containers\t%d\t%d\t%s\t%s\n",
+		containerTotal, containerActive, formatSize(containerSize), formatSize(containerReclaimable))
+	_, _ = fmt.Fprintf(w, "Local Volumes\t%d\t%d\t%s\t%s\n",
+		volumeTotal, volumeActive, formatSize(volumeSize), formatSize(volumeReclaimable))
+	_, _ = fmt.Fprintf(w, "Build Cache\t%d\t%d\t%s\t%s\n",
+		len(df.BuildCache), 0, formatSize(cacheSize), formatSize(cacheReclaimable))
+	_ = w.Flush()
+
+	if verbose {
+		iw := tabwriter.NewWriter(os.Stdout, 10, 0, 1, ' ', 0)
+		_, _ = fmt.Fprintln(iw, "\nImages detail:")
+		_, _ = fmt.Fprintln(iw, "REPOSITORY\tTAG\tIMAGE ID\tCONTAINERS\tSIZE")
+		for _, img := range df.Images {
+			repo := img.Repository
+			if repo == "" {
+				repo = "-"
+			}
+			tag := img.Tag
+			if tag == "" {
+				tag = "-"
+			}
+			_, _ = fmt.Fprintf(iw, "%s\t%s\t%s\t%d\t%s\n",
+				repo, tag, common.ShortID(img.ImageID), img.Containers, formatSize(img.Size))
+		}
+		_ = iw.Flush()
+
+		cw := tabwriter.NewWriter(os.Stdout, 10, 0, 1, ' ', 0)
+		_, _ = fmt.Fprintln(cw, "\nContainers detail:")
+		_, _ = fmt.Fprintln(cw, "NAME\tIMAGE\tSTATE\tSIZE\tRECLAIMABLE")
+		for _, ct := range df.Containers {
+			name := ct.Name
+			if name == "" {
+				name = "-"
+			}
+			reclaim := int64(0)
+			if ct.State == "exited" || ct.State == "stopped" {
+				reclaim = ct.Size.RwSize
+			}
+			_, _ = fmt.Fprintf(cw, "%s\t%s\t%s\t%s\t%s\n",
+				name, firstTag(ct.Image), ct.State,
+				formatSize(ct.Size.RootFsSize+ct.Size.RwSize), formatSize(reclaim))
+		}
+		_ = cw.Flush()
+	}
+
 	return nil
 }
 
-func (c *DokiCLI) SystemPrune(all, volumes bool, filter string) error {
+// SystemPrune removes unused containers, images, and optionally volumes.
+func (c *DokiCLI) SystemPrune(all, volumes bool, _ string) error {
 	containers, _ := c.listContainers(true)
 	paused := 0
 	stopped := 0
@@ -1974,12 +2195,14 @@ func (c *DokiCLI) SystemPrune(all, volumes bool, filter string) error {
 	return nil
 }
 
+// SystemDialStdio connects stdin/stdout to the daemon.
 func (c *DokiCLI) SystemDialStdio() error {
 	return fmt.Errorf("not yet implemented")
 }
 
 // ---- Login/Logout Commands ----
 
+// Login authenticates to a container registry.
 func (c *DokiCLI) Login(server, username, password string) error {
 	body := map[string]string{
 		"username":      username,
@@ -2003,12 +2226,14 @@ func (c *DokiCLI) Login(server, username, password string) error {
 	return nil
 }
 
-func (c *DokiCLI) Logout(server string) error {
+// Logout removes registry authentication credentials.
+func (c *DokiCLI) Logout(_ string) error {
 	return fmt.Errorf("not yet implemented")
 }
 
 // ---- Podman-specific Commands ----
 
+// PodCreate creates a new pod.
 func (c *DokiCLI) PodCreate(name string, labels map[string]string) (string, error) {
 	body := map[string]interface{}{
 		"Name":   name,
@@ -2027,6 +2252,7 @@ func (c *DokiCLI) PodCreate(name string, labels map[string]string) (string, erro
 	return result.Id, nil
 }
 
+// PodPs lists pods.
 func (c *DokiCLI) PodPs() error {
 	resp, err := c.doAPI("GET", "/pods/json", nil)
 	if err != nil {
@@ -2037,6 +2263,7 @@ func (c *DokiCLI) PodPs() error {
 	return nil
 }
 
+// PodRm removes one or more pods.
 func (c *DokiCLI) PodRm(ids []string, force bool) error {
 	for _, id := range ids {
 		path := "/pods/" + id
@@ -2052,6 +2279,7 @@ func (c *DokiCLI) PodRm(ids []string, force bool) error {
 	return nil
 }
 
+// PodStart starts one or more pods.
 func (c *DokiCLI) PodStart(ids []string) error {
 	for _, id := range ids {
 		resp, err := c.doAPI("POST", "/pods/"+id+"/start", nil)
@@ -2063,6 +2291,7 @@ func (c *DokiCLI) PodStart(ids []string) error {
 	return nil
 }
 
+// PodStop stops one or more pods.
 func (c *DokiCLI) PodStop(ids []string) error {
 	for _, id := range ids {
 		resp, err := c.doAPI("POST", "/pods/"+id+"/stop", nil)
@@ -2074,7 +2303,8 @@ func (c *DokiCLI) PodStop(ids []string) error {
 	return nil
 }
 
-func (c *DokiCLI) GenerateKube(containerID string, service bool) error {
+// GenerateKube generates Kubernetes YAML from containers or pods.
+func (c *DokiCLI) GenerateKube(containerID string, _ bool) error {
 	path := "/generate/kube"
 	if containerID != "" {
 		path += "?container=" + containerID
@@ -2088,6 +2318,7 @@ func (c *DokiCLI) GenerateKube(containerID string, service bool) error {
 	return nil
 }
 
+// AutoUpdate checks for and applies image updates to containers.
 func (c *DokiCLI) AutoUpdate() error {
 	resp, err := c.doAPI("POST", "/auto-update", nil)
 	if err != nil {
@@ -2098,18 +2329,22 @@ func (c *DokiCLI) AutoUpdate() error {
 	return nil
 }
 
-func (c *DokiCLI) Unshare(cmd []string) error {
+// Unshare runs a command in a new user namespace.
+func (c *DokiCLI) Unshare(_ []string) error {
 	return fmt.Errorf("not yet implemented")
 }
 
-func (c *DokiCLI) Untag(imageName string) error {
+// Untag removes a tag from an image.
+func (c *DokiCLI) Untag(_ string) error {
 	return fmt.Errorf("not yet implemented")
 }
 
-func (c *DokiCLI) Scout(target string) error {
+// Scout scans an image for vulnerabilities.
+func (c *DokiCLI) Scout(_ string) error {
 	return fmt.Errorf("not yet implemented")
 }
 
+// VerifyImageSignature checks if an image has a valid signature.
 func (c *DokiCLI) VerifyImageSignature(imageName string) error {
 	ref, err := common.ParseImageRef(imageName)
 	if err != nil {
@@ -2134,14 +2369,17 @@ func (c *DokiCLI) VerifyImageSignature(imageName string) error {
 	return nil
 }
 
-func (c *DokiCLI) Mount(containerIDs []string) error {
+// Mount mounts a container filesystem.
+func (c *DokiCLI) Mount(_ []string) error {
 	return fmt.Errorf("not yet implemented")
 }
 
-func (c *DokiCLI) Unmount(containerIDs []string) error {
+// Unmount unmounts a container filesystem.
+func (c *DokiCLI) Unmount(_ []string) error {
 	return fmt.Errorf("not yet implemented")
 }
 
+// Healthcheck shows the health status of a container.
 func (c *DokiCLI) Healthcheck(containerID string) error {
 	resp, err := c.doAPI("GET", "/containers/"+containerID+"/json", nil)
 	if err != nil {
@@ -2162,12 +2400,14 @@ func (c *DokiCLI) Healthcheck(containerID string) error {
 	return nil
 }
 
+// Events streams real-time events from the daemon with an optional filter.
 func (c *DokiCLI) Events(filter string) error {
 	return c.SystemEvents("", "", filter)
 }
 
 // ---- Kubernetes kubectl-compatible Commands ----
 
+// KubePlay creates containers from a Kubernetes YAML file.
 func (c *DokiCLI) KubePlay(file string) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -2182,6 +2422,7 @@ func (c *DokiCLI) KubePlay(file string) error {
 	return nil
 }
 
+// KubeDown tears down resources described in a Kubernetes YAML file.
 func (c *DokiCLI) KubeDown(file string) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -2195,6 +2436,7 @@ func (c *DokiCLI) KubeDown(file string) error {
 	return nil
 }
 
+// KubeGenerate generates Kubernetes YAML for a given resource type.
 func (c *DokiCLI) KubeGenerate(what string) error {
 	path := "/generate/" + what
 	resp, err := c.doAPI("GET", path, nil)
@@ -2206,6 +2448,7 @@ func (c *DokiCLI) KubeGenerate(what string) error {
 	return nil
 }
 
+// Apply applies a YAML/JSON configuration to create or update resources.
 func (c *DokiCLI) Apply(file string) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -2304,6 +2547,7 @@ func (c *DokiCLI) waitContainer(containerID string) {
 	}
 }
 
+// Ping checks whether the Doki daemon is reachable.
 func (c *DokiCLI) Ping() error {
 	resp, err := c.doAPI("GET", "/_ping", nil)
 	if err != nil {
@@ -2388,6 +2632,7 @@ func printOfflineVersion() error {
 
 // ---- RunFlags - full docker run flags ----
 
+// RunFlags holds all the flags accepted by the run command.
 type RunFlags struct {
 	Name          string
 	Detach        bool
@@ -2468,6 +2713,7 @@ type RunFlags struct {
 	GPUs          string
 }
 
+// MountOpt represents a single --mount flag value.
 type MountOpt struct {
 	Type        string
 	Source      string
@@ -2476,6 +2722,7 @@ type MountOpt struct {
 	Consistency string
 }
 
+// ParseRunFlags parses command-line arguments for the run command.
 func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) {
 	flags = &RunFlags{}
 	imageFound := false
@@ -2973,6 +3220,39 @@ func unwrap(v interface{}) interface{} {
 	default:
 		return v
 	}
+}
+
+// ValidateFlags returns an error if args contains any token starting with
+// "-" that is not listed in validFlags. Flags in valueFlags consume the
+// next token as their value, and that token is not inspected. The first
+// unknown flag triggers the returned error, formatted as
+// "invalid flag: <flag>".
+func ValidateFlags(args []string, validFlags []string, valueFlags []string) error {
+	valid := make(map[string]bool, len(validFlags))
+	for _, f := range validFlags {
+		valid[f] = true
+	}
+	takesValue := make(map[string]bool, len(valueFlags))
+	for _, f := range valueFlags {
+		takesValue[f] = true
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		name := a
+		if eq := strings.Index(a, "="); eq >= 0 {
+			name = a[:eq]
+		}
+		if !valid[name] {
+			return fmt.Errorf("invalid flag: %s", a)
+		}
+		if takesValue[name] && i+1 < len(args) && !strings.Contains(a, "=") {
+			i++
+		}
+	}
+	return nil
 }
 
 func init() {

@@ -1,42 +1,94 @@
 //go:build !darwin
 
+// Package macos provides macOS native virtualization backends.
 package macos
 
+// VZBackend is a stub for the macOS Virtualization framework backend.
 type VZBackend struct{}
+
+// QEMUBackend is a stub for the QEMU-based macOS virtualization backend.
 type QEMUBackend struct{}
 
-func NewVZBackend() *VZBackend {
-	return nil
-}
+// NewVZBackend returns nil on non-darwin platforms.
+func NewVZBackend() *VZBackend { return nil }
 
-func NewQEMUBackend() *QEMUBackend {
-	return nil
-}
+// NewQEMUBackend returns nil on non-darwin platforms.
+func NewQEMUBackend() *QEMUBackend { return nil }
 
-func (b *VZBackend) Name() string         { return "vz" }
-func (b *VZBackend) Available() bool       { return false }
-func (b *VZBackend) MinVersion() string    { return "N/A" }
-func (b *VZBackend) CreateVM(cfg *VMConfig) error { return nil }
-func (b *VZBackend) StartVM(id string) error { return nil }
-func (b *VZBackend) StopVM(id string, timeoutSec int) error { return nil }
-func (b *VZBackend) DeleteVM(id string) error { return nil }
-func (b *VZBackend) VMStatus(id string) (string, error) { return "", nil }
-func (b *VZBackend) ShareHostDir(hostPath, guestPath, tag string, readOnly bool) error { return nil }
-func (b *VZBackend) UnshareHostDir(tag string) error { return nil }
-func (b *VZBackend) ForwardPort(hostPort, guestPort int, proto string) error { return nil }
-func (b *VZBackend) RemoveForwardPort(hostPort int, proto string) error { return nil }
-func (b *VZBackend) Stats(id string) (*VMStats, error) { return nil, nil }
+// Name returns "vz".
+func (b *VZBackend) Name() string { return "vz" }
 
-func (b *QEMUBackend) Name() string         { return "qemu" }
-func (b *QEMUBackend) Available() bool       { return false }
-func (b *QEMUBackend) MinVersion() string    { return "N/A" }
-func (b *QEMUBackend) CreateVM(cfg *VMConfig) error { return nil }
-func (b *QEMUBackend) StartVM(id string) error { return nil }
-func (b *QEMUBackend) StopVM(id string, timeoutSec int) error { return nil }
-func (b *QEMUBackend) DeleteVM(id string) error { return nil }
-func (b *QEMUBackend) VMStatus(id string) (string, error) { return "", nil }
-func (b *QEMUBackend) ShareHostDir(hostPath, guestPath, tag string, readOnly bool) error { return nil }
-func (b *QEMUBackend) UnshareHostDir(tag string) error { return nil }
-func (b *QEMUBackend) ForwardPort(hostPort, guestPort int, proto string) error { return nil }
-func (b *QEMUBackend) RemoveForwardPort(hostPort int, proto string) error { return nil }
-func (b *QEMUBackend) Stats(id string) (*VMStats, error) { return nil, nil }
+// Available reports that the backend is not available on this platform.
+func (b *VZBackend) Available() bool { return false }
+
+// MinVersion returns "N/A" as the backend is unavailable.
+func (b *VZBackend) MinVersion() string { return "N/A" }
+
+// CreateVM is a no-op stub.
+func (b *VZBackend) CreateVM(_ *VMConfig) error { return nil }
+
+// StartVM is a no-op stub.
+func (b *VZBackend) StartVM(_ string) error { return nil }
+
+// StopVM is a no-op stub.
+func (b *VZBackend) StopVM(_ string, _ int) error { return nil }
+
+// DeleteVM is a no-op stub.
+func (b *VZBackend) DeleteVM(_ string) error { return nil }
+
+// VMStatus returns empty state on unsupported platforms.
+func (b *VZBackend) VMStatus(_ string) (string, error) { return "", nil }
+
+// ShareHostDir is a no-op stub.
+func (b *VZBackend) ShareHostDir(_, _, _ string, _ bool) error { return nil }
+
+// UnshareHostDir is a no-op stub.
+func (b *VZBackend) UnshareHostDir(_ string) error { return nil }
+
+// ForwardPort is a no-op stub.
+func (b *VZBackend) ForwardPort(_, _ int, _ string) error { return nil }
+
+// RemoveForwardPort is a no-op stub.
+func (b *VZBackend) RemoveForwardPort(_ int, _ string) error { return nil }
+
+// Stats returns nil stats on unsupported platforms.
+func (b *VZBackend) Stats(_ string) (*VMStats, error) { return nil, nil }
+
+// Name returns "qemu".
+func (b *QEMUBackend) Name() string { return "qemu" }
+
+// Available reports that the backend is not available on this platform.
+func (b *QEMUBackend) Available() bool { return false }
+
+// MinVersion returns "N/A" as the backend is unavailable.
+func (b *QEMUBackend) MinVersion() string { return "N/A" }
+
+// CreateVM is a no-op stub.
+func (b *QEMUBackend) CreateVM(_ *VMConfig) error { return nil }
+
+// StartVM is a no-op stub.
+func (b *QEMUBackend) StartVM(_ string) error { return nil }
+
+// StopVM is a no-op stub.
+func (b *QEMUBackend) StopVM(_ string, _ int) error { return nil }
+
+// DeleteVM is a no-op stub.
+func (b *QEMUBackend) DeleteVM(_ string) error { return nil }
+
+// VMStatus returns empty state on unsupported platforms.
+func (b *QEMUBackend) VMStatus(_ string) (string, error) { return "", nil }
+
+// ShareHostDir is a no-op stub.
+func (b *QEMUBackend) ShareHostDir(_, _, _ string, _ bool) error { return nil }
+
+// UnshareHostDir is a no-op stub.
+func (b *QEMUBackend) UnshareHostDir(_ string) error { return nil }
+
+// ForwardPort is a no-op stub.
+func (b *QEMUBackend) ForwardPort(_, _ int, _ string) error { return nil }
+
+// RemoveForwardPort is a no-op stub.
+func (b *QEMUBackend) RemoveForwardPort(_ int, _ string) error { return nil }
+
+// Stats returns nil stats on unsupported platforms.
+func (b *QEMUBackend) Stats(_ string) (*VMStats, error) { return nil, nil }

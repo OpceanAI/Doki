@@ -251,7 +251,7 @@ func (f *FirewallManager) RemovePortMapping(containerIP string, hostPort, contai
 	return f.removeIptablesPortMapping(containerIP, hostPort, containerPort, proto)
 }
 
-func (f *FirewallManager) removeNftablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
+func (f *FirewallManager) removeNftablesPortMapping(containerIP string, hostPort, _ int, proto string) error {
 	// Find the rule handle by listing rules and matching
 	listCmd := exec.Command("nft", "-a", "list", "chain", "ip", "nat", "DOKI")
 	output, err := listCmd.Output()

@@ -1,3 +1,4 @@
+// Package proot provides PRoot-based container isolation.
 package proot
 
 import "sync"

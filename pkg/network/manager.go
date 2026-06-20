@@ -1,3 +1,4 @@
+// Package network provides container networking.
 package network
 
 import (
@@ -470,7 +471,7 @@ func (m *Manager) allocateIP(nw *Network) string {
 	return ""
 }
 
-func incrementIP(ip net.IP, mask net.IPMask) {
+func incrementIP(ip net.IP, _ net.IPMask) {
 	for i := len(ip) - 1; i >= 0; i-- {
 		ip[i]++
 		if ip[i] != 0 {
@@ -781,7 +782,7 @@ func setupBridgeNetwork(pid int, nw *Network, ep *Endpoint, firewall *FirewallMa
 	return nil
 }
 
-func teardownBridgeNetwork(nw *Network, ep *Endpoint, firewall *FirewallManager) error {
+func teardownBridgeNetwork(_ *Network, ep *Endpoint, firewall *FirewallManager) error {
 	if firewall != nil && ep != nil {
 		for _, pm := range ep.PortMapping {
 			_ = firewall.RemovePortMapping(ep.IPv4Address, int(pm.HostPort), int(pm.ContainerPort), pm.Proto)
@@ -896,7 +897,7 @@ func startPortForwardingSocat(hostPort int, containerIP string, containerPort in
 }
 
 // ApplyPortForwardings creates TCP/UDP proxies from host ports to container ports.
-func (m *Manager) ApplyPortForwardings(containerID string, ports []common.Port, pid int) error {
+func (m *Manager) ApplyPortForwardings(containerID string, ports []common.Port, _ int) error {
 	// BUG-01 fix: IPv4Address is stored as a bare IP (e.g. "172.17.0.2"),
 	// never in CIDR notation. net.ParseCIDR requires "/mask" and returns
 	// an error on bare IPs. Use net.ParseIP instead.

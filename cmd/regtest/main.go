@@ -1,3 +1,4 @@
+// Package main is the Doki registry test suite.
 package main
 
 import (

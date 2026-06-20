@@ -111,7 +111,7 @@ func (c *BuildKitClient) Build(ctx context.Context, cfg *BuildConfig) error {
 
 // Solve sends a solve request to BuildKit.
 // This is the advanced API for custom build graphs.
-func (c *BuildKitClient) Solve(ctx context.Context, definition []byte) error {
+func (c *BuildKitClient) Solve(_ context.Context, _ []byte) error {
 	if !c.IsAvailable() {
 		return fmt.Errorf("buildkit daemon not available")
 	}

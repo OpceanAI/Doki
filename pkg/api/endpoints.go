@@ -1,3 +1,4 @@
+// Package api provides the Docker-compatible HTTP API server.
 package api
 
 import (
@@ -80,7 +81,7 @@ func (s *Server) handleContainerArchive(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-func (s *Server) handleArchiveGet(w http.ResponseWriter, r *http.Request, rootfs, containerPath string) {
+func (s *Server) handleArchiveGet(w http.ResponseWriter, _ *http.Request, rootfs, containerPath string) {
 	// Check if path exists.
 	info, err := os.Stat(containerPath)
 	if err != nil {
@@ -111,7 +112,7 @@ func (s *Server) handleArchiveGet(w http.ResponseWriter, r *http.Request, rootfs
 	}
 }
 
-func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, rootfs, containerPath string, pathEndsWithSlash bool) {
+func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, _ string, containerPath string, pathEndsWithSlash bool) {
 	destInfo, destStatErr := os.Stat(containerPath)
 	destIsDir := destStatErr == nil && destInfo.IsDir()
 
@@ -224,7 +225,7 @@ func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request, i
 }
 
 // handleContainerExecResize handles POST /exec/{id}/resize.
-func (s *Server) handleExecResize(w http.ResponseWriter, r *http.Request, execID string) {
+func (s *Server) handleExecResize(w http.ResponseWriter, r *http.Request, _ string) {
 	q := r.URL.Query()
 	height, _ := strconv.Atoi(q.Get("h"))
 	width, _ := strconv.Atoi(q.Get("w"))
@@ -297,7 +298,7 @@ func addFileToTar(tw *tar.Writer, fullPath, relPath string, info os.FileInfo) er
 }
 
 // handleContainerTop handles GET /containers/{id}/top.
-func (s *Server) handleContainerTop(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleContainerTop(w http.ResponseWriter, _ *http.Request, id string) {
 	state, err := s.runtime.State(id)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())

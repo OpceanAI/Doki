@@ -61,7 +61,7 @@ Doki es un motor de contenedores (container engine) diseñado para cada kernel L
 | **Arquitecturas** | ARM64, ARMv7, x86_64 |
 | **Dependencias en runtime** | Cero |
 
-### Disponibilidad de binarios por plataforma (v0.9.2)
+### Disponibilidad de binarios por plataforma (v0.10.0)
 
 | Plataforma | doki | dokid | doki-compose | doki-init |
 |:-----------|:----:|:-----:|:------------:|:---------:|
@@ -216,7 +216,7 @@ docker.listContainers().then(console.log);
 | Binario | Tamaño | Descripción |
 |:-------|:----:|:------------|
 | **doki** | 6.7 MB | CLI con ~108 comandos. Se conecta al daemon vía Unix socket |
-| **dokid** | 9.2 MB | Daemon. Docker Engine API v1.48 sobre Unix socket. Proot integrado |
+| **dokid** | 9.2 MB | Daemon. Docker Engine API v1.54 sobre Unix socket. Proot integrado |
 | **doki-compose** | 7.6 MB | Motor de Compose. Spec completa con health conditions |
 | **doki-init** | 2.9 MB | PID 1 para guests microVM (Go). Variante en Rust disponible en el código fuente |
 
@@ -573,7 +573,7 @@ doki run -P nginx:alpine                            # Publica todos los puertos 
 doki run -p 8080-8090:80 nginx:alpine               # Rango de puertos
 ```
 
-### DokiLink-Lite (Mesh Multi-Host, v0.9.3)
+### DokiLink-Lite (Mesh Multi-Host, v0.10.0)
 
 Doki 0.9.3 incluye **DokiLink-Lite**, una capa de proxy TCP/UDP +
 mesh que permite reenviar un puerto publicado de un contenedor a
@@ -607,7 +607,7 @@ Vea `.wiki/Networking.es.md` para la arquitectura completa,
 diagramas de secuencia y limitaciones (sin DHT, sin NAT traversal,
 mDNS solo en LAN).
 
-### Arquitectura DNS (rewrite de v0.9.2)
+### Arquitectura DNS (rewrite de v0.10.0)
 
 Doki corre un servidor DNS interno que maneja la resolución de nombres entre contenedores y reenvía consultas externas a resolvers upstream. La arquitectura:
 
@@ -626,7 +626,7 @@ flowchart TD
     Upstream --> Internet
 ```
 
-#### Defaults (v0.9.2)
+#### Defaults (v0.10.0)
 
 | Plataforma | Listen por defecto | Por qué |
 |:---------|:----------------|:----|
@@ -655,31 +655,31 @@ El servidor DNS almacena entradas en una caché LRU (1024 entradas, TTL de 5 min
 - **TCP retry**: cuando el upstream UDP devuelve el bit TC, la consulta se reintenta sobre TCP según RFC 5966
 - **sin busy-wait**: `ReadFromUDP` bloquea en el socket, sin loop de polling
 
-### Internals de Port Forwarding (fix de v0.9.2)
+### Internals de Port Forwarding (fix de v0.10.0)
 
-El mapeo de puertos usa iptables DNAT en modo root y `socat` en modo rootless. El fix de v0.9.2 apunta a la construcción de la regla DNAT:
+El mapeo de puertos usa iptables DNAT en modo root y `socat` en modo rootless. El fix de v0.10.0 apunta a la construcción de la regla DNAT:
 
 ```go
 // pkg/network/manager.go: ensurePortForward
 args := []string{
-    "-A", "OUTPUT",                  // ← añadido en v0.9.2 (faltaba)
+    "-A", "OUTPUT",                  // ← añadido en v0.10.0 (faltaba)
     "-p", "tcp",
     "--dport", strconv.Itoa(hostPort),
     "-j", "DNAT",
     "--to-destination", containerIP + ":" + strconv.Itoa(containerPort),
 }
-exec.Command("iptables", args...).CombinedOutput()  // ← el error se descartaba en v0.9.1
+exec.Command("iptables", args...).CombinedOutput()  // ← el error se descartaba en v0.10.0
 ```
 
-**Bug v0.9.1**: faltaba `-A OUTPUT`, por lo que iptables veía `OUTPUT` como nombre de target → "Unknown option" → silenciosamente descartado. Resultado: el outbound del contenedor al puerto del host funcionaba, pero el inbound del host al contenedor no.
+**Bug v0.10.0**: faltaba `-A OUTPUT`, por lo que iptables veía `OUTPUT` como nombre de target → "Unknown option" → silenciosamente descartado. Resultado: el outbound del contenedor al puerto del host funcionaba, pero el inbound del host al contenedor no.
 
-**Bug v0.9.1**: `socat` se conectaba a `localhost:containerPort` en lugar de `containerIP:containerPort`. Desde el host, `localhost:8080` no llegaba a la IP bridge del contenedor.
+**Bug v0.10.0**: `socat` se conectaba a `localhost:containerPort` en lugar de `containerIP:containerPort`. Desde el host, `localhost:8080` no llegaba a la IP bridge del contenedor.
 
-**Fix v0.9.2**: DNAT ahora usa `[]string` (sin parsing de shell), apunta a la IP bridge del contenedor (`Endpoint.VethPeer`), y también maneja UDP vía `socat -u` para protocolos distintos a TCP.
+**Fix v0.10.0**: DNAT ahora usa `[]string` (sin parsing de shell), apunta a la IP bridge del contenedor (`Endpoint.VethPeer`), y también maneja UDP vía `socat -u` para protocolos distintos a TCP.
 
-### Veth Teardown (fix de v0.9.2)
+### Veth Teardown (fix de v0.10.0)
 
-El struct `Endpoint` ganó dos campos en v0.9.2 para hacer el teardown idempotente:
+El struct `Endpoint` ganó dos campos en v0.10.0 para hacer el teardown idempotente:
 
 ```go
 // pkg/network/manager.go
@@ -1003,11 +1003,11 @@ Doki/
 | Networking CNI | No testeado | El gestor de plugins existe, no está conectado |
 | Aislamiento de red bridge | Parcial | Funciona rootful (iptables DNAT); en proot/native, los contenedores comparten la red del host |
 
-### Arreglado en v0.9.2 (movido fuera de esta lista)
+### Arreglado en v0.10.0 (movido fuera de esta lista)
 
-- ~~iptables DNAT~~ — arreglado en v0.9.2, ver "Internals de Port Forwarding" arriba
-- ~~Port forwarding a localhost~~ — arreglado en v0.9.2, apunta a la IP bridge del contenedor
-- ~~Pares veth huérfanos en teardown~~ — arreglado en v0.9.2, `ip link del` en teardown
+- ~~iptables DNAT~~ — arreglado en v0.10.0, ver "Internals de Port Forwarding" arriba
+- ~~Port forwarding a localhost~~ — arreglado en v0.10.0, apunta a la IP bridge del contenedor
+- ~~Pares veth huérfanos en teardown~~ — arreglado en v0.10.0, `ip link del` en teardown
 - ~~proot fallando en hosts sin binario `proot`~~ — arreglado, `FindProotBinary()` cae al PATH del sistema
 - ~~DNS en Android usando Google 8.8.8.8~~ — arreglado, lee `getprop net.dns*`
 
@@ -1019,11 +1019,11 @@ Doki/
 
 ## Qué hay de nuevo
 
-### v0.9.2 (Actual)
+### v0.10.0 (Actual)
 
-Este release es un pase de **estabilidad y correctitud** sobre v0.9.1. Sin nuevos comandos visibles para el usuario, pero una larga lista de bugs que estaban rompiendo flujos reales están ahora arreglados.
+Este release es un pase de **estabilidad y correctitud** sobre v0.10.0. Sin nuevos comandos visibles para el usuario, pero una larga lista de bugs que estaban rompiendo flujos reales están ahora arreglados.
 
-#### Fixes críticos de networking (el titular de v0.9.2)
+#### Fixes críticos de networking (el titular de v0.10.0)
 
 Estos cuatro bugs estaban rompiendo silenciosamente el networking de contenedores. Todos arreglados y probados:
 
@@ -1075,7 +1075,7 @@ Top fixes:
 
 #### Fix LD_PRELOAD para Termux
 
-`libtermux-exec-ld-preload.so` es la librería pre-cargada de Termux que hookea `execve`. Rompe el forwarding de syscalls basado en ptrace de proot. v0.9.2 la elimina vía `common.StripHostEnv()`:
+`libtermux-exec-ld-preload.so` es la librería pre-cargada de Termux que hookea `execve`. Rompe el forwarding de syscalls basado en ptrace de proot. v0.10.0 la elimina vía `common.StripHostEnv()`:
 
 ```go
 // pkg/common/env.go
@@ -1116,7 +1116,7 @@ Fuerza un modo con `doki run --runtime <mode>`.
 
 #### Matriz de build cross-platform (13 binarios)
 
-v0.9.2 distribuye 13 binarios (eran 14 en v0.9.1 — eliminados `doki-proot` y `doki-init-rust`, ahora se auto-detectan o son solo en código fuente):
+v0.10.0 distribuye 13 binarios (eran 14 en v0.10.0 — eliminados `doki-proot` y `doki-init-rust`, ahora se auto-detectan o son solo en código fuente):
 
 | OS / Arch | doki | dokid | doki-compose | doki-init |
 |:----------|:----:|:-----:|:------------:|:---------:|
@@ -1132,12 +1132,12 @@ v0.9.2 distribuye 13 binarios (eran 14 en v0.9.1 — eliminados `doki-proot` y `
 - **String de versión unificado**: `common.DokiVersion=0.9.2` inyectado vía `-ldflags` junto con `GitCommit`, `BuildDate`, `BuildUser`. Una sola fuente de verdad, `doki version` muestra la procedencia del build.
 - **Logging estructurado**: `log/slog` reemplaza al `log` de stdlib en daemon, CLI y middleware. JSON en producción, text en TTY (auto-detectado desde stderr).
 - **Persistencia de estado atómica**: `saveState` escribe a `state.json.tmp.*` y luego `os.Rename` para safety ante crashes. No más `state.json` corrupto tras un corte de energía.
-- **API bumped a v1.48**: alineado con Docker Engine 29.5.x (mayo 2026).
+- **API bumped a v1.54**: alineado con Docker Engine 29.5.x (mayo 2026).
 - **Alineación de páginas de 16 KiB**: Android 15+ requiere `-Wl,-z,max-page-size=16384`; el target `build-android-arm64` del Makefile lo pasa vía LDFLAGS.
 - **Hardening de métricas + counters**: `/health` y `/metrics` integrados con el pipeline de slog; los counters sobreviven reinicios del proceso.
 - **Cobertura de tests**: DNS LRU, estado atómico, parseo de resolv.conf, invariantes de versión, todos con tests unitarios.
 
-### v0.9.1
+### v0.10.0
 
 - **OCI Push**: `doki push` — blob upload, cross-repo mount, manifest PUT a cualquier registry OCI
 - **Auth de Registry**: `doki login` acepta credenciales y las propaga al cliente de registry

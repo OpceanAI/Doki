@@ -1,6 +1,8 @@
+// Package main is the Doki container engine CLI.
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -164,6 +166,11 @@ Options:
   -f, --filter   Filter output based on conditions
   --format       Format output using Go template`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
+			if err := cli.ValidateFlags(args,
+				[]string{"-a", "--all", "-q", "--quiet", "-n", "--last", "-f", "--filter", "--format"},
+				[]string{"-n", "--last", "-f", "--filter", "--format"}); err != nil {
+				return fmt.Errorf("doki ps: %w", err)
+			}
 			all := flagBool(args, "-a", "--all")
 			quiet := flagBool(args, "-q", "--quiet")
 			lastN := flagInt(args, "-n", "--last")
@@ -526,7 +533,9 @@ Block until one or more containers stop, then print their exit codes.`,
 					}
 					lastExit = exitCode
 				}
-				os.Exit(lastExit)
+				if lastExit != 0 {
+					return &cli.ExitError{Code: lastExit}
+				}
 			}
 			return nil
 		},
@@ -857,7 +866,7 @@ Commands:
 		Help: `Usage: doki info
 
 Display system-wide information.`,
-		Handler: func(c *cli.DokiCLI, args []string) error {
+		Handler: func(c *cli.DokiCLI, _ []string) error {
 			return c.SystemInfo()
 		},
 	},
@@ -866,7 +875,7 @@ Display system-wide information.`,
 		Help: `Usage: doki version
 
 Show the Doki version information.`,
-		Handler: func(c *cli.DokiCLI, args []string) error {
+		Handler: func(c *cli.DokiCLI, _ []string) error {
 			return c.SystemVersion()
 		},
 	},
@@ -980,7 +989,7 @@ Log out from a registry.`,
 		Help: `Usage: doki ping
 
 Check if the Doki daemon is running.`,
-		Handler: func(c *cli.DokiCLI, args []string) error {
+		Handler: func(c *cli.DokiCLI, _ []string) error {
 			return c.Ping()
 		},
 	},
@@ -1023,7 +1032,7 @@ Play Kubernetes YAML.`,
 		Help: `Usage: doki auto-update
 
 Auto update containers according to their auto-update policy.`,
-		Handler: func(c *cli.DokiCLI, args []string) error {
+		Handler: func(c *cli.DokiCLI, _ []string) error {
 			return c.AutoUpdate()
 		},
 	},
@@ -1393,10 +1402,15 @@ func handleKube(c *cli.DokiCLI, args []string) error {
 }
 
 func handleError(err error) {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	if err == nil {
+		return
 	}
+	var exitErr *cli.ExitError
+	if errors.As(err, &exitErr) {
+		os.Exit(exitErr.Code)
+	}
+	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	os.Exit(1)
 }
 
 func printMainHelp() {
@@ -1568,7 +1582,7 @@ func cleanIDs(args []string) []string {
 }
 
 // runWithDistro runs a command inside a predefined distro rootfs using proot.
-func runWithDistro(c *cli.DokiCLI, distroName string, args []string) error {
+func runWithDistro(_ *cli.DokiCLI, distroName string, args []string) error {
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		home = "/data/data/com.termux/files/home"

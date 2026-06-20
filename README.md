@@ -5,7 +5,6 @@
 <p align="center">
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-doki--init-black?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
-  <a href="https://www.docker.com"><img src="https://img.shields.io/badge/API-Docker_v1.44-2496ED?style=flat&logo=docker&logoColor=white" alt="Docker API"></a>
   <a href="https://github.com/OpceanAI/Doki/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-555?style=flat" alt="License"></a>
   <a href="https://github.com/OpceanAI/Doki/releases"><img src="https://img.shields.io/github/downloads/OpceanAI/Doki/total?style=flat&color=6366F1" alt="Downloads"></a>
   <a href="https://github.com/OpceanAI/Doki/stargazers"><img src="https://img.shields.io/github/stars/OpceanAI/Doki?style=flat&color=6366F1" alt="Stars"></a>
@@ -59,14 +58,15 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 | **Architectures** | ARM64, ARMv7, x86_64 |
 | **Runtime deps** | Zero |
 
-### Binary Availability by Platform (v0.9.3)
+### Binary Availability by Platform (v0.10.0)
 
-| Platform | doki | dokid | doki-compose | doki-init |
-|:---------|:----:|:-----:|:------------:|:---------:|
-| Linux ARM64 | Yes | Yes | Yes | Yes |
-| Linux ARMv7 | Yes | Yes | Yes | Yes |
-| Android ARM64 (Termux) | Yes | Yes | Yes | Yes |
-| macOS ARM64 (Apple Silicon) | Yes | — | — | — |
+| Platform | doki | dokid | doki-compose | doki-init | doki-kube | doki-kubectl |
+|:---------|:----:|:-----:|:------------:|:---------:|:---------:|:------------:|
+| Linux ARM64 | Yes | Yes | Yes | Yes | Yes | Yes |
+| Linux ARMv7 | Yes | Yes | Yes | Yes | Yes | Yes |
+| Android ARM64 (Termux) | Yes | Yes | Yes | Yes | Yes | Yes |
+| macOS ARM64 (Apple Silicon) | Yes | — | Yes | — | — | — |
+| macOS x86_64 (Intel) | Yes | — | — | — | — | — |
 
 **Note:** Android ARMv7 binaries are built with `GOOS=linux` (Go 1.22+ requires external linker for `GOOS=android` on 32-bit ARM). The binaries run via proot; Android detection uses filesystem probes.
 
@@ -127,7 +127,7 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
   <tr>
     <td width="50%" valign="top">
       <h3>Docker Compatible</h3>
-      <p>Same REST API v1.48. Drop-in replacement for Docker CLI and SDKs. docker-compose, docker-py, CI/CD pipelines all work without modification.</p>
+      <p>Same REST API v1.54. Drop-in replacement for Docker CLI and SDKs. docker-compose, docker-py, CI/CD pipelines all work without modification.</p>
     </td>
     <td width="50%" valign="top">
       <h3>Ultra Lightweight</h3>
@@ -215,10 +215,12 @@ docker.listContainers().then(console.log);
 
 | Binary | Size | Description |
 |:-------|:----:|:------------|
-| **doki** | 6.7 MB | CLI with ~108 commands. Connects to daemon via Unix socket |
-| **dokid** | 9.2 MB | Daemon. Docker Engine API v1.48 over Unix socket. Proot integrated |
-| **doki-compose** | 7.6 MB | Compose engine. Full spec support with health conditions |
+| **doki** | 6.7 MB | CLI with 108+ commands. Connects to daemon via Unix socket |
+| **dokid** | 9.2 MB | Daemon. Docker Engine API v1.54 + Podman API v5 over Unix socket |
+| **doki-compose** | 7.6 MB | Compose engine with watch, publish, and full spec support |
 | **doki-init** | 2.9 MB | PID 1 for microVM guests (Go). Rust variant available in source |
+| **doki-kube** | 8.1 MB | Kubernetes control plane (apiserver, kubelet, scheduler, controller, proxy, DNS) |
+| **doki-kubectl** | 4.3 MB | kubectl-compatible CLI for managing Kubernetes resources |
 
 <br>
 
@@ -495,7 +497,7 @@ services:
 
 ## REST API
 
-Doki exposes the **Docker Engine API v1.48** over a Unix socket. 53 endpoints.
+Doki exposes the **Docker Engine API v1.54** and **Podman libpod API v5** over Unix sockets. 53+ Docker endpoints + 39 Podman endpoints.
 
 ### Key Endpoints
 
@@ -921,35 +923,57 @@ go build -trimpath -ldflags="-s -w" -o releases/doki-init ./cmd/doki-init
 ```
 Doki/
   cmd/
-    doki/                 CLI binary (108 commands, 2200+ lines)
-    dokid/                Daemon binary (REST API, TLS, gRPC, rate limiting)
+    doki/                 CLI binary (108 commands, 1600+ lines)
+    dokid/                Daemon binary (REST API, TLS, rate limiting)
     doki-compose/         Docker Compose compatible CLI
+    doki-init/            Minimal PID 1 for containers (Go)
     doki-init-rust/       Minimal PID 1 for microVM guests (Rust, 412K)
+    doki-kube/            Kubernetes control plane (all-in-one)
+    doki-kubectl/         kubectl-compatible CLI client
+    dokitest/             Integration test suite
+    regtest/              Registry test suite
   pkg/
-    api/                  Docker Engine API v1.44 server (53 endpoints)
-    runtime/              OCI runtime with 4 execution modes
+    api/                  Docker Engine API v1.54 server
+    podman/               Podman libpod v5 API (39 endpoints)
+    compose/              Compose engine with watch + publish
+    apiserver/            Kubernetes API server
+    kubelet/              Kubernetes kubelet agent
+    scheduler/            Kubernetes scheduler
+    controllers/          Kubernetes controllers (10 controllers)
+    kubeproxy/            Kubernetes kube-proxy
+    coredns/              Cluster DNS for Kubernetes
+    kubectl/              kubectl HTTP client library
+    k8s-types/            80 Kubernetes API types
+    store/                In-memory state store with watch
+    runtime/              OCI runtime with 12 execution modes
     image/                OCI image management (pull, push, build)
     registry/             OCI Distribution Spec client
-    network/              Container networking (bridge, CNI, DNS)
+    network/              Container networking (bridge, CNI, DNS, pasta)
     storage/              Storage drivers (overlay2, fuse, btrfs, zfs)
     builder/              Dokifile parser (18 instructions, multi-stage)
-    compose/              Compose engine
-    cri/                  Kubernetes CRI plugin
-    cli/                  CLI library (2200+ lines)
+    cli/                  CLI library (3200+ lines)
     common/               Shared types, config, utilities
-    netlink/              DokiLink-Lite mesh networking (TCP/UDP proxy, TLS, gossip)
+    netlink/              DokiLink-Lite mesh networking
+    landlock/             Landlock LSM sandbox (Linux 5.13+)
+    macos/                macOS native VM (VZ + QEMU backends)
+    security/             Seccomp and AppArmor profiles
+    distro/               Linux distribution management
+    cri/                  Kubernetes CRI plugin
+    oci/                  OCI spec generation
+    deps/                 Dependency management
+    scheduler/            Pod scheduling
   internal/
     dokivm/               MicroVM subsystem (crosvm, firecracker, qemu)
     namespaces/           Linux namespace management
     cgroups/              cgroups v2 resource management
     fuse/                 FUSE overlay filesystem operations
-    proot/                proot fallback for Android
-    seccomp/              Seccomp profile engine (80+ syscalls)
+    proot/                Proot fallback for Android
+    seccomp/              Seccomp profile engine
     apparmor/             AppArmor profile generator
-  kernels/                Pre-compiled VM kernels (ARM64 + x86_64)
+  doki-os/                doki-OS VM kernel config + Makefile
 ```
 
-**50+ Go source files. 18,000+ lines of code. 4 compiled binaries. Zero external dependencies.**
+**158 Go source files. 55,000+ lines of code. 9 compiled binaries. 21 external dependencies.**
 
 <br>
 
@@ -1029,7 +1053,41 @@ Doki/
 
 ## What's New
 
-### v0.9.3 (Current)
+### v0.10.0 (Latest)
+
+Doki 0.10 is a massive expansion: **Podman 1:1 API compatibility, full Kubernetes distribution, macOS native VM support, doki-OS VM image, and 20 new dependencies** bringing the engine to 55,000+ lines of code across 158 files.
+
+#### New Platforms & APIs
+
+| Feature | Description |
+|:--------|:------------|
+| **Podman API v5** | 39 endpoints compatible with `podman-remote` clients. Pod, secret, and manifest management |
+| **Kubernetes 1.32** | Full control plane: apiserver, kubelet, scheduler, controllers (10), kube-proxy, CoreDNS |
+| **macOS Native** | VZ (Virtualization.framework) and QEMU backends for Apple Silicon and Intel Macs |
+| **doki-OS** | Minimal Linux kernel config (~4MB bzImage) for container-optimized VM guests |
+| **Landlock LSM** | Linux 5.13+ unprivileged sandboxing via Landlock ABI v9 |
+
+#### New Binaries
+
+| Binary | Description |
+|:-------|:------------|
+| `doki-kube` | All-in-one Kubernetes control plane |
+| `doki-kubectl` | kubectl-compatible CLI (get, apply, delete, describe, logs) |
+
+#### Dependencies (21 direct, 50 total)
+
+OCI specs (`image-spec`, `runtime-spec`, `go-digest`), gRPC + protobuf, Kubernetes CRI API, containerd v2 OCI, compression (`klauspost/compress`, `xz`), Moby utilities (`patternmatcher`, `term`), SQLite for K8s state, and more.
+
+#### Quality
+
+- **staticcheck**: 0 warnings
+- **errcheck production**: 0 unchecked errors
+- **go vet**: 0 warnings
+- **gosec**: 423 (filesystem/network operations inherent to container engines)
+- **revive**: 351 (documentation/style)
+- **158 Go files**, **55,000+ LOC**, **29 packages**, **9 binaries**
+
+### v0.9.3
 
 This release ships **DokiLink-Lite** (mesh networking) and **190+ bug fixes** across 4 rounds of comprehensive auditing. No breaking changes — fully backward-compatible with v0.9.2.
 
