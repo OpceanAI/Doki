@@ -22,7 +22,7 @@ If you see the version banner, you're good. If `dokid` is also installed, the sa
 
 ## 2. Start the Daemon
 
-The `dokid` daemon listens on a Unix socket and exposes the Docker Engine API v1.48.
+The `dokid` daemon listens on a Unix socket and exposes the Docker Engine API v1.54.
 
 ### Foreground (foreground, see logs)
 
@@ -229,7 +229,7 @@ You went through the full Doki lifecycle:
 | Port map | `pkg/network` | Bridge + iptables DNAT |
 | Logs | `pkg/runtime` | Multiplexed stream over HTTP |
 | Compose | `pkg/compose` | Compose spec engine |
-| Inspect | `pkg/api` | Docker Engine API v1.48 |
+| Inspect | `pkg/api` | Docker Engine API v1.54 |
 
 Continue to [Architecture](Architecture) to understand each subsystem in depth.
 
@@ -249,5 +249,5 @@ Continue to [Architecture](Architecture) to understand each subsystem in depth.
 - [Installation](Installation) — per-platform install
 - [Architecture](Architecture) — how Doki works under the hood
 - [Isolation Levels](Isolation-Levels) — pick the right runtime for your workload
-- [CLI Reference](CLI-Reference) — all 244 commands
+- [CLI Reference](CLI-Reference) — all Docker, Podman, and Kubernetes commands
 - [Configuration](Configuration) — `config.json` and env vars

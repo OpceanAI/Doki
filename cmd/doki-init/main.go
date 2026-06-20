@@ -1,3 +1,4 @@
+// Package main is the Doki init process for containers.
 //go:build linux
 // +build linux
 

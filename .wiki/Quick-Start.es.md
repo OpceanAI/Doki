@@ -22,7 +22,7 @@ Si ves el banner de versión, todo bien. Si `dokid` también está instalado, el
 
 ## 2. Inicia el daemon
 
-El daemon `dokid` escucha en un Unix socket y expone la Docker Engine API v1.48.
+El daemon `dokid` escucha en un Unix socket y expone la Docker Engine API v1.54.
 
 ### En primer plano (ves los logs)
 
@@ -229,7 +229,7 @@ Pasaste por el ciclo de vida completo de Doki:
 | Port map | `pkg/network` | Bridge + iptables DNAT |
 | Logs | `pkg/runtime` | Stream multiplexado sobre HTTP |
 | Compose | `pkg/compose` | Motor de la spec de Compose |
-| Inspect | `pkg/api` | Docker Engine API v1.48 |
+| Inspect | `pkg/api` | Docker Engine API v1.54 |
 
 Continúa a [Arquitectura](Architecture.es) para entender cada subsistema en profundidad.
 

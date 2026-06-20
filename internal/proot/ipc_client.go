@@ -183,7 +183,7 @@ func (c *IPCClient) send(req *Request) error {
 	return err
 }
 
-func (c *IPCClient) sendAndWait(req *Request, expectedType MessageType) (*Response, error) {
+func (c *IPCClient) sendAndWait(req *Request, _ MessageType) (*Response, error) {
 	if err := c.send(req); err != nil {
 		return nil, err
 	}

@@ -1,3 +1,4 @@
+// Package scheduler provides the Kubernetes scheduler.
 package scheduler
 
 import (
@@ -196,11 +197,11 @@ func (s *Scheduler) score(pod *k8s.Pod, nodes []k8s.Node) k8s.Node {
 	return scores[0].node
 }
 
-func (s *Scheduler) scoreImageLocality(pod *k8s.Pod, node k8s.Node) int64 {
+func (s *Scheduler) scoreImageLocality(_ *k8s.Pod, _ k8s.Node) int64 {
 	return 0
 }
 
-func (s *Scheduler) scoreLeastRequested(pod *k8s.Pod, node k8s.Node) int64 {
+func (s *Scheduler) scoreLeastRequested(_ *k8s.Pod, _ k8s.Node) int64 {
 	return 1
 }
 

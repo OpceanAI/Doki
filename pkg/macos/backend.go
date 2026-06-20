@@ -1,3 +1,4 @@
+// Package macos provides macOS native virtualization.
 package macos
 
 import (

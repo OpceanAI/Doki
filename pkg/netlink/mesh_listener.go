@@ -87,7 +87,7 @@ func (ml *meshListener) acceptLoop(ctx context.Context) {
 	}
 }
 
-func (ml *meshListener) serve(ctx context.Context, c net.Conn) {
+func (ml *meshListener) serve(_ context.Context, c net.Conn) {
 	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	dec := json.NewDecoder(c)

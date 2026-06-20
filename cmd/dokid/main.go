@@ -1,3 +1,4 @@
+// Package main is the Doki daemon.
 // Doki daemon entry point. Doki v0.9.3.
 //
 // Responsibilities:
@@ -564,7 +565,7 @@ func startPprofServer(port int) {
 // recoverContainers scans the containers directory and reconciles in-memory
 // state with what's actually running. Running PIDs are re-registered; missing
 // PIDs are marked as exited.
-func recoverContainers(logger *slog.Logger, rt *dr.Runtime, dataDir string, imgStore *image.Store, netMgr *network.Manager) {
+func recoverContainers(logger *slog.Logger, rt *dr.Runtime, dataDir string, _ *image.Store, netMgr *network.Manager) {
 	containerDir := filepath.Join(dataDir, "containers")
 	entries, err := os.ReadDir(containerDir)
 	if err != nil {

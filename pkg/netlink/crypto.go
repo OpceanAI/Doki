@@ -149,12 +149,12 @@ func NewSecretboxWrapper(key [32]byte) *SecretboxWrapper {
 // encrypted frame. The frame payload itself is:
 //
 //   nonce (24 bytes) || secretbox(plaintext)
-func (s *SecretboxWrapper) WrapServer(ctx context.Context, c net.Conn) (net.Conn, error) {
+func (s *SecretboxWrapper) WrapServer(_ context.Context, c net.Conn) (net.Conn, error) {
 	return &secretboxStreamConn{Conn: c, sbox: s}, nil
 }
 
 // WrapClient mirrors WrapServer; the stream conn is symmetric.
-func (s *SecretboxWrapper) WrapClient(ctx context.Context, c net.Conn) (net.Conn, error) {
+func (s *SecretboxWrapper) WrapClient(_ context.Context, c net.Conn) (net.Conn, error) {
 	return &secretboxStreamConn{Conn: c, sbox: s}, nil
 }
 
@@ -169,7 +169,7 @@ func (s *SecretboxWrapper) WrapOutbound(payload []byte) ([]byte, error) {
 	// Encode counter big-endian into first 8 bytes of nonce; the rest
 	// is zeros. 2^64 messages per key is more than enough.
 	for i := 7; i >= 0; i-- {
-		nonce[7-i] = byte(counter >> (uint(i) * 8))
+		nonce[7-i] = byte(counter >> (uint(i) * 8)) // #nosec G115 -- intentional big-endian encoding, always fits in byte
 	}
 	return secretbox.Seal(nonce[:], payload, &nonce, &s.key), nil
 }
@@ -245,14 +245,14 @@ func (c *secretboxStreamConn) Write(b []byte) (int, error) {
 	c.mu.Unlock()
 	var nonce [24]byte
 	for i := 7; i >= 0; i-- {
-		nonce[7-i] = byte(counter >> (uint(i) * 8))
+		nonce[7-i] = byte(counter >> (uint(i) * 8)) // #nosec G115 -- intentional big-endian encoding, always fits in byte
 	}
 	sealed := secretbox.Seal(nonce[:], b, &nonce, &c.sbox.key)
 	frame := make([]byte, 4+len(sealed))
-	frame[0] = byte(len(sealed) >> 24)
-	frame[1] = byte(len(sealed) >> 16)
-	frame[2] = byte(len(sealed) >> 8)
-	frame[3] = byte(len(sealed))
+	frame[0] = byte(len(sealed) >> 24)  // #nosec G115 -- frame header length encoding
+	frame[1] = byte(len(sealed) >> 16)  // #nosec G115 -- frame header length encoding
+	frame[2] = byte(len(sealed) >> 8)   // #nosec G115 -- frame header length encoding
+	frame[3] = byte(len(sealed))        // #nosec G115 -- frame header length encoding
 	copy(frame[4:], sealed)
 	if _, err := c.Conn.Write(frame); err != nil {
 		return 0, err

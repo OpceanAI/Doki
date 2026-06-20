@@ -38,7 +38,7 @@ flowchart TB
         end
     end
 
-    Client -->|"/var/run/doki.sock<br/>Docker API v1.48"| CLI
+    Client -->|"/var/run/doki.sock<br/>Docker API v1.54"| CLI
     CLI -->|HTTP / Unix socket| API
 
     API --> Runtime
@@ -60,7 +60,7 @@ flowchart TB
 
 ## Recorrido por subsistemas
 
-### 1. `pkg/api` — Docker Engine API v1.48
+### 1. `pkg/api` — Docker Engine API v1.54
 
 La cara pública del daemon. Implementa 53 endpoints que coinciden con la Docker Engine API:
 
@@ -148,7 +148,7 @@ Implementa networking bridge, plugins CNI, port mapping y DNS interno.
 - Bridge Linux por defecto con subnet `10.0.0.0/24` (configurable)
 - Reglas iptables para NAT (MASQUERADE en outbound) y DNAT (port forwarding)
 - Pares veth: host-side `veth*`, container-side `eth0`
-- v0.9.2: campos `Endpoint.VethHost`/`VethPeer` rastrean nombres para teardown apropiado
+- v0.9.3: campos `Endpoint.VethHost`/`VethPeer` rastrean nombres para teardown apropiado
 
 #### DNS
 
@@ -170,7 +170,7 @@ Para usuarios sin root, la utilidad [pasta](https://passt.top/) proporciona cone
 
 #### DokiLink-Lite (Mesh Networking)
 
-v0.9.3 introduce DokiLink-Lite, una red mesh peer-to-peer con tres capas de encriptación:
+v0.10.0 introduce DokiLink-Lite, una red mesh peer-to-peer con tres capas de encriptación:
 
 - **L1 (TLS 1.3)**: Por defecto. CA ECDSA P-2-256 por instalación, certificados de enlace con nombres DNS SAN.
 - **L2 (NaCl secretbox)**: Opcional via `DOKI_LINK_PAYLOAD_ENC=1`. Deriva key de 32 bytes de las public keys Ed25519 de ambos peers.
@@ -250,7 +250,7 @@ Envuelve crosvm (Chromium OS Virtual Machine Monitor) y Firecracker. Proporciona
 
 Subsistemas específicos de Linux. `fuse` hace mounts overlayfs (alternativa userspace a kernel overlay). `namespaces` crea namespaces user/pid/net/mount/uts/ipc vía `unshare`/`clone`. `cgroups` es gestión de recursos v2. `seccomp` construye programas de filtro BPF. `apparmor` genera texto de perfil.
 
-En darwin, `internal/fuse/overlayfs_darwin.go` e `internal/namespaces/stub_darwin.go` son stubs no-op (añadidos en v0.9.2).
+En darwin, `internal/fuse/overlayfs_darwin.go` e `internal/namespaces/stub_darwin.go` son stubs no-op (añadidos en v0.9.3).
 
 ### 10. `pkg/common` — Código compartido
 
@@ -298,7 +298,7 @@ Tres principios guiaron el diseño:
 
 3. **Restricciones de recursos primero** — Termux, Android, Raspberry Pi son los targets primarios. La memoria es preciosa, así que el daemon idle usa 12 MB y el CLI 6.7 MB. Por eso usamos `log/slog` en vez de zap/zerolog (slog es stdlib, sin dependencia), por qué incluimos detección de proot, y por qué `fuse-overlayfs` es el driver de storage por defecto.
 
-## Stats del código fuente (v0.9.3)
+## Stats del código fuente (v0.10.0)
 
 - 126 archivos fuente Go (solo contando `*.go` fuera de tests y archivos generados)
 - 46.578 líneas de código Go (37.564 producción + 9.014 tests)

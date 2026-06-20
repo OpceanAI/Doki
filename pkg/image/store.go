@@ -1,3 +1,4 @@
+// Package image provides container image storage and management.
 package image
 
 import (
@@ -78,7 +79,7 @@ type RootFS struct {
 
 // History describes the history of an image layer.
 type History struct {
-	Id         string     `json:"Id,omitempty"`
+	ID         string     `json:"Id,omitempty"`
 	Created    FlexString `json:"created,omitempty"`
 	CreatedBy  string     `json:"created_by,omitempty"`
 	Size       int64      `json:"Size,omitempty"`
@@ -255,7 +256,7 @@ func (s *Store) downloadLayersParallel(registryHost, name string, layers []regis
 	return digests, nil
 }
 
-func (s *Store) saveImageRecord(imageRef string, ref *registry.ImageRef, manifest *registry.ManifestV2, mediaType string, config *Config, layers []string) (*ImageRecord, error) {
+func (s *Store) saveImageRecord(imageRef string, _ *registry.ImageRef, manifest *registry.ManifestV2, mediaType string, config *Config, layers []string) (*ImageRecord, error) {
 	// Create and save record (lock for state modification).
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -1,3 +1,4 @@
+// Package compose provides Compose file parsing and orchestration.
 package compose
 
 import (

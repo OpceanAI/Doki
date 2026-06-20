@@ -53,7 +53,7 @@ hello from doki
 
 ### Termux-specific notes
 
-- `LD_PRELOAD` and `LD_LIBRARY_PATH` are stripped from proot's environment automatically (v0.9.2+)
+- `LD_PRELOAD` and `LD_LIBRARY_PATH` are stripped from proot's environment automatically (v0.9.3+)
 - DNS listens on `127.0.0.11:8053` (port 53 is blocked by SELinux without root)
 - The default runtime is proot; override with `doki run --runtime native`
 - Storage driver: `fuse-overlayfs` (no root needed)
@@ -202,10 +202,10 @@ doki-linux-arm64: OK
 | Symptom | Fix |
 |:--------|:----|
 | `command not found: doki` | Add `$PREFIX/bin` (Termux) or `/usr/local/bin` (Linux) to `$PATH` |
-| `execve: Function not implemented` (Termux) | Fixed in v0.9.2+; update to latest release |
+| `execve: Function not implemented` (Termux) | Fixed in v0.9.3+; update to latest release |
 | `port 53: permission denied` (Termux) | This is expected; Doki uses port 8053 by default on Android |
-| `requires external cgo linking` (armv7) | Fixed in v0.9.3; armv7 builds use `GOOS=linux` workaround |
-| `iptables: Unknown option` | Update to v0.9.2+; the DNAT bug was fixed |
+| `requires external cgo linking` (armv7) | Fixed in v0.10.0; armv7 builds use `GOOS=linux` workaround |
+| `iptables: Unknown option` | Update to v0.9.3+; the DNAT bug was fixed |
 | `cannot find proot` | `apt install proot` (Debian/Ubuntu) or `pkg install proot` (Termux) |
 
 ## Next Steps

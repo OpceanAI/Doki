@@ -142,7 +142,12 @@ func (m *Manager) Stats() StorageStats {
 	// Get disk usage.
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(m.root, &stat); err == nil {
-		stats.FreeSpace = int64(stat.Bavail) * int64(stat.Bsize)
+		// Statfs_t.Bavail is uint64, Bsize is int64 (signed on Android).
+		// Compute the product in uint64 to avoid signed-overflow UB and
+		// then clamp to math.MaxInt64 for gosec G115.
+		bsize := common.SafeUint64FromInt64(stat.Bsize)
+		product := stat.Bavail * bsize
+		stats.FreeSpace = common.SafeInt64FromUint64(product)
 	}
 
 	return stats
@@ -211,7 +216,7 @@ func (d *FuseOverlayFSDriver) Name() string {
 	return DriverFuseOverlayFS
 }
 
-func (d *FuseOverlayFSDriver) Get(id, mountLabel string) (string, error) {
+func (d *FuseOverlayFSDriver) Get(id, _ string) (string, error) {
 	layerPath := filepath.Join(d.layerDir, id)
 	if !common.PathExists(layerPath) {
 		return "", common.NewErrNotFound("layer", id)
@@ -255,7 +260,7 @@ func (d *FuseOverlayFSDriver) Get(id, mountLabel string) (string, error) {
 	return mergePath, nil
 }
 
-func (d *FuseOverlayFSDriver) Put(id, mountLabel string) (string, error) {
+func (d *FuseOverlayFSDriver) Put(id, _ string) (string, error) {
 	mergePath := filepath.Join(d.mergeDir, id)
 	if common.PathExists(mergePath) {
 		_ = unmountOverlay(mergePath)
@@ -368,7 +373,7 @@ func (d *Overlay2Driver) Name() string {
 	return DriverOverlay2
 }
 
-func (d *Overlay2Driver) Get(id, mountLabel string) (string, error) {
+func (d *Overlay2Driver) Get(id, _ string) (string, error) {
 	lowerDir := filepath.Join(d.layerDir, id)
 	// BUG fix: check that the layer exists before attempting to mount.
 	// Without this check, the mount fails with a confusing kernel error.
@@ -392,7 +397,7 @@ func (d *Overlay2Driver) Get(id, mountLabel string) (string, error) {
 	return mergeDir, nil
 }
 
-func (d *Overlay2Driver) Put(id, mountLabel string) (string, error) {
+func (d *Overlay2Driver) Put(id, _ string) (string, error) {
 	mergeDir := filepath.Join(d.mergeDir, id)
 	if err := syscall.Unmount(mergeDir, 0); err != nil {
 		return "", fmt.Errorf("overlay unmount: %w", err)

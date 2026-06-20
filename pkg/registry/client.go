@@ -1,3 +1,4 @@
+// Package registry provides OCI registry client functionality.
 package registry
 
 import (
@@ -26,6 +27,7 @@ const (
 	AuthRealm       = "https://auth.docker.io/token"
 )
 
+// Client provides access to an OCI/Docker registry.
 type Client struct {
 	httpClient  *http.Client
 	userAgent   string
@@ -40,6 +42,7 @@ type tokenCache struct {
 	expiresAt time.Time
 }
 
+// AuthConfig holds registry authentication credentials.
 type AuthConfig struct {
 	Username      string `json:"username,omitempty"`
 	Password      string `json:"password,omitempty"`
@@ -47,11 +50,13 @@ type AuthConfig struct {
 	IdentityToken string `json:"identitytoken,omitempty"`
 }
 
+// SetAuth sets basic authentication credentials for the client.
 func (c *Client) SetAuth(username, password string) {
 	c.basicUser = username
 	c.basicPass = password
 }
 
+// NewClient creates a new OCI registry client with the given TLS settings.
 func NewClient(insecure bool) *Client {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -75,6 +80,7 @@ func NewClient(insecure bool) *Client {
 	}
 }
 
+// ImageRef represents a parsed OCI image reference.
 type ImageRef struct {
 	Registry string
 	Name     string
@@ -82,6 +88,7 @@ type ImageRef struct {
 	Digest   string
 }
 
+// ParseImageRef parses an OCI image reference string into its components.
 func ParseImageRef(ref string) (*ImageRef, error) {
 	ir := &ImageRef{Tag: DefaultTag}
 
@@ -123,6 +130,7 @@ func ParseImageRef(ref string) (*ImageRef, error) {
 	return ir, nil
 }
 
+// String returns the full image reference string.
 func (ir *ImageRef) String() string {
 	base := fmt.Sprintf("%s/%s", ir.Registry, ir.Name)
 	if ir.Digest != "" {
@@ -131,10 +139,12 @@ func (ir *ImageRef) String() string {
 	return base + ":" + ir.Tag
 }
 
+// FullName returns the registry/name combination without tag or digest.
 func (ir *ImageRef) FullName() string {
 	return fmt.Sprintf("%s/%s", ir.Registry, ir.Name)
 }
 
+// ManifestV2 represents an OCI/Docker v2 image manifest.
 type ManifestV2 struct {
 	SchemaVersion int               `json:"schemaVersion"`
 	MediaType     string            `json:"mediaType"`
@@ -143,6 +153,7 @@ type ManifestV2 struct {
 	Annotations   map[string]string `json:"annotations,omitempty"`
 }
 
+// ManifestBlob represents a blob entry within an image manifest.
 type ManifestBlob struct {
 	MediaType   string            `json:"mediaType"`
 	Size        int64             `json:"size"`
@@ -151,12 +162,14 @@ type ManifestBlob struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
+// ManifestList represents an OCI image index or Docker manifest list.
 type ManifestList struct {
 	SchemaVersion int               `json:"schemaVersion"`
 	MediaType     string            `json:"mediaType"`
 	Manifests     []ManifestListEntry `json:"manifests"`
 }
 
+// ManifestListEntry represents a single entry in a manifest list.
 type ManifestListEntry struct {
 	MediaType   string            `json:"mediaType"`
 	Size        int64             `json:"size"`
@@ -165,12 +178,14 @@ type ManifestListEntry struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
+// Platform describes the target OS and architecture for a manifest.
 type Platform struct {
 	Architecture string `json:"architecture"`
 	OS           string `json:"os"`
 	Variant      string `json:"variant,omitempty"`
 }
 
+// TagList represents a list of tags for a repository.
 type TagList struct {
 	Name string   `json:"name"`
 	Tags []string `json:"tags"`
@@ -335,6 +350,7 @@ func parseWwwAuthenticate(header string) (realm, service, scope string) {
 	return
 }
 
+// Ping checks connectivity to a registry's v2 API endpoint.
 func (c *Client) Ping(registry string) error {
 	u := fmt.Sprintf("https://%s/v2/", registry)
 	resp, err := c.doAuthRequest(context.Background(), "GET", u, nil, nil)
@@ -348,6 +364,7 @@ func (c *Client) Ping(registry string) error {
 	return fmt.Errorf("registry returned %d", resp.StatusCode)
 }
 
+// GetTags lists all tags for a repository.
 func (c *Client) GetTags(registry, repository string) (*TagList, error) {
 	u := fmt.Sprintf("https://%s/v2/%s/tags/list", registry, repository)
 	resp, err := c.doAuthRequest(context.Background(), "GET", u, nil, nil)
@@ -365,6 +382,7 @@ func (c *Client) GetTags(registry, repository string) (*TagList, error) {
 	return &tags, nil
 }
 
+// GetManifest fetches the image manifest for a given reference.
 func (c *Client) GetManifest(registry, name, reference string) (*ManifestV2, string, error) {
 	accept := strings.Join([]string{
 		"application/vnd.oci.image.manifest.v1+json",
@@ -396,6 +414,7 @@ func (c *Client) GetManifest(registry, name, reference string) (*ManifestV2, str
 	return &manifest, contentType + "|" + digest, nil
 }
 
+// DownloadBlob downloads a blob by digest and writes it to the provided writer.
 func (c *Client) DownloadBlob(registry, name, digest string, writer io.Writer) error {
 	u := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, name, digest)
 	resp, err := c.doAuthRequest(context.Background(), "GET", u, nil, nil)
@@ -428,6 +447,7 @@ func (c *Client) DownloadBlob(registry, name, digest string, writer io.Writer) e
 	return nil
 }
 
+// HeadBlob returns the content length of a blob by digest.
 func (c *Client) HeadBlob(registry, name, digest string) (int64, error) {
 	u := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, name, digest)
 	resp, err := c.doAuthRequest(context.Background(), "HEAD", u, nil, nil)
@@ -441,6 +461,7 @@ func (c *Client) HeadBlob(registry, name, digest string) (int64, error) {
 	return resp.ContentLength, nil
 }
 
+// GetBlob downloads a blob by digest and returns its raw bytes.
 func (c *Client) GetBlob(registry, name, digest string) ([]byte, error) {
 	u := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, name, digest)
 	resp, err := c.doAuthRequest(context.Background(), "GET", u, nil, nil)
@@ -455,14 +476,17 @@ func (c *Client) GetBlob(registry, name, digest string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// DoRequest performs an authenticated HTTP request to a registry endpoint.
 func (c *Client) DoRequest(ctx context.Context, method, urlStr string, headers map[string]string, body io.Reader) (*http.Response, error) {
 	return c.doAuthRequest(ctx, method, urlStr, headers, body)
 }
 
+// GetConfig downloads the image configuration blob referenced by a manifest.
 func (c *Client) GetConfig(registry, name string, manifest *ManifestV2) ([]byte, error) {
 	return c.GetBlob(registry, name, manifest.Config.Digest)
 }
 
+// Push uploads a manifest and its blobs to a registry.
 func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config []byte, layers map[string]io.Reader) error {
 	configDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(config))
 
@@ -590,6 +614,7 @@ func (c *Client) Push(registry, name, tag string, manifest *ManifestV2, config [
 	return nil
 }
 
+// Close releases idle HTTP connections held by the client.
 func (c *Client) Close() {
 	c.httpClient.CloseIdleConnections()
 }

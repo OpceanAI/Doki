@@ -936,12 +936,15 @@ func (e *Engine) profileMatches(svc *Service, profiles []string) bool {
 	return false
 }
 
-// Down stops and removes all services.
+// Down stops and removes all services, networks, and volumes created by
+// this compose project. External networks/volumes are preserved.
 func (e *Engine) Down() error {
 	if e.file == nil {
 		return fmt.Errorf("no compose file loaded")
 	}
 
+	// Phase 1: stop and delete every container (force=true so a failed Stop
+	// is still followed by a Delete + bundle cleanup).
 	for svcName := range e.file.Services {
 		svc := e.file.Services[svcName]
 
@@ -965,10 +968,78 @@ func (e *Engine) Down() error {
 			if err := e.runtime.Delete(containerName, true); err != nil {
 				slog.Warn("delete", "service", svcName, "instance", i, "err", err)
 			}
+			// Defensive: ensure the bundle directory is gone even if
+			// runtime.Delete was a no-op (e.g., container never created).
+			bundleDir := filepath.Join(common.ContainerDir(), containerName)
+			if err := os.RemoveAll(bundleDir); err != nil {
+				slog.Warn("remove bundle", "service", svcName, "instance", i, "err", err)
+			}
+		}
+	}
+
+	// Phase 2: remove compose-managed networks. Containers are already gone,
+	// so the network endpoints should be empty and RemoveNetwork will succeed.
+	for name, nw := range e.file.Networks {
+		if nw != nil && nw.External {
+			continue
+		}
+		netName := name
+		if nw != nil && nw.Name != "" {
+			netName = nw.Name
+		} else {
+			netName = e.project + "_" + name
+		}
+		if err := e.network.RemoveNetwork(netName); err != nil {
+			slog.Warn("remove network", "network", netName, "err", err)
+		}
+		delete(e.netCreated, name)
+	}
+
+	// Phase 3: remove compose-managed volumes. Volumes are stored on disk
+	// under common.VolumeDir()/<name>/ with a volume.json metadata file;
+	// RemoveVolume wipes that directory.
+	for name, vol := range e.file.Volumes {
+		if vol != nil && vol.External {
+			continue
+		}
+		volName := name
+		if vol != nil && vol.Name != "" {
+			volName = vol.Name
+		} else {
+			volName = e.project + "_" + name
+		}
+		if err := removeVolumeDir(volName); err != nil {
+			slog.Warn("remove volume", "volume", volName, "err", err)
+		}
+		// Best-effort: also try the un-prefixed name in case the volume was
+		// created without the project prefix (legacy / hand-written configs).
+		if vol == nil || vol.Name == "" {
+			_ = removeVolumeDir(name)
 		}
 	}
 
 	return nil
+}
+
+// removeVolumeDir deletes the on-disk volume directory for a named volume.
+// It mirrors what pkg/api.VolumeManager.Remove does, but the compose engine
+// doesn't carry a reference to that manager, so we replicate the filesystem
+// cleanup here.
+func removeVolumeDir(name string) error {
+	if name == "" {
+		return nil
+	}
+	if strings.Contains(name, "..") || strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("invalid volume name: %q", name)
+	}
+	dir := filepath.Join(common.VolumeDir(), name)
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.RemoveAll(dir)
 }
 
 // Y25: Stop stops all services.
@@ -1594,7 +1665,7 @@ func containsKey(env []string, entry string) bool {
 }
 
 // Y1: serviceNetworks returns the list of networks for a service.
-func (e *Engine) serviceNetworks(name string, svc *Service) []string {
+func (e *Engine) serviceNetworks(_ string, svc *Service) []string {
 	if svc.Networks == nil {
 		// Default: connect to the default network if any networks are defined.
 		if len(e.file.Networks) > 0 {
@@ -1878,6 +1949,7 @@ func parseDuration(s string) (time.Duration, error) {
 	return 0, err
 }
 
+// StopServices stops only the specified services.
 func (e *Engine) StopServices(services []string) error {
 	if e.file == nil {
 		return fmt.Errorf("no compose file loaded")
@@ -1908,6 +1980,7 @@ func (e *Engine) StopServices(services []string) error {
 	return nil
 }
 
+// StartServices starts only the specified services.
 func (e *Engine) StartServices(services []string) error {
 	if e.file == nil {
 		return fmt.Errorf("no compose file loaded")
@@ -1943,6 +2016,7 @@ func (e *Engine) StartServices(services []string) error {
 	return nil
 }
 
+// RestartServices restarts only the specified services.
 func (e *Engine) RestartServices(services []string) error {
 	if e.file == nil {
 		return fmt.Errorf("no compose file loaded")
@@ -1979,6 +2053,7 @@ func (e *Engine) RestartServices(services []string) error {
 	return nil
 }
 
+// KillServices sends a signal to the specified services.
 func (e *Engine) KillServices(signal string, services []string) error {
 	if e.file == nil {
 		return fmt.Errorf("no compose file loaded")
@@ -2018,6 +2093,7 @@ func parseSignalStr(s string) syscall.Signal {
 	return syscall.SIGTERM
 }
 
+// PauseServices suspends the specified services.
 func (e *Engine) PauseServices(services []string) error {
 	if e.file == nil {
 		return fmt.Errorf("no compose file loaded")
@@ -2042,6 +2118,7 @@ func (e *Engine) PauseServices(services []string) error {
 	return nil
 }
 
+// UnpauseServices resumes the specified paused services.
 func (e *Engine) UnpauseServices(services []string) error {
 	if e.file == nil {
 		return fmt.Errorf("no compose file loaded")
@@ -2066,10 +2143,12 @@ func (e *Engine) UnpauseServices(services []string) error {
 	return nil
 }
 
+// Create creates the project containers without starting them.
 func (e *Engine) Create() error {
 	return e.Up()
 }
 
+// Top shows the running processes of the specified services.
 func (e *Engine) Top(services []string) error {
 	if e.file == nil {
 		return fmt.Errorf("no compose file loaded")
@@ -2105,6 +2184,7 @@ func (e *Engine) Top(services []string) error {
 	return nil
 }
 
+// PrintConfigSubset prints the names of services, volumes, or networks declared in the compose file.
 func (e *Engine) PrintConfigSubset(services, volumes, networks bool) {
 	if e.file == nil {
 		return
@@ -2141,6 +2221,7 @@ func (e *Engine) PrintConfigSubset(services, volumes, networks bool) {
 	}
 }
 
+// ProjectImages returns the images associated with this compose project.
 func (e *Engine) ProjectImages() ([]common.ImageInfo, error) {
 	if e.file == nil {
 		return nil, fmt.Errorf("no compose file loaded")

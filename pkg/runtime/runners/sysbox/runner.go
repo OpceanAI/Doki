@@ -17,17 +17,21 @@ import (
 	rt "github.com/OpceanAI/Doki/pkg/runtime"
 )
 
+// Runner executes containers using sysbox-runc for rootless DinD.
 type Runner struct {
 	root string
 	log  *slog.Logger
 }
 
+// New creates a new sysbox runner with the given storage root.
 func New(root string) *Runner {
 	return &Runner{root: root, log: slog.Default().With("component", "runner.sysbox")}
 }
 
+// Name returns the execution mode.
 func (r *Runner) Name() rt.ExecutionMode { return rt.ModeSysbox }
 
+// Detect checks if this runner is available on the current host.
 func (r *Runner) Detect() bool {
 	if _, err := exec.LookPath("sysbox-runc"); err != nil {
 		return false
@@ -36,6 +40,7 @@ func (r *Runner) Detect() bool {
 	return len(data) > 0 && data[0] == '1'
 }
 
+// Capabilities returns the runner capabilities.
 func (r *Runner) Capabilities() rt.RunnerCapabilities {
 	return rt.RunnerCapabilities{
 		Arch: []string{"arm64", "amd64"}, RootRequired: true,
@@ -43,7 +48,8 @@ func (r *Runner) Capabilities() rt.RunnerCapabilities {
 	}
 }
 
-func (r *Runner) Create(ctx context.Context, cfg *rt.Config) (string, error) {
+// Create prepares the container filesystem and config.
+func (r *Runner) Create(_ context.Context, cfg *rt.Config) (string, error) {
 	id := cfg.ID
 	if id == "" {
 		id = common.GenerateID(64)
@@ -56,6 +62,7 @@ func (r *Runner) Create(ctx context.Context, cfg *rt.Config) (string, error) {
 	return id, nil
 }
 
+// Start launches the container process.
 func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -74,6 +81,7 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 	return 0, nil
 }
 
+// Stop terminates the container with a signal.
 func (r *Runner) Stop(_ context.Context, id string, timeout time.Duration) error {
 	if timeout > 0 {
 		_ = exec.Command("sysbox-runc", "kill", id, "TERM").Run()
@@ -82,6 +90,7 @@ func (r *Runner) Stop(_ context.Context, id string, timeout time.Duration) error
 	return exec.Command("sysbox-runc", "kill", id, "KILL").Run()
 }
 
+// Exec runs a process inside a running container.
 func (r *Runner) Exec(_ context.Context, id string, cfg *rt.ExecConfig) (int, error) {
 	args := append([]string{"exec", id}, cfg.Args...)
 	cmd := exec.Command("sysbox-runc", args...)
@@ -91,18 +100,22 @@ func (r *Runner) Exec(_ context.Context, id string, cfg *rt.ExecConfig) (int, er
 	return 0, cmd.Run()
 }
 
+// Kill sends an arbitrary signal to the container.
 func (r *Runner) Kill(_ context.Context, id string, sig syscall.Signal) error {
 	return exec.Command("sysbox-runc", "kill", id, fmt.Sprintf("%d", sig)).Run()
 }
 
+// Pause suspends the container.
 func (r *Runner) Pause(_ context.Context, id string) error {
 	return exec.Command("sysbox-runc", "pause", id).Run()
 }
 
+// Resume resumes a paused container.
 func (r *Runner) Resume(_ context.Context, id string) error {
 	return exec.Command("sysbox-runc", "resume", id).Run()
 }
 
+// Wait blocks until the container exits.
 func (r *Runner) Wait(_ context.Context, id string) (int, error) {
 	out, err := exec.Command("sysbox-runc", "wait", id).CombinedOutput()
 	if err != nil {
@@ -113,10 +126,12 @@ func (r *Runner) Wait(_ context.Context, id string) (int, error) {
 	return code, nil
 }
 
-func (r *Runner) Stats(_ context.Context, id string) (*rt.ContainerStats, error) {
+// Stats returns resource usage metrics.
+func (r *Runner) Stats(_ context.Context, _ string) (*rt.ContainerStats, error) {
 	return &rt.ContainerStats{}, nil
 }
 
+// Inspect returns detailed container info.
 func (r *Runner) Inspect(_ context.Context, id string) (*rt.ContainerJSON, error) {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -129,6 +144,7 @@ func (r *Runner) Inspect(_ context.Context, id string) (*rt.ContainerJSON, error
 	}, nil
 }
 
+// Cleanup removes container state after exit.
 func (r *Runner) Cleanup(_ context.Context, id string) error {
 	_ = exec.Command("sysbox-runc", "delete", id).Run()
 	return os.RemoveAll(filepath.Join(r.root, "containers", id))

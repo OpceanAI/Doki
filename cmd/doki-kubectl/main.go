@@ -1,3 +1,4 @@
+// Package main is the Doki kubectl-compatible CLI.
 package main
 
 import (
@@ -306,7 +307,7 @@ func printResource(obj map[string]interface{}) {
 	}
 }
 
-func printResourceList(list map[string]interface{}, resource string) {
+func printResourceList(list map[string]interface{}, _ string) {
 	items, ok := list["items"].([]interface{})
 	if !ok {
 		fmt.Println("No resources found.")

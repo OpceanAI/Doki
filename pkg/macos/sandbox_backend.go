@@ -16,16 +16,16 @@ func (b *SandboxBackend) Name() string         { return "sandbox" }
 func (b *SandboxBackend) Available() bool       { _, err := exec.LookPath("sandbox-exec"); return err == nil }
 func (b *SandboxBackend) MinVersion() string    { return "10.15" }
 
-func (b *SandboxBackend) CreateVM(cfg *VMConfig) error  { return nil }
-func (b *SandboxBackend) StartVM(id string) error        { return nil }
-func (b *SandboxBackend) StopVM(id string, t int) error  { return nil }
-func (b *SandboxBackend) DeleteVM(id string) error       { return nil }
-func (b *SandboxBackend) VMStatus(id string) (string, error) { return "native", nil }
-func (b *SandboxBackend) ShareHostDir(h, g, t string, ro bool) error { return nil }
-func (b *SandboxBackend) UnshareHostDir(t string) error  { return nil }
-func (b *SandboxBackend) ForwardPort(h, g int, p string) error { return nil }
-func (b *SandboxBackend) RemoveForwardPort(h int, p string) error { return nil }
-func (b *SandboxBackend) Stats(id string) (*VMStats, error) {
+func (b *SandboxBackend) CreateVM(_ *VMConfig) error  { return nil }
+func (b *SandboxBackend) StartVM(_ string) error        { return nil }
+func (b *SandboxBackend) StopVM(_ string, _ int) error  { return nil }
+func (b *SandboxBackend) DeleteVM(_ string) error       { return nil }
+func (b *SandboxBackend) VMStatus(_ string) (string, error) { return "native", nil }
+func (b *SandboxBackend) ShareHostDir(_, _, _ string, _ bool) error { return nil }
+func (b *SandboxBackend) UnshareHostDir(_ string) error  { return nil }
+func (b *SandboxBackend) ForwardPort(_, _ int, _ string) error { return nil }
+func (b *SandboxBackend) RemoveForwardPort(_ int, _ string) error { return nil }
+func (b *SandboxBackend) Stats(_ string) (*VMStats, error) {
 	return &VMStats{State: "native"}, nil
 }
 

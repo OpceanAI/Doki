@@ -1,3 +1,4 @@
+// Package dokivm provides virtual machine management.
 package dokivm
 
 import (
@@ -281,13 +282,13 @@ var (
 )
 
 func init() {
-	createCrosvm = func(cfg *VMMConfig) (VMM, error) {
+	createCrosvm = func(_ *VMMConfig) (VMM, error) {
 		return nil, fmt.Errorf("crosvm backend not compiled in")
 	}
-	createFirecracker = func(cfg *VMMConfig) (VMM, error) {
+	createFirecracker = func(_ *VMMConfig) (VMM, error) {
 		return nil, fmt.Errorf("firecracker backend not compiled in")
 	}
-	createQEMU = func(cfg *VMMConfig) (VMM, error) {
+	createQEMU = func(_ *VMMConfig) (VMM, error) {
 		return nil, fmt.Errorf("qemu backend not compiled in")
 	}
 }

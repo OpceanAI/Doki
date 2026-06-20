@@ -1,3 +1,4 @@
+// Package apparmor provides AppArmor profile management.
 package apparmor
 
 import (

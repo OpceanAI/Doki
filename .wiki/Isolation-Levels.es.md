@@ -1,6 +1,6 @@
 # Niveles de aislamiento
 
-Doki v0.9.3 soporta **12 niveles de aislamiento** — desde un sandbox WASM sin syscalls hasta microVMs a nivel de hardware. El registro de runners en `pkg/runtime/registry.go` prueba el host y elige el modo más fuerte que funcione. También puedes forzar un modo específico con `doki run --runtime <mode>`.
+Doki v0.10.0 soporta **12 niveles de aislamiento** — desde un sandbox WASM sin syscalls hasta microVMs a nivel de hardware. El registro de runners en `pkg/runtime/registry.go` prueba el host y elige el modo más fuerte que funcione. También puedes forzar un modo específico con `doki run --runtime <mode>`.
 
 ## Árbol de decisión
 
@@ -273,7 +273,7 @@ Cada nivel se implementa en `pkg/runtime/runners/<mode>/runner.go` (donde apliqu
 **Qué es**: [PRoot](https://proot-me.github.io/) es una implementación userspace de `chroot`/`mount` que usa `ptrace` para interceptar syscalls. No requiere root.
 
 **Requisitos**:
-- `proot` en `$PATH` (o fallback al `doki-proot` distribuido con Doki en v0.9.1; v0.9.2+ usa `FindProotBinary()`)
+- `proot` en `$PATH` (o fallback al `doki-proot` distribuido con Doki en v0.9.2; v0.9.3+ usa `FindProotBinary()`)
 - Termux / Android / cualquier Linux sin root
 
 **Casos de uso**:
@@ -286,7 +286,7 @@ Cada nivel se implementa en `pkg/runtime/runners/<mode>/runner.go` (donde apliqu
 **Trade-offs**:
 - Más lento que namespaces nativos
 - No funciona para algunos syscalls (raw `mount`, `pivot_root`)
-- Específico de Termux: `LD_PRELOAD` debe ser eliminado (v0.9.2+ lo maneja)
+- Específico de Termux: `LD_PRELOAD` debe ser eliminado (v0.9.3+ lo maneja)
 
 **Referencia de código**: `pkg/runtime/runtime.go:retryWithQemu()` (el fallback), `internal/proot/manager.go:FindProotBinary()`
 

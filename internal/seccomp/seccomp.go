@@ -1,3 +1,4 @@
+// Package seccomp provides seccomp profile management.
 package seccomp
 
 import (

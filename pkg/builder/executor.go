@@ -540,7 +540,7 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 func (b *Builder) downloadAdd(url, destPath string) error {
 	client := &http.Client{
 		Timeout: 120 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
 			}
@@ -891,7 +891,7 @@ func (b *Builder) executeShell(stage *Stage, inst *Instruction) error {
 	return nil
 }
 
-func (b *Builder) executeArg(stage *Stage, inst *Instruction) error {
+func (b *Builder) executeArg(_ *Stage, inst *Instruction) error {
 	for _, arg := range inst.Args {
 		kv := strings.SplitN(arg, "=", 2)
 		if len(kv) == 2 {
@@ -1126,7 +1126,7 @@ func CompressGzip(data []byte) ([]byte, error) {
 }
 
 // ExecuteBuildContext extracts a build context and sets it up.
-func (b *Builder) ExecuteBuildContext(contextDir, tarPath, outputDir string) error {
+func (b *Builder) ExecuteBuildContext(contextDir, tarPath, _ string) error {
 	if tarPath != "" {
 		f, err := os.Open(tarPath)
 		if err != nil {

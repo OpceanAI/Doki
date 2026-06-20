@@ -1,3 +1,4 @@
+// Package main is the Doki Compose CLI.
 package main
 
 import (

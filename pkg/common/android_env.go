@@ -1,3 +1,4 @@
+// Package common provides shared types, utilities, and constants.
 package common
 
 import (

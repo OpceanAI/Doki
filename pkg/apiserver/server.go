@@ -1,3 +1,4 @@
+// Package apiserver provides the Kubernetes API server.
 package apiserver
 
 import (
@@ -95,14 +96,14 @@ func (a *APIServer) ensureDefaultNamespace() {
 	}
 }
 
-func (a *APIServer) handleAPIVersions(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleAPIVersions(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"kind":     "APIVersions",
 		"versions": []string{"v1"},
 	})
 }
 
-func (a *APIServer) handleCoreV1Resources(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleCoreV1Resources(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"kind":         "APIResourceList",
 		"groupVersion": "v1",
@@ -180,7 +181,7 @@ func (a *APIServer) handlePVs(w http.ResponseWriter, r *http.Request) {
 	a.handleResourceList(w, r, "", "persistentvolumes", "")
 }
 
-func (a *APIServer) handleAPIGroupList(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleAPIGroupList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"kind":       "APIGroupList",
 		"apiVersion": "v1",
@@ -217,7 +218,7 @@ func (a *APIServer) handleAPIGroupList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *APIServer) handleAppsV1Resources(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleAppsV1Resources(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"kind":         "APIResourceList",
 		"groupVersion": "apps/v1",
@@ -234,7 +235,7 @@ func (a *APIServer) handleAppsNamespaced(w http.ResponseWriter, r *http.Request)
 	a.handleGroupNamespaced(w, r, "apps")
 }
 
-func (a *APIServer) handleBatchV1Resources(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleBatchV1Resources(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"kind":         "APIResourceList",
 		"groupVersion": "batch/v1",
@@ -295,7 +296,7 @@ func (a *APIServer) handleGroupNamespaced(w http.ResponseWriter, r *http.Request
 	a.handleResource(w, r, group, resource, ns, name)
 }
 
-func (a *APIServer) handleResourceList(w http.ResponseWriter, r *http.Request, group, resource, namespace string) {
+func (a *APIServer) handleResourceList(w http.ResponseWriter, _ *http.Request, group, resource, namespace string) {
 	key := store.KeyFor(group, resource, namespace, "")
 	prefix := key
 
@@ -390,7 +391,7 @@ func (a *APIServer) handleResource(w http.ResponseWriter, r *http.Request, group
 	}
 }
 
-func (a *APIServer) handleResourceStatus(w http.ResponseWriter, r *http.Request, group, resource, namespace, name string) {
+func (a *APIServer) handleResourceStatus(w http.ResponseWriter, _ *http.Request, group, resource, namespace, name string) {
 	key := store.KeyFor(group, resource, namespace, name)
 	obj, err := a.store.Get(key)
 	if err != nil {
@@ -401,7 +402,7 @@ func (a *APIServer) handleResourceStatus(w http.ResponseWriter, r *http.Request,
 	_, _ = w.Write(obj.Value)
 }
 
-func (a *APIServer) handleResourceScale(w http.ResponseWriter, r *http.Request, group, resource, namespace, name string) {
+func (a *APIServer) handleResourceScale(w http.ResponseWriter, _ *http.Request, group, resource, namespace, name string) {
 	key := store.KeyFor(group, resource, namespace, name)
 	obj, err := a.store.Get(key)
 	if err != nil {
@@ -412,12 +413,12 @@ func (a *APIServer) handleResourceScale(w http.ResponseWriter, r *http.Request, 
 	_, _ = w.Write(obj.Value)
 }
 
-func (a *APIServer) handlePodLogs(w http.ResponseWriter, r *http.Request, namespace, name string) {
+func (a *APIServer) handlePodLogs(w http.ResponseWriter, _ *http.Request, namespace, name string) {
 	w.Header().Set("Content-Type", "text/plain")
 	_, _ = fmt.Fprintf(w, "logs for pod %s/%s\n", namespace, name)
 }
 
-func (a *APIServer) handleWatch(w http.ResponseWriter, r *http.Request, group, resource, namespace, name string) {
+func (a *APIServer) handleWatch(w http.ResponseWriter, r *http.Request, group, resource, namespace, _ string) {
 	prefix := store.KeyFor(group, resource, namespace, "")
 	sinceRev := int64(0)
 	if rv := r.URL.Query().Get("resourceVersion"); rv != "" {
@@ -456,22 +457,22 @@ func (a *APIServer) handleWatch(w http.ResponseWriter, r *http.Request, group, r
 	}
 }
 
-func (a *APIServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprint(w, "ok")
 }
 
-func (a *APIServer) handleReadyz(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprint(w, "ok")
 }
 
-func (a *APIServer) handleLivez(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleLivez(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprint(w, "ok")
 }
 
-func (a *APIServer) handleVersion(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"major":        "0",
 		"minor":        "10",
@@ -482,7 +483,7 @@ func (a *APIServer) handleVersion(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *APIServer) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
+func (a *APIServer) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"swagger": "2.0",
 		"info": map[string]string{

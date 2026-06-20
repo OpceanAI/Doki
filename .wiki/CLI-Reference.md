@@ -1,6 +1,6 @@
 # CLI Reference
 
-Doki v0.9.3 ships **244 commands** across 9 categories. This page is the canonical reference; the [Quick Start](Quick-Start) walks through the common ones.
+Doki v0.10.0 ships **244 commands** across 9 categories. This page is the canonical reference; the [Quick Start](Quick-Start) walks through the common ones.
 
 ## Global Flags
 

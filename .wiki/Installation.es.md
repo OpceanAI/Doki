@@ -53,7 +53,7 @@ hola desde doki
 
 ### Notas específicas de Termux
 
-- `LD_PRELOAD` y `LD_LIBRARY_PATH` se eliminan del entorno de proot automáticamente (v0.9.2+)
+- `LD_PRELOAD` y `LD_LIBRARY_PATH` se eliminan del entorno de proot automáticamente (v0.9.3+)
 - El DNS escucha en `127.0.0.11:8053` (el puerto 53 está bloqueado por SELinux sin root)
 - El runtime por defecto es proot; sobrescribe con `doki run --runtime native`
 - Driver de storage: `fuse-overlayfs` (no necesita root)
@@ -202,10 +202,10 @@ doki-linux-arm64: OK
 | Síntoma | Solución |
 |:--------|:---------|
 | `command not found: doki` | Añade `$PREFIX/bin` (Termux) o `/usr/local/bin` (Linux) al `$PATH` |
-| `execve: Function not implemented` (Termux) | Arreglado en v0.9.2+; actualiza a la última release |
+| `execve: Function not implemented` (Termux) | Arreglado en v0.9.3+; actualiza a la última release |
 | `port 53: permission denied` (Termux) | Esto es esperado; Doki usa el puerto 8053 por defecto en Android |
-| `requires external cgo linking` (armv7) | Arreglado en v0.9.3; los builds armv7 usan workaround `GOOS=linux` |
-| `iptables: Unknown option` | Actualiza a v0.9.2+; el bug del DNAT fue arreglado |
+| `requires external cgo linking` (armv7) | Arreglado en v0.10.0; los builds armv7 usan workaround `GOOS=linux` |
+| `iptables: Unknown option` | Actualiza a v0.9.3+; el bug del DNAT fue arreglado |
 | `cannot find proot` | `apt install proot` (Debian/Ubuntu) o `pkg install proot` (Termux) |
 
 ## Siguientes pasos

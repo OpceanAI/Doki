@@ -38,7 +38,7 @@ flowchart TB
         end
     end
 
-    Client -->|"/var/run/doki.sock<br/>Docker API v1.48"| CLI
+    Client -->|"/var/run/doki.sock<br/>Docker API v1.54"| CLI
     CLI -->|HTTP / Unix socket| API
 
     API --> Runtime
@@ -60,7 +60,7 @@ flowchart TB
 
 ## Subsystem Walkthrough
 
-### 1. `pkg/api` — Docker Engine API v1.48
+### 1. `pkg/api` — Docker Engine API v1.54
 
 The daemon's public face. Implements 53 endpoints that match the Docker Engine API:
 
@@ -148,7 +148,7 @@ Implements bridge networking, CNI plugins, port mapping, and internal DNS.
 - Default Linux bridge with `10.0.0.0/24` subnet (configurable)
 - iptables rules for NAT (MASQUERADE on outbound) and DNAT (port forwarding)
 - veth pairs: host-side `veth*`, container-side `eth0`
-- v0.9.2: `Endpoint.VethHost`/`VethPeer` fields track names for proper teardown
+- v0.9.3: `Endpoint.VethHost`/`VethPeer` fields track names for proper teardown
 
 #### DNS
 
@@ -170,7 +170,7 @@ For users without root, the [pasta](https://passt.top/) utility provides TCP/UDP
 
 #### DokiLink-Lite (Mesh Networking)
 
-v0.9.3 introduces DokiLink-Lite, a peer-to-peer mesh network with three encryption layers:
+v0.10.0 introduces DokiLink-Lite, a peer-to-peer mesh network with three encryption layers:
 
 - **L1 (TLS 1.3)**: Default. ECDSA P-256 CA per install, link certificates with SAN DNS names.
 - **L2 (NaCl secretbox)**: Opt-in via `DOKI_LINK_PAYLOAD_ENC=1`. Derives 32-byte key from both peers' Ed25519 public keys.
@@ -250,7 +250,7 @@ Wraps crosvm (Chromium OS Virtual Machine Monitor) and Firecracker. Provides:
 
 Linux-specific subsystems. `fuse` does overlayfs mounts (user-space alternative to kernel overlay). `namespaces` creates user/pid/net/mount/uts/ipc namespaces via `unshare`/`clone`. `cgroups` is v2 resource management. `seccomp` builds BPF filter programs. `apparmor` generates profile text.
 
-On darwin, `internal/fuse/overlayfs_darwin.go` and `internal/namespaces/stub_darwin.go` are no-op stubs (added in v0.9.2).
+On darwin, `internal/fuse/overlayfs_darwin.go` and `internal/namespaces/stub_darwin.go` are no-op stubs (added in v0.9.3).
 
 ### 10. `pkg/common` — Shared Code
 
@@ -298,14 +298,15 @@ Three principles drove the design:
 
 3. **Resource constraints first** — Termux, Android, Raspberry Pi are the primary targets. Memory is precious, so the daemon idles at 12 MB and the CLI at 6.7 MB. This is why we use `log/slog` instead of zap/zerolog (slog is stdlib, no dependency), why we bundle proot detection, and why `fuse-overlayfs` is the default storage driver.
 
-## Source Code Stats (v0.9.3)
+## Source Code Stats (v0.10.0)
 
-- 126 Go source files (only counting `*.go` outside tests and generated files)
-- 46,578 lines of Go code (37,564 production + 9,014 tests)
-- 4 compiled binaries (`doki`, `dokid`, `doki-compose`, `doki-init`)
-- 244 CLI commands
-- 5 release archives (android-arm64, android-armv7, linux-arm64, linux-armv7, darwin-arm64)
-- 0 runtime CGo dependencies
+- **158 Go source files** (excluding vendor and generated)
+- **55,000+ lines of Go code** (53,000 production + 2,000 tests)
+- **9 compiled binaries** (`doki`, `dokid`, `doki-compose`, `doki-init`, `doki-kube`, `doki-kubectl`, `dokitest`, `regtest`, `doki-init-rust`)
+- **108 Docker CLI commands**, **39 Podman API endpoints**, **9 kubectl commands**
+- **29 packages**, **21 direct dependencies**
+- **13 release archives** across Linux, macOS, and Android for ARM64, ARMv7, and AMD64
+- **0 runtime CGo dependencies** (macOS VZ backend requires CGo)
 
 ## Next Steps
 

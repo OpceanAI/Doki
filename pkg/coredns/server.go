@@ -1,3 +1,4 @@
+// Package coredns provides cluster DNS for Kubernetes.
 package coredns
 
 import (

@@ -21,7 +21,7 @@ var (
 )
 
 // MetricsHandler serves Prometheus-compatible metrics.
-func MetricsHandler(w http.ResponseWriter, r *http.Request) {
+func MetricsHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version="+common.Version)
 
 	goroutines := goruntime.NumGoroutine()
@@ -62,7 +62,7 @@ func RecordRequest() { atomic.AddUint64(&reqCount, 1) }
 func RecordError() { atomic.AddUint64(&errCount, 1) }
 
 // AG8: HealthHandler returns comprehensive daemon health status.
-func HealthHandler(w http.ResponseWriter, r *http.Request) {
+func HealthHandler(w http.ResponseWriter, _ *http.Request) {
 	status := "healthy"
 	checks := make([]map[string]string, 0)
 
@@ -107,7 +107,7 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // PprofHandler returns a pprof index page for debugging.
-func PprofHandler(w http.ResponseWriter, r *http.Request) {
+func PprofHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	_, _ = w.Write([]byte(`<html><body>
 <h1>Doki pprof</h1>

@@ -1,3 +1,4 @@
+// Package kubectl provides a kubectl-compatible HTTP client.
 package kubectl
 
 import (

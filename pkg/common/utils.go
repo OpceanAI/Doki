@@ -423,3 +423,42 @@ func ArgsEscaped(args []string) bool {
 	}
 	return false
 }
+
+// SafeInt64FromUint64 converts a uint64 to int64, clamping values larger than
+// math.MaxInt64 down to math.MaxInt64. Use this anywhere gosec G115 flags an
+// implicit uint64→int64 conversion (disk sizes, file sizes, byte counters).
+func SafeInt64FromUint64(v uint64) int64 {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if v > uint64(maxInt64) {
+		return maxInt64
+	}
+	return int64(v)
+}
+
+// SafeUint64FromInt64 converts an int64 to uint64, treating negative values as
+// zero. Use this anywhere gosec G115 flags an implicit int64→uint64 conversion
+// (counts, periods, quotas that semantically are non-negative).
+func SafeUint64FromInt64(v int64) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
+}
+
+// SafeUint32FromInt64 converts an int64 to uint32, treating negative values as
+// zero. Used for tar header mode fields (os.FileMode / syscall mode bits).
+func SafeUint32FromInt64(v int64) uint32 {
+	if v < 0 {
+		return 0
+	}
+	if v > int64(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(v)
+}
+
+// SafeFileMode converts an int64 (e.g. tar.Header.Mode) to os.FileMode
+// without triggering gosec G115. Negative modes collapse to 0.
+func SafeFileMode(v int64) os.FileMode {
+	return os.FileMode(SafeUint32FromInt64(v))
+}

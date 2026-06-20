@@ -15,12 +15,12 @@ type MDNSService struct{}
 // NewMDNSService returns a disabled service. The full implementation is
 // gated behind the `netlink_mdns` build tag and depends on
 // github.com/hashicorp/mdns.
-func NewMDNSService(identity *Identity, port int, logger *slog.Logger) *MDNSService {
+func NewMDNSService(_ *Identity, _ int, _ *slog.Logger) *MDNSService {
 	return &MDNSService{}
 }
 
 // Start is a no-op when mDNS is disabled at build time.
-func (m *MDNSService) Start(ctx context.Context) error { return nil }
+func (m *MDNSService) Start(_ context.Context) error { return nil }
 
 // Stop is a no-op when mDNS is disabled at build time.
 func (m *MDNSService) Stop() error { return nil }

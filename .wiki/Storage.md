@@ -311,4 +311,4 @@ For full-state backups (including volumes), use `doki system backup` (planned).
 - `pkg/storage/volume.go` — volume management
 - `pkg/storage/cache.go` — image cache, build cache
 - `pkg/storage/mount.go` — Linux mount helpers
-- `pkg/storage/mount_darwin.go` — macOS mount shim (v0.9.2)
+- `pkg/storage/mount_darwin.go` — macOS mount shim (v0.9.3)

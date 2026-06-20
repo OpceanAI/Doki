@@ -3,6 +3,7 @@ package podman
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -30,6 +31,13 @@ func NewPodManager(root string) *PodManager {
 func (pm *PodManager) CreatePod(cfg *PodCreateConfig) (*Pod, error) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
+
+	if cfg == nil {
+		return nil, fmt.Errorf("pod config is required")
+	}
+	if cfg.Name == "" {
+		return nil, fmt.Errorf("pod name is required")
+	}
 
 	for _, existing := range pm.pods {
 		if existing.Name == cfg.Name {
@@ -75,7 +83,10 @@ func (pm *PodManager) CreatePod(cfg *PodCreateConfig) (*Pod, error) {
 	})
 
 	pm.pods[pod.ID] = pod
-	pm.savePod(pod)
+	if err := pm.savePod(pod); err != nil {
+		delete(pm.pods, pod.ID)
+		return nil, err
+	}
 
 	return pod, nil
 }
@@ -118,8 +129,7 @@ func (pm *PodManager) StartPod(nameOrID string) error {
 	}
 
 	pod.State = "Running"
-	pm.savePod(pod)
-	return nil
+	return pm.savePod(pod)
 }
 
 func (pm *PodManager) StopPod(nameOrID string) error {
@@ -132,8 +142,7 @@ func (pm *PodManager) StopPod(nameOrID string) error {
 	}
 
 	pod.State = "Stopped"
-	pm.savePod(pod)
-	return nil
+	return pm.savePod(pod)
 }
 
 func (pm *PodManager) RestartPod(nameOrID string) error {
@@ -146,11 +155,10 @@ func (pm *PodManager) RestartPod(nameOrID string) error {
 	}
 
 	pod.State = "Running"
-	pm.savePod(pod)
-	return nil
+	return pm.savePod(pod)
 }
 
-func (pm *PodManager) KillPod(nameOrID string, signal string) error {
+func (pm *PodManager) KillPod(nameOrID string, _ string) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -160,8 +168,7 @@ func (pm *PodManager) KillPod(nameOrID string, signal string) error {
 	}
 
 	pod.State = "Exited"
-	pm.savePod(pod)
-	return nil
+	return pm.savePod(pod)
 }
 
 func (pm *PodManager) PausePod(nameOrID string) error {
@@ -174,8 +181,7 @@ func (pm *PodManager) PausePod(nameOrID string) error {
 	}
 
 	pod.State = "Paused"
-	pm.savePod(pod)
-	return nil
+	return pm.savePod(pod)
 }
 
 func (pm *PodManager) UnpausePod(nameOrID string) error {
@@ -188,8 +194,7 @@ func (pm *PodManager) UnpausePod(nameOrID string) error {
 	}
 
 	pod.State = "Running"
-	pm.savePod(pod)
-	return nil
+	return pm.savePod(pod)
 }
 
 func (pm *PodManager) RemovePod(nameOrID string, force bool) error {
@@ -206,8 +211,7 @@ func (pm *PodManager) RemovePod(nameOrID string, force bool) error {
 	}
 
 	delete(pm.pods, pod.ID)
-	pm.removePodFile(pod.ID)
-	return nil
+	return pm.removePodFile(pod.ID)
 }
 
 func (pm *PodManager) RenamePod(nameOrID, newName string) error {
@@ -226,8 +230,7 @@ func (pm *PodManager) RenamePod(nameOrID, newName string) error {
 	}
 
 	pod.Name = newName
-	pm.savePod(pod)
-	return nil
+	return pm.savePod(pod)
 }
 
 func (pm *PodManager) PrunePods() []string {
@@ -238,7 +241,9 @@ func (pm *PodManager) PrunePods() []string {
 	for id, pod := range pm.pods {
 		if pod.State == "Exited" || pod.State == "Stopped" {
 			delete(pm.pods, id)
-			pm.removePodFile(id)
+			if err := pm.removePodFile(id); err != nil {
+				log.Printf("podman: prune remove pod %s: %v", id, err)
+			}
 			removed = append(removed, id)
 		}
 	}
@@ -267,8 +272,7 @@ func (pm *PodManager) AddContainerToPod(podID string, containerID, containerName
 		State: "created",
 	})
 
-	pm.savePod(pod)
-	return nil
+	return pm.savePod(pod)
 }
 
 func (pm *PodManager) findPodLocked(nameOrID string) (*Pod, error) {
@@ -283,30 +287,45 @@ func (pm *PodManager) findPodLocked(nameOrID string) (*Pod, error) {
 	return nil, fmt.Errorf("pod %s not found", nameOrID)
 }
 
-func (pm *PodManager) savePod(pod *Pod) {
-	data, _ := json.MarshalIndent(pod, "", "  ")
-	_ = os.WriteFile(filepath.Join(pm.store, pod.ID+".json"), data, 0644)
+func (pm *PodManager) savePod(pod *Pod) error {
+	data, err := json.MarshalIndent(pod, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal pod %s: %w", pod.ID, err)
+	}
+	path := filepath.Join(pm.store, pod.ID+".json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write pod %s: %w", pod.ID, err)
+	}
+	return nil
 }
 
-func (pm *PodManager) removePodFile(id string) {
-	_ = os.Remove(filepath.Join(pm.store, id+".json"))
+func (pm *PodManager) removePodFile(id string) error {
+	path := filepath.Join(pm.store, id+".json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (pm *PodManager) loadPods() {
 	entries, err := os.ReadDir(pm.store)
 	if err != nil {
+		log.Printf("podman: read pod store %s: %v", pm.store, err)
 		return
 	}
 	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".json" {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(pm.store, entry.Name()))
+		path := filepath.Join(pm.store, entry.Name())
+		data, err := os.ReadFile(path)
 		if err != nil {
+			log.Printf("podman: read pod file %s: %v", path, err)
 			continue
 		}
 		var pod Pod
 		if err := json.Unmarshal(data, &pod); err != nil {
+			log.Printf("podman: parse pod file %s: %v", path, err)
 			continue
 		}
 		pm.pods[pod.ID] = &pod

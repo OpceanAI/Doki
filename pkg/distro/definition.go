@@ -1,3 +1,4 @@
+// Package distro provides Linux distribution management.
 package distro
 
 import "time"

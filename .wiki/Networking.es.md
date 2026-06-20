@@ -1,6 +1,6 @@
 # Networking
 
-El stack de networking de Doki proporciona redes bridge, soporte para plugins CNI, port mapping, un servidor DNS interno, y networking mesh peer-to-peer DokiLink-Lite (v0.9.3).
+El stack de networking de Doki proporciona redes bridge, soporte para plugins CNI, port mapping, un servidor DNS interno, y networking mesh peer-to-peer DokiLink-Lite (v0.10.0).
 
 ## Tipos de red
 
@@ -89,13 +89,13 @@ doki run -p 8080-8090:80 my-server:latest
 
 ### Cómo funciona (rootful)
 
-1. `iptables -t nat -A DOKI -p tcp --dport 8080 -j DNAT --to-destination 10.0.0.2:80` (fix v0.9.2)
+1. `iptables -t nat -A DOKI -p tcp --dport 8080 -j DNAT --to-destination 10.0.0.2:80` (fix v0.9.3)
 2. `iptables -t nat -A POSTROUTING -s 10.0.0.2 -j MASQUERADE` (para el camino de retorno)
 3. `socat` para el proxy TCP real en modo rootless
 
-### Fix iptables DNAT de v0.9.2
+### Fix iptables DNAT de v0.9.3
 
-La construcción de la regla DNAT en `pkg/network/manager.go` usaba `strings.Split` y le faltaba el flag `-A` (append) en v0.9.1:
+La construcción de la regla DNAT en `pkg/network/manager.go` usaba `strings.Split` y le faltaba el flag `-A` (append) en v0.9.2:
 
 ```diff
 - args := strings.Split("OUTPUT -p tcp --dport 8080 -j DNAT --to-destination 10.0.0.2:80", " ")
@@ -115,12 +115,12 @@ La construcción de la regla DNAT en `pkg/network/manager.go` usaba `strings.Spl
 
 Dos cosas arregladas:
 
-1. **Flag `-A`**: v0.9.1 tenía `OUTPUT` como primer arg, que iptables interpretaba como el nombre de la tabla. El fix usa `[]string` e incluye `-A` correctamente.
-2. **Chequeo de error**: v0.9.1 llamaba `.Run()` y descartaba el error. El fix usa `.CombinedOutput()` y envuelve el error.
+1. **Flag `-A`**: v0.9.2 tenía `OUTPUT` como primer arg, que iptables interpretaba como el nombre de la tabla. El fix usa `[]string` e incluye `-A` correctamente.
+2. **Chequeo de error**: v0.9.2 llamaba `.Run()` y descartaba el error. El fix usa `.CombinedOutput()` y envuelve el error.
 
 La chain DOKI ahora también se auto-crea en `pkg/network/cni.go:ensureChains()` (idempotente — seguro llamarla en cada start de contenedor).
 
-### Fix de port-forwarding de v0.9.2
+### Fix de port-forwarding de v0.9.3
 
 El proxy `socat` rootless se conectaba a `localhost:containerPort` en lugar de `containerIP:containerPort`:
 
@@ -135,7 +135,7 @@ El proxy `socat` rootless se conectaba a `localhost:containerPort` en lugar de `
 + }
 ```
 
-### Soporte UDP (v0.9.2)
+### Soporte UDP (v0.9.3)
 
 Port forwarding UDP ahora está soportado vía `socat -u`:
 
@@ -174,7 +174,7 @@ flowchart TD
     Upstream --> Internet
 ```
 
-### Defaults (v0.9.2)
+### Defaults (v0.9.3)
 
 | Plataforma | Listen por defecto | Por qué |
 |:-----------|:-------------------|:-------|
@@ -219,7 +219,7 @@ El servidor DNS tiene una caché LRU integrada:
 - TTL de 5 minutos por entrada
 - Re-registrada al reiniciar el contenedor
 
-### Fixes clave de v0.9.2
+### Fixes clave de v0.9.3
 
 | Archivo | Bug | Fix |
 |:--------|:----|:----|
@@ -289,9 +289,9 @@ doki network create --ipv6 --subnet fd00::/64 ipv6-net
 
 Doki asigna direcciones v4 y v6 cuando `ipv6: true`.
 
-## Teardown de veth (fix v0.9.2)
+## Teardown de veth (fix v0.9.3)
 
-Cuando se elimina un contenedor, su par veth debe ser eliminado para evitar filtrar interfaces en el host. v0.9.2 añadió tracking:
+Cuando se elimina un contenedor, su par veth debe ser eliminado para evitar filtrar interfaces en el host. v0.9.3 añadió tracking:
 
 ```go
 // pkg/network/manager.go
@@ -313,7 +313,7 @@ exec.Command("ip", "link", "del", endpoint.VethHost).Run()
 exec.Command("ip", "link", "del", bridgeName).Run()
 ```
 
-Antes de v0.9.2: `ip link` mostraba decenas de interfaces `veth*` después de correr unos cuantos contenedores.
+Antes de v0.9.3: `ip link` mostraba decenas de interfaces `veth*` después de correr unos cuantos contenedores.
 
 ## Consideraciones de seguridad
 

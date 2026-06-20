@@ -26,8 +26,10 @@ func New(root string) *Runner {
 	return &Runner{root: root, log: slog.Default().With("component", "runner.pkdroid")}
 }
 
+// Name returns the execution mode.
 func (r *Runner) Name() rt.ExecutionMode { return rt.ModePkDroid }
 
+// Detect checks if this runner is available on the current host.
 func (r *Runner) Detect() bool {
 	if runtime.GOOS != "android" || runtime.GOARCH != "arm64" {
 		return false
@@ -36,6 +38,7 @@ func (r *Runner) Detect() bool {
 	return err == nil
 }
 
+// Capabilities returns the runner capabilities.
 func (r *Runner) Capabilities() rt.RunnerCapabilities {
 	return rt.RunnerCapabilities{
 		Arch: []string{"arm64"}, RootRequired: false,
@@ -43,7 +46,8 @@ func (r *Runner) Capabilities() rt.RunnerCapabilities {
 	}
 }
 
-func (r *Runner) Create(ctx context.Context, cfg *rt.Config) (string, error) {
+// Create prepares the container filesystem and config.
+func (r *Runner) Create(_ context.Context, cfg *rt.Config) (string, error) {
 	id := cfg.ID
 	if id == "" {
 		id = common.GenerateID(64)
@@ -56,35 +60,44 @@ func (r *Runner) Create(ctx context.Context, cfg *rt.Config) (string, error) {
 	return id, nil
 }
 
-func (r *Runner) Start(ctx context.Context, id string) (int, error) {
+// Start launches the container process.
+func (r *Runner) Start(_ context.Context, _ string) (int, error) {
 	return 0, fmt.Errorf("pkdroid: AVF integration not yet implemented — requires NDK bridge to VirtualizationService")
 }
 
-func (r *Runner) Stop(_ context.Context, id string, timeout time.Duration) error {
+// Stop terminates the container with a signal.
+func (r *Runner) Stop(_ context.Context, _ string, _ time.Duration) error {
 	return fmt.Errorf("pkdroid: not implemented")
 }
 
-func (r *Runner) Exec(_ context.Context, id string, cfg *rt.ExecConfig) (int, error) {
+// Exec runs a process inside a running container.
+func (r *Runner) Exec(_ context.Context, _ string, _ *rt.ExecConfig) (int, error) {
 	return 0, fmt.Errorf("pkdroid: exec not supported")
 }
 
-func (r *Runner) Kill(_ context.Context, id string, sig syscall.Signal) error {
+// Kill sends an arbitrary signal to the container.
+func (r *Runner) Kill(_ context.Context, _ string, _ syscall.Signal) error {
 	return fmt.Errorf("pkdroid: not implemented")
 }
 
-func (r *Runner) Pause(_ context.Context, id string) error {
+// Pause suspends the container.
+func (r *Runner) Pause(_ context.Context, _ string) error {
 	return fmt.Errorf("pkdroid: pause not supported")
 }
 
-func (r *Runner) Resume(_ context.Context, id string) error {
+// Resume resumes a paused container.
+func (r *Runner) Resume(_ context.Context, _ string) error {
 	return fmt.Errorf("pkdroid: resume not supported")
 }
 
-func (r *Runner) Wait(_ context.Context, id string) (int, error) { return 0, nil }
-func (r *Runner) Stats(_ context.Context, id string) (*rt.ContainerStats, error) {
+// Wait blocks until the container exits.
+func (r *Runner) Wait(_ context.Context, _ string) (int, error) { return 0, nil }
+// Stats returns resource usage metrics.
+func (r *Runner) Stats(_ context.Context, _ string) (*rt.ContainerStats, error) {
 	return &rt.ContainerStats{}, nil
 }
 
+// Inspect returns detailed container info.
 func (r *Runner) Inspect(_ context.Context, id string) (*rt.ContainerJSON, error) {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -97,6 +110,7 @@ func (r *Runner) Inspect(_ context.Context, id string) (*rt.ContainerJSON, error
 	}, nil
 }
 
+// Cleanup removes container state after exit.
 func (r *Runner) Cleanup(_ context.Context, id string) error {
 	return os.RemoveAll(filepath.Join(r.root, "containers", id))
 }

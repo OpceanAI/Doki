@@ -224,12 +224,12 @@ func (ts *TrustStore) persistUnlocked(peerID string, pub ed25519.PublicKey, ca *
 		return err
 	}
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
-	if err := os.WriteFile(filepath.Join(ts.root, peerID+".pub.pem"), pubPEM, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(ts.root, peerID+".pub.pem"), pubPEM, 0600); err != nil {
 		return err
 	}
 	if ca != nil {
 		caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})
-		if err := os.WriteFile(filepath.Join(ts.root, peerID+".ca.pem"), caPEM, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(ts.root, peerID+".ca.pem"), caPEM, 0600); err != nil {
 			return err
 		}
 	}

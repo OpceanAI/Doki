@@ -1,3 +1,4 @@
+// Package firecracker provides Firecracker-based VM backend.
 package firecracker
 
 import (
@@ -50,7 +51,7 @@ func init() {
 
 func (v *VMM) Name() string { return "firecracker" }
 
-func (v *VMM) Create(ctx context.Context, vmCfg *dokivm.VMConfig) (*dokivm.MicroVM, error) {
+func (v *VMM) Create(_ context.Context, vmCfg *dokivm.VMConfig) (*dokivm.MicroVM, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	vm := &dokivm.MicroVM{
@@ -166,7 +167,7 @@ func (v *VMM) configureMachine(client *http.Client) error {
 	return nil
 }
 
-func (v *VMM) configureBootSource(client *http.Client, vmID string) error {
+func (v *VMM) configureBootSource(client *http.Client, _ string) error {
 	body := map[string]interface{}{
 		"kernel_image_path": filepath.Join(v.cfg.KernelPath),
 		"boot_args":         "console=ttyS0 reboot=k panic=1 pci=off nomodules ro quiet doki.init=1",
@@ -300,7 +301,7 @@ func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) erro
 	return nil
 }
 
-func (v *VMM) Kill(ctx context.Context, vmID string) error {
+func (v *VMM) Kill(_ context.Context, vmID string) error {
 	v.mu.RLock()
 	vm, ok := v.vms[vmID]
 	v.mu.RUnlock()
@@ -318,7 +319,7 @@ func (v *VMM) Kill(ctx context.Context, vmID string) error {
 	return nil
 }
 
-func (v *VMM) State(ctx context.Context, vmID string) (dokivm.VMState, error) {
+func (v *VMM) State(_ context.Context, vmID string) (dokivm.VMState, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	vm, ok := v.vms[vmID]
@@ -328,13 +329,13 @@ func (v *VMM) State(ctx context.Context, vmID string) (dokivm.VMState, error) {
 	return vm.State, nil
 }
 
-func (v *VMM) Exec(ctx context.Context, vmID string, cmd []string, env []string, tty bool) error {
+func (v *VMM) Exec(_ context.Context, _ string, _ []string, _ []string, _ bool) error {
 	return fmt.Errorf("exec via vsock not implemented")
 }
-func (v *VMM) Attach(ctx context.Context, vmID string) error                             { return nil }
-func (v *VMM) Logs(ctx context.Context, vmID string) (io.Reader, error)                 { return nil, nil }
-func (v *VMM) Stats(ctx context.Context, vmID string) (*dokivm.VMStats, error)          { return &dokivm.VMStats{}, nil }
-func (v *VMM) Cleanup(ctx context.Context, vmID string) error {
+func (v *VMM) Attach(_ context.Context, _ string) error                             { return nil }
+func (v *VMM) Logs(_ context.Context, _ string) (io.Reader, error)                 { return nil, nil }
+func (v *VMM) Stats(_ context.Context, _ string) (*dokivm.VMStats, error)          { return &dokivm.VMStats{}, nil }
+func (v *VMM) Cleanup(_ context.Context, vmID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.vms, vmID)

@@ -10,7 +10,7 @@ import (
 	"github.com/OpceanAI/Doki/pkg/common"
 )
 
-func osMnt(source, target, fstype string, flags uintptr, data string) error {
+func osMnt(source, target, fstype string, _ uintptr, data string) error {
 	if err := common.EnsureDir(target); err != nil {
 		return err
 	}
