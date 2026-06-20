@@ -90,15 +90,11 @@ build-darwin: build-darwin-arm64 build-darwin-amd64
 
 build-darwin-arm64: | $(RELEASES)
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-darwin-arm64 ./cmd/doki
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-darwin-arm64 ./cmd/dokid
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-darwin-arm64 ./cmd/doki-compose
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-darwin-arm64 ./cmd/doki-kube
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-darwin-arm64 ./cmd/doki-kubectl
 
 build-darwin-amd64: | $(RELEASES)
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-darwin-amd64 ./cmd/doki
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/dokid-darwin-amd64 ./cmd/dokid
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-compose-darwin-amd64 ./cmd/doki-compose
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kube-darwin-amd64 ./cmd/doki-kube
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(RELEASES)/doki-kubectl-darwin-amd64 ./cmd/doki-kubectl
 
