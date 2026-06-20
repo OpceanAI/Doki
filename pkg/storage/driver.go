@@ -145,7 +145,7 @@ func (m *Manager) Stats() StorageStats {
 		// Statfs_t.Bavail is uint64, Bsize is int64 (signed on Android).
 		// Compute the product in uint64 to avoid signed-overflow UB and
 		// then clamp to math.MaxInt64 for gosec G115.
-		bsize := common.SafeUint64FromInt64(stat.Bsize)
+		bsize := common.SafeUint64FromInt64(int64(stat.Bsize))
 		product := stat.Bavail * bsize
 		stats.FreeSpace = common.SafeInt64FromUint64(product)
 	}
