@@ -51,11 +51,11 @@ func DNSWellKnownAddress() string {
 
 // DNSServer provides internal DNS resolution for containers.
 type DNSServer struct {
-	mu      sync.RWMutex
-	entries map[string]string // name → IPv4
+	mu        sync.RWMutex
+	entries   map[string]string // name → IPv4
 	entriesV6 map[string]string // name → IPv6 (AAAA)
 	reverse   map[string]string // IP → name (PTR)
-	cache   *dnsCache
+	cache     *dnsCache
 
 	upstream     []string
 	positiveTTL  time.Duration
@@ -568,13 +568,13 @@ func (d *DNSServer) tryUpstreamTCP(upstream string, query []byte) ([]byte, error
 // ─── DNS wire helpers ──────────────────────────────────────────────
 
 const (
-	dnsTypeA    uint16 = 1
-	dnsTypeAAAA uint16 = 28
+	dnsTypeA     uint16 = 1
+	dnsTypeAAAA  uint16 = 28
 	dnsTypeCNAME uint16 = 5
-	dnsTypeTXT  uint16 = 16
-	dnsTypeSRV  uint16 = 33
-	dnsTypePTR  uint16 = 12
-	dnsClassIN  uint16 = 1
+	dnsTypeTXT   uint16 = 16
+	dnsTypeSRV   uint16 = 33
+	dnsTypePTR   uint16 = 12
+	dnsClassIN   uint16 = 1
 
 	dnsFlagResponse  uint16 = 0x8000
 	dnsFlagRD        uint16 = 0x0100
@@ -669,9 +669,9 @@ func buildDNSHeaderWithAnswers(query []byte, rcode uint16, ancount uint16) []byt
 		flags |= rcode & 0x000F
 	}
 	binary.BigEndian.PutUint16(hdr[2:4], flags)
-	binary.BigEndian.PutUint16(hdr[4:6], 1)          // QDCOUNT
-	binary.BigEndian.PutUint16(hdr[6:8], ancount)     // ANCOUNT
-	binary.BigEndian.PutUint16(hdr[8:10], 0)          // NSCOUNT
+	binary.BigEndian.PutUint16(hdr[4:6], 1)       // QDCOUNT
+	binary.BigEndian.PutUint16(hdr[6:8], ancount) // ANCOUNT
+	binary.BigEndian.PutUint16(hdr[8:10], 0)      // NSCOUNT
 	binary.BigEndian.PutUint16(hdr[10:12], 0)
 	return hdr
 }
@@ -683,10 +683,10 @@ func buildAResponse(query []byte, qEnd int, name string, ip net.IP, ttl time.Dur
 	resp = append(resp, query[12:qEnd]...) // question section
 	// Answer.
 	resp = appendName(resp, name)
-	resp = append(resp, 0x00, 0x01)             // TYPE A
-	resp = append(resp, 0x00, 0x01)             // CLASS IN
+	resp = append(resp, 0x00, 0x01)                  // TYPE A
+	resp = append(resp, 0x00, 0x01)                  // CLASS IN
 	resp = appendUint32(resp, uint32(ttl.Seconds())) // TTL
-	resp = append(resp, 0x00, 0x04)             // RDLENGTH
+	resp = append(resp, 0x00, 0x04)                  // RDLENGTH
 	resp = append(resp, ip.To4()...)
 	return resp
 }
@@ -697,10 +697,10 @@ func buildAAAAResponse(query []byte, qEnd int, name string, ip net.IP, ttl time.
 	resp = append(resp, hdr...)
 	resp = append(resp, query[12:qEnd]...)
 	resp = appendName(resp, name)
-	resp = append(resp, 0x00, 0x1c)             // TYPE AAAA
-	resp = append(resp, 0x00, 0x01)             // CLASS IN
+	resp = append(resp, 0x00, 0x1c) // TYPE AAAA
+	resp = append(resp, 0x00, 0x01) // CLASS IN
 	resp = appendUint32(resp, uint32(ttl.Seconds()))
-	resp = append(resp, 0x00, 0x10)             // RDLENGTH = 16
+	resp = append(resp, 0x00, 0x10) // RDLENGTH = 16
 	resp = append(resp, ip.To16()...)
 	return resp
 }
@@ -711,8 +711,8 @@ func buildPTRResponse(query []byte, qEnd int, arpaName, ptrName string, ttl time
 	resp = append(resp, hdr...)
 	resp = append(resp, query[12:qEnd]...)
 	resp = appendName(resp, arpaName)
-	resp = append(resp, 0x00, 0x0c)             // TYPE PTR
-	resp = append(resp, 0x00, 0x01)             // CLASS IN
+	resp = append(resp, 0x00, 0x0c) // TYPE PTR
+	resp = append(resp, 0x00, 0x01) // CLASS IN
 	resp = appendUint32(resp, uint32(ttl.Seconds()))
 	// RDLENGTH + target name.
 	ptrWire := nameToWire(ptrName)

@@ -8,7 +8,7 @@ import (
 
 func TestIsHostEnvDenied(t *testing.T) {
 	cases := []struct {
-		name  string
+		name   string
 		denied bool
 	}{
 		{"LD_PRELOAD", true},

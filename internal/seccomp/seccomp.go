@@ -10,16 +10,16 @@ import (
 
 // Profile represents a seccomp security profile.
 type Profile struct {
-	DefaultAction string       `json:"defaultAction"`
-	Architectures []string     `json:"architectures,omitempty"`
+	DefaultAction string        `json:"defaultAction"`
+	Architectures []string      `json:"architectures,omitempty"`
 	Syscalls      []SyscallRule `json:"syscalls,omitempty"`
-	Flags         []string     `json:"flags,omitempty"`
+	Flags         []string      `json:"flags,omitempty"`
 }
 
 // SyscallRule defines allowed/blocked syscalls.
 type SyscallRule struct {
-	Names  []string `json:"names"`
-	Action string   `json:"action"`
+	Names  []string  `json:"names"`
+	Action string    `json:"action"`
 	Args   []ArgRule `json:"args,omitempty"`
 }
 
@@ -64,7 +64,7 @@ func DefaultProfile() *Profile {
 func PrivilegedProfile() *Profile {
 	return &Profile{
 		DefaultAction: "SCMP_ACT_ALLOW",
-		Syscalls: []SyscallRule{},
+		Syscalls:      []SyscallRule{},
 	}
 }
 

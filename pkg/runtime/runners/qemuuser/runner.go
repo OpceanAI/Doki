@@ -54,7 +54,7 @@ func (r *Runner) Capabilities() rt.RunnerCapabilities {
 		guestArch = append(guestArch, arch)
 	}
 	return rt.RunnerCapabilities{
-		Arch: []string{"arm64", "armv7", "amd64", "386"},
+		Arch:      []string{"arm64", "armv7", "amd64", "386"},
 		CrossArch: true, GuestArch: guestArch, RootRequired: false,
 	}
 }
@@ -200,6 +200,7 @@ func (r *Runner) Wait(_ context.Context, _ string) (int, error) {
 	}
 	return 0, nil
 }
+
 // Stats returns resource usage metrics.
 func (r *Runner) Stats(_ context.Context, _ string) (*rt.ContainerStats, error) {
 	return &rt.ContainerStats{}, nil

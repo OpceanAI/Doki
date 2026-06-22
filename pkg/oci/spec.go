@@ -253,22 +253,22 @@ type LinuxDevice struct {
 
 // LinuxDeviceCgroup represents a device cgroup rule.
 type LinuxDeviceCgroup struct {
-	Allow  bool           `json:"allow"`
-	Type   string         `json:"type,omitempty"`
-	Major  *int64         `json:"major,omitempty"`
-	Minor  *int64         `json:"minor,omitempty"`
-	Access string         `json:"access,omitempty"`
+	Allow  bool   `json:"allow"`
+	Type   string `json:"type,omitempty"`
+	Major  *int64 `json:"major,omitempty"`
+	Minor  *int64 `json:"minor,omitempty"`
+	Access string `json:"access,omitempty"`
 }
 
 // LinuxResources configures cgroup resources.
 type LinuxResources struct {
-	Devices        []LinuxDeviceCgroup `json:"devices,omitempty"`
-	Memory         *LinuxMemory        `json:"memory,omitempty"`
-	CPU            *LinuxCPU           `json:"cpu,omitempty"`
-	Pids           *LinuxPids          `json:"pids,omitempty"`
-	BlockIO        *LinuxBlockIO       `json:"blockIO,omitempty"`
+	Devices        []LinuxDeviceCgroup  `json:"devices,omitempty"`
+	Memory         *LinuxMemory         `json:"memory,omitempty"`
+	CPU            *LinuxCPU            `json:"cpu,omitempty"`
+	Pids           *LinuxPids           `json:"pids,omitempty"`
+	BlockIO        *LinuxBlockIO        `json:"blockIO,omitempty"`
 	HugepageLimits []LinuxHugepageLimit `json:"hugepageLimits,omitempty"`
-	Network        *LinuxNetwork       `json:"network,omitempty"`
+	Network        *LinuxNetwork        `json:"network,omitempty"`
 	Rdma           map[string]LinuxRdma `json:"rdma,omitempty"`
 }
 
@@ -302,27 +302,27 @@ type LinuxPids struct {
 
 // LinuxBlockIO configures block I/O cgroup limits.
 type LinuxBlockIO struct {
-	Weight        *uint16              `json:"weight,omitempty"`
-	LeafWeight    *uint16              `json:"leafWeight,omitempty"`
-	WeightDevice  []LinuxWeightDevice  `json:"weightDevice,omitempty"`
-	ThrottleRead  []LinuxThrottleDevice `json:"throttleReadBpsDevice,omitempty"`
-	ThrottleWrite []LinuxThrottleDevice `json:"throttleWriteBpsDevice,omitempty"`
-	ThrottleReadIOPS []LinuxThrottleDevice `json:"throttleReadIOPSDevice,omitempty"`
+	Weight            *uint16               `json:"weight,omitempty"`
+	LeafWeight        *uint16               `json:"leafWeight,omitempty"`
+	WeightDevice      []LinuxWeightDevice   `json:"weightDevice,omitempty"`
+	ThrottleRead      []LinuxThrottleDevice `json:"throttleReadBpsDevice,omitempty"`
+	ThrottleWrite     []LinuxThrottleDevice `json:"throttleWriteBpsDevice,omitempty"`
+	ThrottleReadIOPS  []LinuxThrottleDevice `json:"throttleReadIOPSDevice,omitempty"`
 	ThrottleWriteIOPS []LinuxThrottleDevice `json:"throttleWriteIOPSDevice,omitempty"`
 }
 
 // LinuxWeightDevice configures per-device block I/O weight.
 type LinuxWeightDevice struct {
-	Major   int64   `json:"major"`
-	Minor   int64   `json:"minor"`
-	Weight  *uint16 `json:"weight,omitempty"`
+	Major      int64   `json:"major"`
+	Minor      int64   `json:"minor"`
+	Weight     *uint16 `json:"weight,omitempty"`
 	LeafWeight *uint16 `json:"leafWeight,omitempty"`
 }
 
 // LinuxThrottleDevice configures per-device block I/O throttle.
 type LinuxThrottleDevice struct {
-	Major int64 `json:"major"`
-	Minor int64 `json:"minor"`
+	Major int64  `json:"major"`
+	Minor int64  `json:"minor"`
 	Rate  uint64 `json:"rate"`
 }
 
@@ -334,7 +334,7 @@ type LinuxHugepageLimit struct {
 
 // LinuxNetwork configures network cgroup limits.
 type LinuxNetwork struct {
-	ClassID    *uint32  `json:"classID,omitempty"`
+	ClassID    *uint32                  `json:"classID,omitempty"`
 	Priorities []LinuxInterfacePriority `json:"priorities,omitempty"`
 }
 
@@ -398,18 +398,18 @@ const (
 
 // LinuxSyscall is a seccomp syscall rule.
 type LinuxSyscall struct {
-	Names  []string           `json:"names"`
-	Action LinuxSeccompAction `json:"action"`
-	Args   []LinuxSeccompArg  `json:"args,omitempty"`
-	Comment string            `json:"comment,omitempty"`
+	Names   []string           `json:"names"`
+	Action  LinuxSeccompAction `json:"action"`
+	Args    []LinuxSeccompArg  `json:"args,omitempty"`
+	Comment string             `json:"comment,omitempty"`
 }
 
 // LinuxSeccompArg is a seccomp syscall argument filter.
 type LinuxSeccompArg struct {
-	Index    uint              `json:"index"`
-	Value    uint64            `json:"value"`
-	ValueTwo uint64            `json:"valueTwo,omitempty"`
-	Op       LinuxSeccompOp    `json:"op"`
+	Index    uint           `json:"index"`
+	Value    uint64         `json:"value"`
+	ValueTwo uint64         `json:"valueTwo,omitempty"`
+	Op       LinuxSeccompOp `json:"op"`
 }
 
 // LinuxSeccompOp is a seccomp comparison operator.
@@ -434,13 +434,13 @@ type LinuxIntelRdt struct {
 
 // LinuxPersonality configures the execution domain.
 type LinuxPersonality struct {
-	Domain string `json:"domain"`
+	Domain string   `json:"domain"`
 	Flags  []string `json:"flags,omitempty"`
 }
 
 // LinuxTimeOffset configures time namespace offsets.
 type LinuxTimeOffset struct {
-	Secs   int64 `json:"secs"`
+	Secs     int64  `json:"secs"`
 	Nanosecs uint32 `json:"nanosecs,omitempty"`
 }
 

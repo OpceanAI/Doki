@@ -3,12 +3,13 @@ package dokivm
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 )
 
@@ -29,32 +30,32 @@ type VMM interface {
 
 // VMConfig holds configuration for creating a microVM.
 type VMConfig struct {
-	ID           string
-	Kernel       string
-	Rootfs       string
-	Initrd       string
-	CPUs         int
-	Memory       int // MB
-	Cmd          []string
-	Env          []string
-	Cwd          string
-	Network      *NetworkConfig
-	Vsock        *VsockConfig
-	Filesystems  []FilesystemConfig
-	KernelArgs   string
-	Console      bool
+	ID             string
+	Kernel         string
+	Rootfs         string
+	Initrd         string
+	CPUs           int
+	Memory         int // MB
+	Cmd            []string
+	Env            []string
+	Cwd            string
+	Network        *NetworkConfig
+	Vsock          *VsockConfig
+	Filesystems    []FilesystemConfig
+	KernelArgs     string
+	Console        bool
 	ReadOnlyRootfs bool
-	ExtraDrives  []DriveConfig
+	ExtraDrives    []DriveConfig
 }
 
 // NetworkConfig holds network configuration for a VM.
 type NetworkConfig struct {
-	Type      string // "tap", "bridge", "none", "host"
-	TapName   string
-	Bridge    string
-	IP        string
-	Gateway   string
-	DNS       []string
+	Type       string // "tap", "bridge", "none", "host"
+	TapName    string
+	Bridge     string
+	IP         string
+	Gateway    string
+	DNS        []string
 	MacAddress string
 }
 
@@ -165,9 +166,11 @@ func autoDetectVMM(cfg *VMMConfig) (VMM, error) {
 		}
 	}
 	// 3. Try QEMU (universal fallback).
-	if _, err := exec.LookPath("qemu-system-aarch64"); err == nil {
-		if vmm, err := createQEMU(cfg); err == nil {
-			return vmm, nil
+	for _, qemuBin := range []string{"qemu-system-aarch64", "qemu-system-x86_64"} {
+		if _, err := exec.LookPath(qemuBin); err == nil {
+			if vmm, err := createQEMU(cfg); err == nil {
+				return vmm, nil
+			}
 		}
 	}
 	return nil, fmt.Errorf("no compatible VMM found on this system")
@@ -295,5 +298,8 @@ func init() {
 
 // GenerateID generates a short VM ID.
 func GenerateID() string {
-	return strings.ToLower(fmt.Sprintf("%x", time.Now().UnixNano()))[:8]
+	var b [8]byte
+	_, _ = rand.Read(b[:4])
+	binary.BigEndian.PutUint32(b[4:], uint32(time.Now().UnixNano()))
+	return fmt.Sprintf("%x", b[:])
 }

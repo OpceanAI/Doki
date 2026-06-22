@@ -2,6 +2,7 @@ package netlink
 
 import (
 	"crypto/ed25519"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,12 +19,12 @@ import (
 // Each peer is uniquely identified by its short install ID (the first
 // 12 chars of base32 of its Ed25519 public key).
 type Peer struct {
-	ID       string             `json:"id"`        // short install id
-	Name     string             `json:"name"`      // human-friendly (defaults to ID)
-	Addr     string             `json:"addr"`      // host:port the peer listens on
-	PubKey   string             `json:"pubkey"`    // base64 of Ed25519 public key
-	CACert   string             `json:"ca_cert"`   // PEM-encoded CA cert
-	LastSeen time.Time          `json:"last_seen"`
+	ID         string            `json:"id"`      // short install id
+	Name       string            `json:"name"`    // human-friendly (defaults to ID)
+	Addr       string            `json:"addr"`    // host:port the peer listens on
+	PubKey     string            `json:"pubkey"`  // base64 of Ed25519 public key
+	CACert     string            `json:"ca_cert"` // PEM-encoded CA cert
+	LastSeen   time.Time         `json:"last_seen"`
 	Containers []RemoteContainer `json:"containers,omitempty"`
 }
 
@@ -73,8 +75,8 @@ type TrustStore struct {
 }
 
 type trustedPeer struct {
-	PubKey   ed25519.PublicKey
-	CACert   *x509.Certificate
+	PubKey    ed25519.PublicKey
+	CACert    *x509.Certificate
 	FirstSeen time.Time
 }
 
@@ -98,13 +100,16 @@ func (ts *TrustStore) Trust(peerID string, pub ed25519.PublicKey, ca *x509.Certi
 	if peerID == "" {
 		return errors.New("trust store: empty peer id")
 	}
+	if err := validatePeerID(peerID); err != nil {
+		return fmt.Errorf("trust store: %w", err)
+	}
 	if len(pub) != ed25519.PublicKeySize {
 		return fmt.Errorf("trust store: pub size = %d, want %d", len(pub), ed25519.PublicKeySize)
 	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if existing, ok := ts.trusted[peerID]; ok {
-		if !bytesEqual(existing.PubKey, pub) {
+		if subtle.ConstantTimeCompare(existing.PubKey, pub) != 1 {
 			return fmt.Errorf("trust store: peer %q pubkey mismatch (TOFU collision)", peerID)
 		}
 		return nil
@@ -115,6 +120,29 @@ func (ts *TrustStore) Trust(peerID string, pub ed25519.PublicKey, ca *x509.Certi
 		FirstSeen: time.Now(),
 	}
 	return ts.persistUnlocked(peerID, pub, ca)
+}
+
+// validatePeerID rejects peer IDs that could escape the trust store
+// directory via path traversal. Peer IDs are short base32 strings in
+// normal operation, but Trust() accepts arbitrary strings so we guard
+// against "..", "/", "\", and empty segments.
+func validatePeerID(peerID string) error {
+	if peerID == "" {
+		return errors.New("empty peer id")
+	}
+	if strings.ContainsAny(peerID, `/\`) {
+		return fmt.Errorf("peer id %q contains path separator", peerID)
+	}
+	if peerID == "." || peerID == ".." || strings.Contains(peerID, "..") {
+		return fmt.Errorf("peer id %q contains path traversal sequence", peerID)
+	}
+	// Reject control characters and null bytes.
+	for _, r := range peerID {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("peer id %q contains control character", peerID)
+		}
+	}
+	return nil
 }
 
 // Trusted returns true if peerID has been recorded in the store.
@@ -237,24 +265,9 @@ func (ts *TrustStore) persistUnlocked(peerID string, pub ed25519.PublicKey, ca *
 }
 
 func splitLast(s, sep string) []string {
-	i := len(s) - 1
-	for i >= 0 {
-		if string(s[i]) == sep {
-			return []string{s[:i], s[i+1:]}
-		}
-		i--
+	i := strings.LastIndex(s, sep)
+	if i < 0 {
+		return []string{s}
 	}
-	return []string{s}
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return []string{s[:i], s[i+len(sep):]}
 }

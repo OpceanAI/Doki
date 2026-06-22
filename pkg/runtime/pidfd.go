@@ -13,9 +13,9 @@ import (
 )
 
 type PidfdMonitor struct {
-	pidfd int
-	pid   int
-	mu    sync.Mutex
+	pidfd  int
+	pid    int
+	mu     sync.Mutex
 	closed bool
 }
 

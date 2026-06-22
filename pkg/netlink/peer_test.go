@@ -2,6 +2,7 @@ package netlink
 
 import (
 	"crypto/ed25519"
+	"crypto/subtle"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -30,7 +31,7 @@ func TestTrustStore_TrustAndPubKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PubKey: %v", err)
 	}
-	if !bytesEqual(got, pub) {
+	if subtle.ConstantTimeCompare(got, pub) != 1 {
 		t.Error("PubKey round-trip mismatch")
 	}
 }
@@ -87,7 +88,7 @@ func TestTrustStore_PersistAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytesEqual(got, pub) {
+	if subtle.ConstantTimeCompare(got, pub) != 1 {
 		t.Error("loaded pubkey mismatch")
 	}
 }
@@ -127,7 +128,7 @@ func TestPeer_FingerprintAndPubKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pubKeyBytes: %v", err)
 	}
-	if !bytesEqual(got, pub) {
+	if subtle.ConstantTimeCompare(got, pub) != 1 {
 		t.Error("pubKeyBytes round-trip")
 	}
 	if p.fingerprint() != "abc" {

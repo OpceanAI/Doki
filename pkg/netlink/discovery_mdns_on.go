@@ -7,11 +7,23 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/hashicorp/mdns"
 )
+
+// mdnsEntryExpiry is the time-to-live for mDNS entries. Entries that
+// have not been refreshed (re-announced) within this window are
+// evicted by the cleanup loop. This keeps the peer list fresh and
+// removes peers that have left the LAN.
+const mdnsEntryExpiry = 90 * time.Second
+
+// mdnsCleanupInterval is how often the cleanup loop runs to evict
+// expired entries.
+const mdnsCleanupInterval = 30 * time.Second
 
 // MDNSService announces this Doki instance and discovers other Doki
 // peers on the LAN. Only enabled with `-tags netlink_mdns`; the default
@@ -19,6 +31,10 @@ import (
 //
 // TXT records encode the peer's short id and public key (base64), so
 // that listeners can call TrustStore.Trust immediately on first contact.
+//
+// Entries expire after mdnsEntryExpiry (90 seconds) if not refreshed.
+// A periodic cleanup loop evicts stale entries to keep the peer list
+// accurate.
 type MDNSService struct {
 	id       *Identity
 	port     int
@@ -58,7 +74,7 @@ func (m *MDNSService) Start(ctx context.Context) error {
 	txt := []string{
 		"id=" + m.id.installID,
 		"pub=" + pubB64,
-		"v=0.9.3",
+		"v=" + mdnsVersionTag(),
 	}
 	iface, err := mdns.NewMDNSService(
 		"doki-"+m.id.installID,
@@ -80,7 +96,14 @@ func (m *MDNSService) Start(ctx context.Context) error {
 
 	// Browser: poll every 5s for new entries.
 	go m.browseLoop(ctx)
+	// Cleanup: evict expired entries every 30s.
+	go m.cleanupLoop(ctx)
 	return nil
+}
+
+// mdnsVersionTag returns the version string for mDNS TXT records.
+func mdnsVersionTag() string {
+	return common.DokiVersion
 }
 
 func (m *MDNSService) browseLoop(ctx context.Context) {
@@ -123,21 +146,31 @@ func (m *MDNSService) browseLoop(ctx context.Context) {
 			}
 			m.mu.Lock()
 			for _, e := range entries {
-				if e.Port == m.port {
-					continue
-				}
 				id, pub := parseTXT(e.InfoFields)
 				if id == "" {
 					continue
 				}
-				key := id
+				// Self-filter by install ID, not by port. Two
+				// instances on the same host with different ports
+				// would be incorrectly filtered by port, and a
+				// different peer on the same port would be
+				// incorrectly dropped.
+				if id == m.id.installID {
+					continue
+				}
 				host := ""
 				if e.AddrV4 != nil {
 					host = e.AddrV4.String()
 				} else if e.AddrV6 != nil {
 					host = e.AddrV6.String()
 				}
-				m.entries[key] = &MDNSEntry{
+				// Reject entries with no usable address.
+				if host == "" {
+					m.logger.Debug("doki-link: mdns entry with no address", "id", id)
+					continue
+				}
+				// Refresh or create the entry, updating Seen time.
+				m.entries[id] = &MDNSEntry{
 					ID:     id,
 					Addr:   host,
 					Port:   e.Port,
@@ -151,11 +184,43 @@ func (m *MDNSService) browseLoop(ctx context.Context) {
 	}
 }
 
+// cleanupLoop periodically evicts mDNS entries that have not been
+// refreshed within mdnsEntryExpiry. This implements the 90-second
+// expiry documented in the release notes.
+func (m *MDNSService) cleanupLoop(ctx context.Context) {
+	t := time.NewTicker(mdnsCleanupInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case <-t.C:
+			m.evictExpired()
+		}
+	}
+}
+
+// evictExpired removes entries where time.Since(Seen) > mdnsEntryExpiry.
+func (m *MDNSService) evictExpired() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	for id, entry := range m.entries {
+		if now.Sub(entry.Seen) > mdnsEntryExpiry {
+			m.logger.Debug("doki-link: mdns entry expired", "id", id, "age", now.Sub(entry.Seen))
+			delete(m.entries, id)
+		}
+	}
+}
+
 func parseTXT(fields []string) (id, pub string) {
 	for _, f := range fields {
-		if len(f) > 3 && f[:3] == "id=" {
+		switch {
+		case strings.HasPrefix(f, "id="):
 			id = f[3:]
-		} else if len(f) > 4 && f[:4] == "pub=" {
+		case strings.HasPrefix(f, "pub="):
 			pub = f[4:]
 		}
 	}

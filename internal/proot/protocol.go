@@ -7,28 +7,28 @@ type MessageType string
 
 const (
 	// Requests (Doki → doki-proot)
-	TypeExec       MessageType = "exec"
-	TypeConfig     MessageType = "config"
-	TypeSignal     MessageType = "signal"
-	TypeHealth     MessageType = "health"
-	TypeShutdown   MessageType = "shutdown"
-	TypeSubscribe  MessageType = "subscribe"
+	TypeExec        MessageType = "exec"
+	TypeConfig      MessageType = "config"
+	TypeSignal      MessageType = "signal"
+	TypeHealth      MessageType = "health"
+	TypeShutdown    MessageType = "shutdown"
+	TypeSubscribe   MessageType = "subscribe"
 	TypeUnsubscribe MessageType = "unsubscribe"
 
 	// Responses (doki-proot → Doki)
-	TypeStdout     MessageType = "stdout"
-	TypeStderr     MessageType = "stderr"
-	TypeExit       MessageType = "exit"
-	TypeReady      MessageType = "ready"
-	TypeError      MessageType = "error"
-	TypeExecError  MessageType = "exec_error"
-	TypeConfigAck  MessageType = "config_ack"
-	TypeSignalAck  MessageType = "signal_ack"
-	TypeHealthResp MessageType = "health"
-	TypeShutdownAck MessageType = "shutdown_ack"
-	TypeSubscribeAck MessageType = "subscribe_ack"
+	TypeStdout         MessageType = "stdout"
+	TypeStderr         MessageType = "stderr"
+	TypeExit           MessageType = "exit"
+	TypeReady          MessageType = "ready"
+	TypeError          MessageType = "error"
+	TypeExecError      MessageType = "exec_error"
+	TypeConfigAck      MessageType = "config_ack"
+	TypeSignalAck      MessageType = "signal_ack"
+	TypeHealthResp     MessageType = "health"
+	TypeShutdownAck    MessageType = "shutdown_ack"
+	TypeSubscribeAck   MessageType = "subscribe_ack"
 	TypeUnsubscribeAck MessageType = "unsubscribe_ack"
-	TypeLog        MessageType = "log"
+	TypeLog            MessageType = "log"
 )
 
 // Request is a message sent to the doki-proot daemon.
@@ -52,14 +52,14 @@ type PortMap struct {
 
 // Response is a message received from the doki-proot daemon.
 type Response struct {
-	Type     MessageType `json:"type"`
-	ID       string      `json:"id,omitempty"`
-	Data     string      `json:"data,omitempty"`
-	Code     int         `json:"code,omitempty"`
-	Status   string      `json:"status,omitempty"`
-	PID      int         `json:"pid,omitempty"`
-	Socket   string      `json:"socket,omitempty"`
-	Msg      string      `json:"msg,omitempty"`
+	Type   MessageType `json:"type"`
+	ID     string      `json:"id,omitempty"`
+	Data   string      `json:"data,omitempty"`
+	Code   int         `json:"code,omitempty"`
+	Status string      `json:"status,omitempty"`
+	PID    int         `json:"pid,omitempty"`
+	Socket string      `json:"socket,omitempty"`
+	Msg    string      `json:"msg,omitempty"`
 }
 
 // Marshal serializes the request to newline-delimited JSON.
@@ -103,8 +103,8 @@ func NewSignalRequest(id string, sig string) *Request {
 // NewConfigRequest creates a config request.
 func NewConfigRequest(hidden []string, ports []PortMap) *Request {
 	return &Request{
-		Type:   TypeConfig,
-		Hidden: hidden,
+		Type:    TypeConfig,
+		Hidden:  hidden,
 		PortMap: ports,
 	}
 }

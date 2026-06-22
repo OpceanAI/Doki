@@ -21,6 +21,7 @@ type VMM struct {
 	vms    map[string]*dokivm.MicroVM
 	cfg    *dokivm.VMMConfig
 	binary string
+	vmCfg  *dokivm.VMConfig
 }
 
 func New(cfg *dokivm.VMMConfig) (*VMM, error) {
@@ -55,6 +56,7 @@ func (v *VMM) Create(_ context.Context, vmCfg *dokivm.VMConfig) (*dokivm.MicroVM
 		State:     dokivm.VMStateCreated,
 		CreatedAt: time.Now(),
 	}
+	v.vmCfg = vmCfg
 	v.vms[vm.ID] = vm
 	return vm, nil
 }
@@ -67,18 +69,69 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 		return fmt.Errorf("vm %s not found", vmID)
 	}
 
+	vcpus := 1
+	if v.vmCfg != nil && v.vmCfg.CPUs > 0 {
+		vcpus = v.vmCfg.CPUs
+	}
+	mem := 128
+	if v.vmCfg != nil && v.vmCfg.Memory > 0 {
+		mem = v.vmCfg.Memory
+	}
+	kernel := filepath.Join(v.cfg.KernelPath)
+	if v.vmCfg != nil && v.vmCfg.Kernel != "" {
+		kernel = v.vmCfg.Kernel
+	}
+	kernelArgs := "console=ttyS0 quiet doki.init=1 root=/dev/vda rw"
+	if v.vmCfg != nil && v.vmCfg.KernelArgs != "" {
+		kernelArgs = v.vmCfg.KernelArgs
+	}
+	rootfs := filepath.Join(v.cfg.WorkDir, vmID, "rootfs.ext4")
+	if v.vmCfg != nil && v.vmCfg.Rootfs != "" {
+		rootfs = v.vmCfg.Rootfs
+	}
+
 	args := []string{
 		"-M", "microvm,accel=kvm:tcg",
-		"-m", "128M",
+		"-smp", fmt.Sprintf("%d", vcpus),
+		"-m", fmt.Sprintf("%dM", mem),
 		"-nodefaults", "-no-user-config", "-nographic",
-		"-kernel", filepath.Join(v.cfg.KernelPath),
-		"-append", "console=ttyS0 quiet doki.init=1 root=/dev/vda rw",
-		"-drive", fmt.Sprintf("file=%s/rootfs.ext4,format=raw,if=none,id=drive0", filepath.Join(v.cfg.WorkDir, vmID)),
+		"-kernel", kernel,
+		"-append", kernelArgs,
+		"-drive", fmt.Sprintf("file=%s,format=raw,if=none,id=drive0", rootfs),
 		"-device", "virtio-blk-device,drive=drive0",
-		"-netdev", "user,id=net0,hostfwd=tcp::8080-:80",
-		"-device", "virtio-net-device,netdev=net0",
-		"-serial", "stdio",
 	}
+
+	netType := "user"
+	if v.vmCfg != nil && v.vmCfg.Network != nil && v.vmCfg.Network.Type != "" {
+		netType = v.vmCfg.Network.Type
+	}
+	switch netType {
+	case "tap":
+		tapName := "doki0"
+		if v.vmCfg.Network != nil && v.vmCfg.Network.TapName != "" {
+			tapName = v.vmCfg.Network.TapName
+		}
+		args = append(args, "-netdev", fmt.Sprintf("tap,id=net0,ifname=%s,script=no,downscript=no", tapName))
+		args = append(args, "-device", "virtio-net-device,netdev=net0")
+	case "none":
+	default:
+		args = append(args, "-netdev", "user,id=net0,hostfwd=tcp::8080-:80")
+		args = append(args, "-device", "virtio-net-device,netdev=net0")
+	}
+
+	if v.vmCfg != nil && v.vmCfg.Vsock != nil {
+		args = append(args, "-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", v.vmCfg.Vsock.CID))
+	}
+
+	if v.vmCfg != nil {
+		for i, d := range v.vmCfg.ExtraDrives {
+			id := fmt.Sprintf("drive%d", i+1)
+			args = append(args, "-drive", fmt.Sprintf("file=%s,format=raw,if=none,id=%s", d.Path, id))
+			args = append(args, "-device", fmt.Sprintf("virtio-blk-device,drive=%s", id))
+		}
+	}
+
+	args = append(args, "-serial", "stdio")
 
 	cmd := exec.CommandContext(ctx, v.binary, args...)
 	cmd.Stdout = os.Stdout
@@ -121,7 +174,9 @@ func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) erro
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	v.mu.Lock()
 	vm.State = dokivm.VMStateStopped
+	v.mu.Unlock()
 	return nil
 }
 
@@ -134,7 +189,9 @@ func (v *VMM) Kill(_ context.Context, vmID string) error {
 	}
 	proc, _ := os.FindProcess(vm.PID)
 	_ = proc.Signal(syscall.SIGKILL)
+	v.mu.Lock()
 	vm.State = dokivm.VMStateStopped
+	v.mu.Unlock()
 	return nil
 }
 
@@ -151,9 +208,11 @@ func (v *VMM) State(_ context.Context, vmID string) (dokivm.VMState, error) {
 func (v *VMM) Exec(_ context.Context, _ string, _ []string, _ []string, _ bool) error {
 	return fmt.Errorf("exec not implemented")
 }
-func (v *VMM) Attach(_ context.Context, _ string) error                    { return nil }
-func (v *VMM) Logs(_ context.Context, _ string) (io.Reader, error)        { return nil, nil }
-func (v *VMM) Stats(_ context.Context, _ string) (*dokivm.VMStats, error) { return &dokivm.VMStats{}, nil }
+func (v *VMM) Attach(_ context.Context, _ string) error            { return nil }
+func (v *VMM) Logs(_ context.Context, _ string) (io.Reader, error) { return nil, nil }
+func (v *VMM) Stats(_ context.Context, _ string) (*dokivm.VMStats, error) {
+	return &dokivm.VMStats{}, nil
+}
 func (v *VMM) Cleanup(_ context.Context, vmID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()

@@ -10,7 +10,10 @@ import (
 
 func TestSecretManagerCreateAndGet(t *testing.T) {
 	dir := t.TempDir()
-	sm := NewSecretManager(dir)
+	sm, err := NewSecretManager(dir)
+	if err != nil {
+		t.Fatalf("NewSecretManager: %v", err)
+	}
 
 	secret, err := sm.Create("api-key", []byte("super-secret"), "", map[string]string{"env": "prod"})
 	if err != nil {
@@ -42,7 +45,10 @@ func TestSecretManagerCreateAndGet(t *testing.T) {
 
 func TestSecretManagerValidation(t *testing.T) {
 	dir := t.TempDir()
-	sm := NewSecretManager(dir)
+	sm, err := NewSecretManager(dir)
+	if err != nil {
+		t.Fatalf("NewSecretManager: %v", err)
+	}
 	if _, err := sm.Create("", []byte("x"), "", nil); err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -50,11 +56,14 @@ func TestSecretManagerValidation(t *testing.T) {
 
 func TestSecretManagerDuplicateDetectedByName(t *testing.T) {
 	dir := t.TempDir()
-	sm := NewSecretManager(dir)
+	sm, err := NewSecretManager(dir)
+	if err != nil {
+		t.Fatalf("NewSecretManager: %v", err)
+	}
 	if _, err := sm.Create("dup", []byte("a"), "", nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	_, err := sm.Create("dup", []byte("b"), "", nil)
+	_, err = sm.Create("dup", []byte("b"), "", nil)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected duplicate error, got %v", err)
 	}
@@ -62,7 +71,10 @@ func TestSecretManagerDuplicateDetectedByName(t *testing.T) {
 
 func TestSecretManagerRemove(t *testing.T) {
 	dir := t.TempDir()
-	sm := NewSecretManager(dir)
+	sm, err := NewSecretManager(dir)
+	if err != nil {
+		t.Fatalf("NewSecretManager: %v", err)
+	}
 	secret, err := sm.Create("to-remove", []byte("value"), "", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -86,12 +98,18 @@ func TestSecretManagerRemove(t *testing.T) {
 
 func TestSecretManagerPersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
-	sm1 := NewSecretManager(dir)
+	sm1, err := NewSecretManager(dir)
+	if err != nil {
+		t.Fatalf("NewSecretManager: %v", err)
+	}
 	if _, err := sm1.Create("persist", []byte("payload"), "", nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	sm2 := NewSecretManager(dir)
+	sm2, err2 := NewSecretManager(dir)
+	if err2 != nil {
+		t.Fatalf("NewSecretManager: %v", err2)
+	}
 	got, err := sm2.GetData("persist")
 	if err != nil {
 		t.Fatalf("GetData after restart: %v", err)

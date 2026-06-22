@@ -4,9 +4,9 @@ package deps
 
 import (
 	// OCI specifications
+	_ "github.com/opencontainers/go-digest"
 	_ "github.com/opencontainers/image-spec/specs-go/v1"
 	_ "github.com/opencontainers/runtime-spec/specs-go"
-	_ "github.com/opencontainers/go-digest"
 	_ "github.com/opencontainers/selinux/go-selinux"
 
 	// gRPC and Protobuf (for CRI)

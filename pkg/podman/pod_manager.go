@@ -13,19 +13,21 @@ import (
 )
 
 type PodManager struct {
-	mu     sync.RWMutex
-	pods   map[string]*Pod
-	store  string
+	mu    sync.RWMutex
+	pods  map[string]*Pod
+	store string
 }
 
-func NewPodManager(root string) *PodManager {
+func NewPodManager(root string) (*PodManager, error) {
 	pm := &PodManager{
 		pods:  make(map[string]*Pod),
 		store: filepath.Join(root, "pods"),
 	}
-	_ = os.MkdirAll(pm.store, 0755)
+	if err := os.MkdirAll(pm.store, 0750); err != nil {
+		return nil, fmt.Errorf("podman: create pod store %s: %w", pm.store, err)
+	}
 	pm.loadPods()
-	return pm
+	return pm, nil
 }
 
 func (pm *PodManager) CreatePod(cfg *PodCreateConfig) (*Pod, error) {
@@ -38,6 +40,9 @@ func (pm *PodManager) CreatePod(cfg *PodCreateConfig) (*Pod, error) {
 	if cfg.Name == "" {
 		return nil, fmt.Errorf("pod name is required")
 	}
+	if !common.ValidContainerName(cfg.Name) {
+		return nil, fmt.Errorf("pod name %q contains invalid characters", cfg.Name)
+	}
 
 	for _, existing := range pm.pods {
 		if existing.Name == cfg.Name {
@@ -49,6 +54,7 @@ func (pm *PodManager) CreatePod(cfg *PodCreateConfig) (*Pod, error) {
 	if infraImage == "" {
 		infraImage = "registry.k8s.io/pause:3.9"
 	}
+	_ = infraImage // retained for future infra container creation
 
 	exitPolicy := cfg.ExitPolicy
 	if exitPolicy == "" {
@@ -61,26 +67,33 @@ func (pm *PodManager) CreatePod(cfg *PodCreateConfig) (*Pod, error) {
 	}
 
 	pod := &Pod{
-		ID:         generateID(),
-		Name:       cfg.Name,
-		Created:    time.Now(),
-		Hostname:   cfg.Hostname,
-		Labels:     cfg.Labels,
-		State:      "Created",
-		Containers: []PodContainer{},
-		InfraID:    generateID(),
-		SharedNS:   sharedNS,
-		ExitPolicy: exitPolicy,
-		CPUShares:  cfg.CPUShares,
+		ID:          generateID(),
+		Name:        cfg.Name,
+		Created:     time.Now(),
+		Hostname:    cfg.Hostname,
+		Labels:      cfg.Labels,
+		State:       "Created",
+		Containers:  []PodContainer{},
+		InfraID:     generateID(),
+		SharedNS:    sharedNS,
+		ExitPolicy:  exitPolicy,
+		CPUShares:   cfg.CPUShares,
 		MemoryLimit: cfg.MemoryLimit,
-		Restart:    cfg.Restart,
+		Restart:     cfg.Restart,
 	}
 
-	pod.Containers = append(pod.Containers, PodContainer{
-		ID:    pod.InfraID,
-		Name:  cfg.InfraName,
-		State: "running",
-	})
+	// Only create an infra container if NoInfra is not set.
+	if !cfg.NoInfra {
+		infraName := cfg.InfraName
+		if infraName == "" {
+			infraName = cfg.Name + "-infra"
+		}
+		pod.Containers = append(pod.Containers, PodContainer{
+			ID:    pod.InfraID,
+			Name:  infraName,
+			State: "running",
+		})
+	}
 
 	pm.pods[pod.ID] = pod
 	if err := pm.savePod(pod); err != nil {
@@ -95,17 +108,33 @@ func (pm *PodManager) GetPod(nameOrID string) (*Pod, error) {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 
-	if pod, ok := pm.pods[nameOrID]; ok {
-		return pod, nil
-	}
-
-	for _, pod := range pm.pods {
-		if pod.Name == nameOrID {
-			return pod, nil
+	var pod *Pod
+	if p, ok := pm.pods[nameOrID]; ok {
+		pod = p
+	} else {
+		for _, p := range pm.pods {
+			if p.Name == nameOrID {
+				pod = p
+				break
+			}
 		}
 	}
-
-	return nil, fmt.Errorf("pod %s not found", nameOrID)
+	if pod == nil {
+		return nil, fmt.Errorf("pod %s not found", nameOrID)
+	}
+	// Return a deep copy to avoid data race.
+	cp := *pod
+	if pod.Containers != nil {
+		cp.Containers = make([]PodContainer, len(pod.Containers))
+		copy(cp.Containers, pod.Containers)
+	}
+	if pod.Labels != nil {
+		cp.Labels = make(map[string]string, len(pod.Labels))
+		for k, v := range pod.Labels {
+			cp.Labels[k] = v
+		}
+	}
+	return &cp, nil
 }
 
 func (pm *PodManager) ListPods() []*Pod {
@@ -114,7 +143,18 @@ func (pm *PodManager) ListPods() []*Pod {
 
 	pods := make([]*Pod, 0, len(pm.pods))
 	for _, pod := range pm.pods {
-		pods = append(pods, pod)
+		cp := *pod
+		if pod.Containers != nil {
+			cp.Containers = make([]PodContainer, len(pod.Containers))
+			copy(cp.Containers, pod.Containers)
+		}
+		if pod.Labels != nil {
+			cp.Labels = make(map[string]string, len(pod.Labels))
+			for k, v := range pod.Labels {
+				cp.Labels[k] = v
+			}
+		}
+		pods = append(pods, &cp)
 	}
 	return pods
 }
@@ -158,7 +198,7 @@ func (pm *PodManager) RestartPod(nameOrID string) error {
 	return pm.savePod(pod)
 }
 
-func (pm *PodManager) KillPod(nameOrID string, _ string) error {
+func (pm *PodManager) KillPod(nameOrID string, signal string) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -167,7 +207,13 @@ func (pm *PodManager) KillPod(nameOrID string, _ string) error {
 		return err
 	}
 
+	// Record the signal used (for inspection). The actual signal
+	// delivery to containers happens when wired to the runtime.
+	if signal == "" {
+		signal = "SIGTERM"
+	}
 	pod.State = "Exited"
+	pod.ExitSignal = signal
 	return pm.savePod(pod)
 }
 
@@ -239,13 +285,28 @@ func (pm *PodManager) PrunePods() []string {
 
 	var removed []string
 	for id, pod := range pm.pods {
-		if pod.State == "Exited" || pod.State == "Stopped" {
-			delete(pm.pods, id)
-			if err := pm.removePodFile(id); err != nil {
-				log.Printf("podman: prune remove pod %s: %v", id, err)
-			}
-			removed = append(removed, id)
+		// Only prune pods that are Exited or Stopped AND have no
+		// running containers. A stopped pod with running app
+		// containers should not be pruned (would orphan them).
+		if pod.State != "Exited" && pod.State != "Stopped" {
+			continue
 		}
+		hasRunning := false
+		for _, c := range pod.Containers {
+			if c.State == "running" || c.State == "Running" {
+				hasRunning = true
+				break
+			}
+		}
+		if hasRunning {
+			continue
+		}
+		delete(pm.pods, id)
+		if err := pm.removePodFile(id); err != nil {
+			// Log but continue pruning other pods.
+			_ = err
+		}
+		removed = append(removed, id)
 	}
 	return removed
 }
@@ -275,6 +336,32 @@ func (pm *PodManager) AddContainerToPod(podID string, containerID, containerName
 	return pm.savePod(pod)
 }
 
+// RemoveContainerFromPod removes a container from a pod by ID or name.
+func (pm *PodManager) RemoveContainerFromPod(podID, containerIDOrName string) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	pod, err := pm.findPodLocked(podID)
+	if err != nil {
+		return err
+	}
+
+	filtered := make([]PodContainer, 0, len(pod.Containers))
+	removed := false
+	for _, c := range pod.Containers {
+		if c.ID == containerIDOrName || c.Name == containerIDOrName {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	if !removed {
+		return fmt.Errorf("container %s not found in pod %s", containerIDOrName, podID)
+	}
+	pod.Containers = filtered
+	return pm.savePod(pod)
+}
+
 func (pm *PodManager) findPodLocked(nameOrID string) (*Pod, error) {
 	if pod, ok := pm.pods[nameOrID]; ok {
 		return pod, nil
@@ -293,7 +380,7 @@ func (pm *PodManager) savePod(pod *Pod) error {
 		return fmt.Errorf("marshal pod %s: %w", pod.ID, err)
 	}
 	path := filepath.Join(pm.store, pod.ID+".json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write pod %s: %w", pod.ID, err)
 	}
 	return nil

@@ -114,11 +114,11 @@ func (m *Manager) Driver() Driver {
 
 // StorageStats returns storage statistics.
 type StorageStats struct {
-	DriverName  string `json:"driver_name"`
-	RootPath    string `json:"root_path"`
-	LayerCount  int    `json:"layer_count"`
-	TotalSize   int64  `json:"total_size"`
-	FreeSpace   int64  `json:"free_space"`
+	DriverName string `json:"driver_name"`
+	RootPath   string `json:"root_path"`
+	LayerCount int    `json:"layer_count"`
+	TotalSize  int64  `json:"total_size"`
+	FreeSpace  int64  `json:"free_space"`
 }
 
 // Stats returns storage statistics.
@@ -186,11 +186,11 @@ func canUseOverlay2() bool {
 
 // FuseOverlayFSDriver implements the Driver interface using fuse-overlayfs.
 type FuseOverlayFSDriver struct {
-	root      string
-	layerDir  string
-	mergeDir  string
-	upperDir  string
-	workDir   string
+	root     string
+	layerDir string
+	mergeDir string
+	upperDir string
+	workDir  string
 }
 
 // NewFuseOverlayFSDriver creates a new fuse-overlayfs driver.

@@ -2,8 +2,8 @@
 package network
 
 import (
-	crypto_rand "crypto/rand"
 	"context"
+	crypto_rand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -587,8 +587,8 @@ func (m *Manager) SetupNetwork(containerID string, containerPid int, networkName
 		if ep == nil {
 			// No endpoint yet — create one with IP allocation.
 			ep = &Endpoint{
-				EndpointID: common.GenerateID(64),
-				MacAddress: generateMacAddr(),
+				EndpointID:  common.GenerateID(64),
+				MacAddress:  generateMacAddr(),
 				IPv4Address: m.allocateIP(nw),
 			}
 			nw.Containers[containerID] = ep

@@ -15,9 +15,9 @@ import (
 type WatchAction string
 
 const (
-	WatchSync         WatchAction = "sync"
-	WatchRebuild      WatchAction = "rebuild"
-	WatchSyncRestart  WatchAction = "sync+restart"
+	WatchSync        WatchAction = "sync"
+	WatchRebuild     WatchAction = "rebuild"
+	WatchSyncRestart WatchAction = "sync+restart"
 )
 
 type WatchRule struct {
@@ -32,20 +32,20 @@ type DevelopConfig struct {
 }
 
 type WatchManager struct {
-	engine     *Engine
-	watchers   map[string]*ServiceWatcher
-	logger     *slog.Logger
-	mu         sync.RWMutex
+	engine   *Engine
+	watchers map[string]*ServiceWatcher
+	logger   *slog.Logger
+	mu       sync.RWMutex
 }
 
 type ServiceWatcher struct {
-	service  string
-	rules    []WatchRule
-	watcher  *fsnotify.Watcher
-	manager  *WatchManager
-	debounce time.Duration
+	service   string
+	rules     []WatchRule
+	watcher   *fsnotify.Watcher
+	manager   *WatchManager
+	debounce  time.Duration
 	lastEvent map[string]time.Time
-	mu       sync.Mutex
+	mu        sync.Mutex
 }
 
 func NewWatchManager(engine *Engine, logger *slog.Logger) *WatchManager {

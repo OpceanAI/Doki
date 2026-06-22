@@ -29,12 +29,12 @@ const (
 
 // Client provides access to an OCI/Docker registry.
 type Client struct {
-	httpClient  *http.Client
-	userAgent   string
-	basicUser   string
-	basicPass   string
-	tokens      map[string]*tokenCache
-	mu          sync.RWMutex
+	httpClient *http.Client
+	userAgent  string
+	basicUser  string
+	basicPass  string
+	tokens     map[string]*tokenCache
+	mu         sync.RWMutex
 }
 
 type tokenCache struct {
@@ -164,8 +164,8 @@ type ManifestBlob struct {
 
 // ManifestList represents an OCI image index or Docker manifest list.
 type ManifestList struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	MediaType     string            `json:"mediaType"`
+	SchemaVersion int                 `json:"schemaVersion"`
+	MediaType     string              `json:"mediaType"`
 	Manifests     []ManifestListEntry `json:"manifests"`
 }
 
@@ -174,7 +174,7 @@ type ManifestListEntry struct {
 	MediaType   string            `json:"mediaType"`
 	Size        int64             `json:"size"`
 	Digest      string            `json:"digest"`
-	Platform    *Platform          `json:"platform"`
+	Platform    *Platform         `json:"platform"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 

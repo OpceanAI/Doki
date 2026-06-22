@@ -19,18 +19,18 @@ type Manager struct {
 
 // Config holds cgroup configuration.
 type Config struct {
-	CPUPeriod    uint64
-	CPUQuota     int64
-	CPUShares    uint64
-	CpusetCpus   string
-	CpusetMems   string
-	Memory       int64
-	MemorySwap   int64
+	CPUPeriod        uint64
+	CPUQuota         int64
+	CPUShares        uint64
+	CpusetCpus       string
+	CpusetMems       string
+	Memory           int64
+	MemorySwap       int64
 	MemorySwappiness *uint64
-	PidsLimit    int64
-	BlkioWeight  uint16
-	NanoCpus     int64
-	OomKillDisable bool
+	PidsLimit        int64
+	BlkioWeight      uint16
+	NanoCpus         int64
+	OomKillDisable   bool
 }
 
 // NewManager creates a new cgroup manager.

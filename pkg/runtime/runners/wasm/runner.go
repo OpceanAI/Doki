@@ -216,6 +216,7 @@ func (b *WasmEdgeBackend) Detect() bool {
 	}
 	return err == nil
 }
+
 // Run executes a WASM module with WasmEdge.
 func (b *WasmEdgeBackend) Run(ctx context.Context, wasmPath string, cfg *WASMConfig) (int, error) {
 	args := []string{"--dir", "/:" + cfg.Rootfs}
@@ -235,6 +236,7 @@ func (b *WasmEdgeBackend) Run(ctx context.Context, wasmPath string, cfg *WASMCon
 	}
 	return cmd.Process.Pid, nil
 }
+
 // Stop kills a process by PID.
 func (b *WasmEdgeBackend) Stop(pid int) error {
 	p, err := os.FindProcess(pid)
@@ -260,6 +262,7 @@ func (b *WAMRBackend) Detect() bool {
 	}
 	return err == nil
 }
+
 // Run executes a WASM module with WAMR.
 func (b *WAMRBackend) Run(ctx context.Context, wasmPath string, cfg *WASMConfig) (int, error) {
 	args := []string{"--dir", cfg.Rootfs}
@@ -274,6 +277,7 @@ func (b *WAMRBackend) Run(ctx context.Context, wasmPath string, cfg *WASMConfig)
 	}
 	return cmd.Process.Pid, nil
 }
+
 // Stop kills a process by PID.
 func (b *WAMRBackend) Stop(pid int) error {
 	p, err := os.FindProcess(pid)
@@ -299,6 +303,7 @@ func (b *WasmtimeBackend) Detect() bool {
 	}
 	return err == nil
 }
+
 // Run executes a WASM module with Wasmtime.
 func (b *WasmtimeBackend) Run(ctx context.Context, wasmPath string, cfg *WASMConfig) (int, error) {
 	args := []string{"--dir", "/:" + cfg.Rootfs}
@@ -313,6 +318,7 @@ func (b *WasmtimeBackend) Run(ctx context.Context, wasmPath string, cfg *WASMCon
 	}
 	return cmd.Process.Pid, nil
 }
+
 // Stop kills a process by PID.
 func (b *WasmtimeBackend) Stop(pid int) error {
 	p, err := os.FindProcess(pid)

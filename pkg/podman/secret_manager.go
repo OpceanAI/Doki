@@ -10,9 +10,31 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/OpceanAI/Doki/pkg/common"
 )
+
+// validateSecretName rejects names that could escape the secret store
+// directory via path traversal (e.g. "../etc/passwd"). This prevents
+// arbitrary file write/delete through symlink creation.
+func validateSecretName(name string) error {
+	if name == "" {
+		return fmt.Errorf("secret name is required")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("secret name %q contains path separator", name)
+	}
+	if name == "." || name == ".." || strings.Contains(name, "..") {
+		return fmt.Errorf("secret name %q contains path traversal sequence", name)
+	}
+	if !common.ValidContainerName(name) {
+		return fmt.Errorf("secret name %q contains invalid characters", name)
+	}
+	return nil
+}
 
 type SecretManager struct {
 	mu      sync.RWMutex
@@ -21,30 +43,30 @@ type SecretManager struct {
 	key     []byte
 }
 
-func NewSecretManager(root string) *SecretManager {
+func NewSecretManager(root string) (*SecretManager, error) {
 	sm := &SecretManager{
 		secrets: make(map[string]*Secret),
 		store:   filepath.Join(root, "secrets"),
 	}
 	if err := os.MkdirAll(sm.store, 0700); err != nil {
-		log.Printf("podman: create secret store %s: %v", sm.store, err)
+		return nil, fmt.Errorf("podman: create secret store %s: %w", sm.store, err)
 	}
 	if err := os.MkdirAll(filepath.Join(sm.store, "names"), 0700); err != nil {
-		log.Printf("podman: create names dir: %v", err)
+		return nil, fmt.Errorf("podman: create names dir: %w", err)
 	}
 	if err := sm.loadKey(); err != nil {
-		log.Printf("podman: load secret key: %v", err)
+		return nil, fmt.Errorf("podman: load secret key: %w", err)
 	}
 	sm.loadSecrets()
-	return sm
+	return sm, nil
 }
 
 func (sm *SecretManager) Create(name string, data []byte, driver string, labels map[string]string) (*Secret, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if name == "" {
-		return nil, fmt.Errorf("secret name is required")
+	if err := validateSecretName(name); err != nil {
+		return nil, err
 	}
 
 	for _, s := range sm.secrets {
@@ -104,15 +126,24 @@ func (sm *SecretManager) Get(nameOrID string) (*Secret, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	if s, ok := sm.secrets[nameOrID]; ok {
-		return s, nil
-	}
-	for _, s := range sm.secrets {
-		if s.Spec.Name == nameOrID {
-			return s, nil
+	var s *Secret
+	if sec, ok := sm.secrets[nameOrID]; ok {
+		s = sec
+	} else {
+		for _, sec := range sm.secrets {
+			if sec.Spec.Name == nameOrID {
+				s = sec
+				break
+			}
 		}
 	}
-	return nil, fmt.Errorf("secret %s not found", nameOrID)
+	if s == nil {
+		return nil, fmt.Errorf("secret %s not found", nameOrID)
+	}
+	// Return a deep copy to avoid data race when caller marshals or
+	// mutates the secret outside the lock.
+	cp := *s
+	return &cp, nil
 }
 
 func (sm *SecretManager) GetData(nameOrID string) ([]byte, error) {
@@ -148,7 +179,8 @@ func (sm *SecretManager) ListSecrets() []*Secret {
 
 	result := make([]*Secret, 0, len(sm.secrets))
 	for _, s := range sm.secrets {
-		result = append(result, s)
+		cp := *s
+		result = append(result, &cp)
 	}
 	return result
 }
@@ -170,6 +202,12 @@ func (sm *SecretManager) Remove(nameOrID string) error {
 	}
 	if secret == nil {
 		return fmt.Errorf("secret %s not found", nameOrID)
+	}
+
+	// Validate the stored name before using it in a path, as defense
+	// in depth against corrupted on-disk data.
+	if err := validateSecretName(secret.Spec.Name); err != nil {
+		return fmt.Errorf("remove secret: %w", err)
 	}
 
 	if err := os.Remove(filepath.Join(sm.store, secret.ID+".enc")); err != nil && !os.IsNotExist(err) {

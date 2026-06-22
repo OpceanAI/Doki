@@ -183,4 +183,3 @@ func UnloadProfile(name string) error {
 	}
 	return nil
 }
-

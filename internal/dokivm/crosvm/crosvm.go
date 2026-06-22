@@ -210,16 +210,16 @@ func (v *VMM) State(_ context.Context, vmID string) (dokivm.VMState, error) {
 	return vm.State, nil
 }
 
-func (v *VMM) Exec(_ context.Context, _ string, _ []string, _ []string, _ bool) error     {
+func (v *VMM) Exec(_ context.Context, _ string, _ []string, _ []string, _ bool) error {
 	return fmt.Errorf("exec via vsock not implemented")
 }
-func (v *VMM) Attach(_ context.Context, _ string) error                                          {
+func (v *VMM) Attach(_ context.Context, _ string) error {
 	return fmt.Errorf("attach not implemented")
 }
-func (v *VMM) Logs(_ context.Context, _ string) (io.Reader, error)                              {
+func (v *VMM) Logs(_ context.Context, _ string) (io.Reader, error) {
 	return nil, fmt.Errorf("logs not implemented")
 }
-func (v *VMM) Stats(_ context.Context, _ string) (*dokivm.VMStats, error)                       {
+func (v *VMM) Stats(_ context.Context, _ string) (*dokivm.VMStats, error) {
 	return &dokivm.VMStats{}, nil
 }
 func (v *VMM) Cleanup(_ context.Context, vmID string) error {

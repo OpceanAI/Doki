@@ -24,72 +24,72 @@ import (
 
 // ComposeFile represents a docki-compose file (doki.yml).
 type ComposeFile struct {
-	Version  string               `yaml:"version,omitempty"`
-	Name     string               `yaml:"name,omitempty"`
-	Services map[string]*Service   `yaml:"services"`
-	Networks map[string]*Network   `yaml:"networks,omitempty"`
-	Volumes  map[string]*Volume    `yaml:"volumes,omitempty"`
-	Configs  map[string]*Config    `yaml:"configs,omitempty"`
-	Secrets  map[string]*Secret    `yaml:"secrets,omitempty"`
-	Include  []string              `yaml:"include,omitempty"`
+	Version  string              `yaml:"version,omitempty"`
+	Name     string              `yaml:"name,omitempty"`
+	Services map[string]*Service `yaml:"services"`
+	Networks map[string]*Network `yaml:"networks,omitempty"`
+	Volumes  map[string]*Volume  `yaml:"volumes,omitempty"`
+	Configs  map[string]*Config  `yaml:"configs,omitempty"`
+	Secrets  map[string]*Secret  `yaml:"secrets,omitempty"`
+	Include  []string            `yaml:"include,omitempty"`
 }
 
 // Service represents a service (container) in the compose file.
 type Service struct {
-	Image        string              `yaml:"image,omitempty"`
-	Build        *BuildConfig        `yaml:"build,omitempty"`
-	Command      interface{}         `yaml:"command,omitempty"`
-	Entrypoint   interface{}         `yaml:"entrypoint,omitempty"`
-	Environment  interface{}         `yaml:"environment,omitempty"`
-	EnvFile      interface{}         `yaml:"env_file,omitempty"`
-	Ports        interface{}         `yaml:"ports,omitempty"`
-	Expose       []string            `yaml:"expose,omitempty"`
-	Volumes      interface{}         `yaml:"volumes,omitempty"`
-	Networks     interface{}         `yaml:"networks,omitempty"`
-	NetworkMode  string              `yaml:"network_mode,omitempty"`
-	DependsOn    interface{}         `yaml:"depends_on,omitempty"`
-	Restart      string              `yaml:"restart,omitempty"`
-	Labels       interface{}         `yaml:"labels,omitempty"`
-	WorkingDir   string              `yaml:"working_dir,omitempty"`
-	User         string              `yaml:"user,omitempty"`
-	Hostname     string              `yaml:"hostname,omitempty"`
-	Domainname   string              `yaml:"domainname,omitempty"`
-	Tty          bool                `yaml:"tty,omitempty"`
-	StdinOpen    bool                `yaml:"stdin_open,omitempty"`
-	Privileged   bool                `yaml:"privileged,omitempty"`
-	ReadOnly     bool                `yaml:"read_only,omitempty"`
-	Init         bool                `yaml:"init,omitempty"`
-	DNS          interface{}         `yaml:"dns,omitempty"`
-	DNSSearch    interface{}         `yaml:"dns_search,omitempty"`
-	DNSOpt       interface{}         `yaml:"dns_opt,omitempty"`
-	ExtraHosts   interface{}         `yaml:"extra_hosts,omitempty"`
-	CapAdd       []string            `yaml:"cap_add,omitempty"`
-	CapDrop      []string            `yaml:"cap_drop,omitempty"`
-	SecurityOpt  []string            `yaml:"security_opt,omitempty"`
-	Sysctls      map[string]string   `yaml:"sysctls,omitempty"`
-	Healthcheck  *HealthcheckConfig  `yaml:"healthcheck,omitempty"`
-	StopSignal   string              `yaml:"stop_signal,omitempty"`
-	StopGracePeriod string           `yaml:"stop_grace_period,omitempty"`
-	Deploy       *DeployConfig       `yaml:"deploy,omitempty"`
-	Profile      string              `yaml:"profile,omitempty"`
-	Profiles     []string            `yaml:"profiles,omitempty"`
-	Extends      interface{}         `yaml:"extends,omitempty"`
-	Secrets      []string            `yaml:"secrets,omitempty"`
-	Configs      []string            `yaml:"configs,omitempty"`
-	ContainerName string             `yaml:"container_name,omitempty"`
-	ShmSize      string              `yaml:"shm_size,omitempty"`
-	PidsLimit    int64               `yaml:"pids_limit,omitempty"`
-	OomKillDisable bool              `yaml:"oom_kill_disable,omitempty"`
-	OomScoreAdj  int                 `yaml:"oom_score_adj,omitempty"`
-	MacAddress   string              `yaml:"mac_address,omitempty"`
-	Logging      *LoggingConfig      `yaml:"logging,omitempty"`
-	Ulimits      map[string]interface{} `yaml:"ulimits,omitempty"`
-	Tmpfs        interface{}         `yaml:"tmpfs,omitempty"`
-	BlkioConfig  map[string]interface{} `yaml:"blkio_config,omitempty"`
-	Devices      []string            `yaml:"devices,omitempty"`
-	Platform     string              `yaml:"platform,omitempty"`
-	Runtime      string              `yaml:"runtime,omitempty"`
-	Scale        int                 `yaml:"scale,omitempty"`
+	Image           string                 `yaml:"image,omitempty"`
+	Build           *BuildConfig           `yaml:"build,omitempty"`
+	Command         interface{}            `yaml:"command,omitempty"`
+	Entrypoint      interface{}            `yaml:"entrypoint,omitempty"`
+	Environment     interface{}            `yaml:"environment,omitempty"`
+	EnvFile         interface{}            `yaml:"env_file,omitempty"`
+	Ports           interface{}            `yaml:"ports,omitempty"`
+	Expose          []string               `yaml:"expose,omitempty"`
+	Volumes         interface{}            `yaml:"volumes,omitempty"`
+	Networks        interface{}            `yaml:"networks,omitempty"`
+	NetworkMode     string                 `yaml:"network_mode,omitempty"`
+	DependsOn       interface{}            `yaml:"depends_on,omitempty"`
+	Restart         string                 `yaml:"restart,omitempty"`
+	Labels          interface{}            `yaml:"labels,omitempty"`
+	WorkingDir      string                 `yaml:"working_dir,omitempty"`
+	User            string                 `yaml:"user,omitempty"`
+	Hostname        string                 `yaml:"hostname,omitempty"`
+	Domainname      string                 `yaml:"domainname,omitempty"`
+	Tty             bool                   `yaml:"tty,omitempty"`
+	StdinOpen       bool                   `yaml:"stdin_open,omitempty"`
+	Privileged      bool                   `yaml:"privileged,omitempty"`
+	ReadOnly        bool                   `yaml:"read_only,omitempty"`
+	Init            bool                   `yaml:"init,omitempty"`
+	DNS             interface{}            `yaml:"dns,omitempty"`
+	DNSSearch       interface{}            `yaml:"dns_search,omitempty"`
+	DNSOpt          interface{}            `yaml:"dns_opt,omitempty"`
+	ExtraHosts      interface{}            `yaml:"extra_hosts,omitempty"`
+	CapAdd          []string               `yaml:"cap_add,omitempty"`
+	CapDrop         []string               `yaml:"cap_drop,omitempty"`
+	SecurityOpt     []string               `yaml:"security_opt,omitempty"`
+	Sysctls         map[string]string      `yaml:"sysctls,omitempty"`
+	Healthcheck     *HealthcheckConfig     `yaml:"healthcheck,omitempty"`
+	StopSignal      string                 `yaml:"stop_signal,omitempty"`
+	StopGracePeriod string                 `yaml:"stop_grace_period,omitempty"`
+	Deploy          *DeployConfig          `yaml:"deploy,omitempty"`
+	Profile         string                 `yaml:"profile,omitempty"`
+	Profiles        []string               `yaml:"profiles,omitempty"`
+	Extends         interface{}            `yaml:"extends,omitempty"`
+	Secrets         []string               `yaml:"secrets,omitempty"`
+	Configs         []string               `yaml:"configs,omitempty"`
+	ContainerName   string                 `yaml:"container_name,omitempty"`
+	ShmSize         string                 `yaml:"shm_size,omitempty"`
+	PidsLimit       int64                  `yaml:"pids_limit,omitempty"`
+	OomKillDisable  bool                   `yaml:"oom_kill_disable,omitempty"`
+	OomScoreAdj     int                    `yaml:"oom_score_adj,omitempty"`
+	MacAddress      string                 `yaml:"mac_address,omitempty"`
+	Logging         *LoggingConfig         `yaml:"logging,omitempty"`
+	Ulimits         map[string]interface{} `yaml:"ulimits,omitempty"`
+	Tmpfs           interface{}            `yaml:"tmpfs,omitempty"`
+	BlkioConfig     map[string]interface{} `yaml:"blkio_config,omitempty"`
+	Devices         []string               `yaml:"devices,omitempty"`
+	Platform        string                 `yaml:"platform,omitempty"`
+	Runtime         string                 `yaml:"runtime,omitempty"`
+	Scale           int                    `yaml:"scale,omitempty"`
 }
 
 // BuildConfig defines build settings for a service.
@@ -123,9 +123,9 @@ type LoggingConfig struct {
 
 // DeployConfig defines deployment settings.
 type DeployConfig struct {
-	Replicas     int                       `yaml:"replicas,omitempty"`
-	Resources    *DeployResources          `yaml:"resources,omitempty"`
-	RestartPolicy *DeployRestartPolicy      `yaml:"restart_policy,omitempty"`
+	Replicas      int                  `yaml:"replicas,omitempty"`
+	Resources     *DeployResources     `yaml:"resources,omitempty"`
+	RestartPolicy *DeployRestartPolicy `yaml:"restart_policy,omitempty"`
 }
 
 // DeployResources defines resource limits.
@@ -136,8 +136,8 @@ type DeployResources struct {
 
 // ResourceLimits defines resource limits.
 type ResourceLimits struct {
-	CPUs    string `yaml:"cpus,omitempty"`
-	Memory  string `yaml:"memory,omitempty"`
+	CPUs   string `yaml:"cpus,omitempty"`
+	Memory string `yaml:"memory,omitempty"`
 }
 
 // DeployRestartPolicy defines restart policy for deployments.
@@ -149,11 +149,11 @@ type DeployRestartPolicy struct {
 
 // Network represents a compose network.
 type Network struct {
-	Driver     string            `yaml:"driver,omitempty"`
-	External   bool              `yaml:"external,omitempty"`
-	Name       string            `yaml:"name,omitempty"`
-	Internal   bool              `yaml:"internal,omitempty"`
-	EnableIPv6 bool              `yaml:"enable_ipv6,omitempty"`
+	Driver     string `yaml:"driver,omitempty"`
+	External   bool   `yaml:"external,omitempty"`
+	Name       string `yaml:"name,omitempty"`
+	Internal   bool   `yaml:"internal,omitempty"`
+	EnableIPv6 bool   `yaml:"enable_ipv6,omitempty"`
 }
 
 // Volume represents a compose volume.
@@ -178,14 +178,14 @@ type Secret struct {
 
 // Engine is the compose engine.
 type Engine struct {
-	project     string
-	runtime     *runtime.Runtime
-	image       *image.Store
-	network     *network.Manager
-	file        *ComposeFile
-	projectDir  string
-	envVars     map[string]string
-	netCreated  map[string]bool
+	project    string
+	runtime    *runtime.Runtime
+	image      *image.Store
+	network    *network.Manager
+	file       *ComposeFile
+	projectDir string
+	envVars    map[string]string
+	netCreated map[string]bool
 }
 
 // NewEngine creates a new compose engine.
@@ -1487,6 +1487,16 @@ func (e *Engine) startServiceN(name string, instance int) error {
 		if svc.Healthcheck.Timeout != "" {
 			if d, err := parseDuration(svc.Healthcheck.Timeout); err == nil {
 				cfg.HealthCheck.Timeout = d
+			}
+		}
+		if svc.Healthcheck.StartPeriod != "" {
+			if d, err := parseDuration(svc.Healthcheck.StartPeriod); err == nil {
+				cfg.HealthCheck.StartPeriod = d
+			}
+		}
+		if svc.Healthcheck.StartInterval != "" {
+			if d, err := parseDuration(svc.Healthcheck.StartInterval); err == nil {
+				cfg.HealthCheck.StartInterval = d
 			}
 		}
 		if cfg.HealthCheck.Retries == 0 {

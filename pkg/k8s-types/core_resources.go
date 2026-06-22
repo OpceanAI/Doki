@@ -19,23 +19,23 @@ type ServiceList struct {
 
 // ServiceSpec defines the desired state of a Service.
 type ServiceSpec struct {
-	Type                  string           `json:"type,omitempty" yaml:"type,omitempty"`
-	Ports                 []ServicePort    `json:"ports,omitempty" yaml:"ports,omitempty"`
-	Selector              map[string]string `json:"selector,omitempty" yaml:"selector,omitempty"`
-	ClusterIP             string           `json:"clusterIP,omitempty" yaml:"clusterIP,omitempty"`
-	ClusterIPs            []string         `json:"clusterIPs,omitempty" yaml:"clusterIPs,omitempty"`
-	ExternalIPs           []string         `json:"externalIPs,omitempty" yaml:"externalIPs,omitempty"`
-	LoadBalancerIP        string           `json:"loadBalancerIP,omitempty" yaml:"loadBalancerIP,omitempty"`
-	LoadBalancerSourceRanges []string      `json:"loadBalancerSourceRanges,omitempty" yaml:"loadBalancerSourceRanges,omitempty"`
-	ExternalName          string           `json:"externalName,omitempty" yaml:"externalName,omitempty"`
-	ExternalTrafficPolicy string           `json:"externalTrafficPolicy,omitempty" yaml:"externalTrafficPolicy,omitempty"`
-	InternalTrafficPolicy string           `json:"internalTrafficPolicy,omitempty" yaml:"internalTrafficPolicy,omitempty"`
-	HealthCheckNodePort   int32            `json:"healthCheckNodePort,omitempty" yaml:"healthCheckNodePort,omitempty"`
-	SessionAffinity       string           `json:"sessionAffinity,omitempty" yaml:"sessionAffinity,omitempty"`
-	IPFamilies            []string         `json:"ipFamilies,omitempty" yaml:"ipFamilies,omitempty"`
-	IPFamilyPolicy        string           `json:"ipFamilyPolicy,omitempty" yaml:"ipFamilyPolicy,omitempty"`
-	AllocateLoadBalancerNodePorts *bool    `json:"allocateLoadBalancerNodePorts,omitempty" yaml:"allocateLoadBalancerNodePorts,omitempty"`
-	PublishNotReadyAddresses bool          `json:"publishNotReadyAddresses,omitempty" yaml:"publishNotReadyAddresses,omitempty"`
+	Type                          string            `json:"type,omitempty" yaml:"type,omitempty"`
+	Ports                         []ServicePort     `json:"ports,omitempty" yaml:"ports,omitempty"`
+	Selector                      map[string]string `json:"selector,omitempty" yaml:"selector,omitempty"`
+	ClusterIP                     string            `json:"clusterIP,omitempty" yaml:"clusterIP,omitempty"`
+	ClusterIPs                    []string          `json:"clusterIPs,omitempty" yaml:"clusterIPs,omitempty"`
+	ExternalIPs                   []string          `json:"externalIPs,omitempty" yaml:"externalIPs,omitempty"`
+	LoadBalancerIP                string            `json:"loadBalancerIP,omitempty" yaml:"loadBalancerIP,omitempty"`
+	LoadBalancerSourceRanges      []string          `json:"loadBalancerSourceRanges,omitempty" yaml:"loadBalancerSourceRanges,omitempty"`
+	ExternalName                  string            `json:"externalName,omitempty" yaml:"externalName,omitempty"`
+	ExternalTrafficPolicy         string            `json:"externalTrafficPolicy,omitempty" yaml:"externalTrafficPolicy,omitempty"`
+	InternalTrafficPolicy         string            `json:"internalTrafficPolicy,omitempty" yaml:"internalTrafficPolicy,omitempty"`
+	HealthCheckNodePort           int32             `json:"healthCheckNodePort,omitempty" yaml:"healthCheckNodePort,omitempty"`
+	SessionAffinity               string            `json:"sessionAffinity,omitempty" yaml:"sessionAffinity,omitempty"`
+	IPFamilies                    []string          `json:"ipFamilies,omitempty" yaml:"ipFamilies,omitempty"`
+	IPFamilyPolicy                string            `json:"ipFamilyPolicy,omitempty" yaml:"ipFamilyPolicy,omitempty"`
+	AllocateLoadBalancerNodePorts *bool             `json:"allocateLoadBalancerNodePorts,omitempty" yaml:"allocateLoadBalancerNodePorts,omitempty"`
+	PublishNotReadyAddresses      bool              `json:"publishNotReadyAddresses,omitempty" yaml:"publishNotReadyAddresses,omitempty"`
 }
 
 // ServicePort defines a network port exposed by a Service.
@@ -61,16 +61,16 @@ type LoadBalancerStatus struct {
 
 // LoadBalancerIngress represents an ingress point for a load balancer.
 type LoadBalancerIngress struct {
-	IP       string                   `json:"ip,omitempty" yaml:"ip,omitempty"`
-	Hostname string                   `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	IPMode   *string                  `json:"ipMode,omitempty" yaml:"ipMode,omitempty"`
-	Ports    []PortStatus             `json:"ports,omitempty" yaml:"ports,omitempty"`
+	IP       string       `json:"ip,omitempty" yaml:"ip,omitempty"`
+	Hostname string       `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	IPMode   *string      `json:"ipMode,omitempty" yaml:"ipMode,omitempty"`
+	Ports    []PortStatus `json:"ports,omitempty" yaml:"ports,omitempty"`
 }
 
 // PortStatus represents the status of a port exposed by a load balancer.
 type PortStatus struct {
-	Port     int32  `json:"port" yaml:"port"`
-	Protocol string `json:"protocol" yaml:"protocol"`
+	Port     int32   `json:"port" yaml:"port"`
+	Protocol string  `json:"protocol" yaml:"protocol"`
 	Error    *string `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
@@ -187,30 +187,30 @@ type NodeList struct {
 
 // NodeSpec defines the desired state of a Node.
 type NodeSpec struct {
-	PodCIDR       string    `json:"podCIDR,omitempty" yaml:"podCIDR,omitempty"`
-	PodCIDRs      []string  `json:"podCIDRs,omitempty" yaml:"podCIDRs,omitempty"`
-	ProviderID    string    `json:"providerID,omitempty" yaml:"providerID,omitempty"`
-	Unschedulable bool      `json:"unschedulable,omitempty" yaml:"unschedulable,omitempty"`
-	Taints        []Taint   `json:"taints,omitempty" yaml:"taints,omitempty"`
+	PodCIDR       string   `json:"podCIDR,omitempty" yaml:"podCIDR,omitempty"`
+	PodCIDRs      []string `json:"podCIDRs,omitempty" yaml:"podCIDRs,omitempty"`
+	ProviderID    string   `json:"providerID,omitempty" yaml:"providerID,omitempty"`
+	Unschedulable bool     `json:"unschedulable,omitempty" yaml:"unschedulable,omitempty"`
+	Taints        []Taint  `json:"taints,omitempty" yaml:"taints,omitempty"`
 }
 
 // Taint represents a node taint that repels pods from being scheduled onto a Node.
 type Taint struct {
-	Key       string    `json:"key" yaml:"key"`
-	Value     string    `json:"value,omitempty" yaml:"value,omitempty"`
-	Effect    string    `json:"effect" yaml:"effect"`
+	Key       string     `json:"key" yaml:"key"`
+	Value     string     `json:"value,omitempty" yaml:"value,omitempty"`
+	Effect    string     `json:"effect" yaml:"effect"`
 	TimeAdded *time.Time `json:"timeAdded,omitempty" yaml:"timeAdded,omitempty"`
 }
 
 // NodeStatus represents the observed state of a Node.
 type NodeStatus struct {
-	Capacity    ResourceList         `json:"capacity,omitempty" yaml:"capacity,omitempty"`
-	Allocatable ResourceList         `json:"allocatable,omitempty" yaml:"allocatable,omitempty"`
-	Phase       string               `json:"phase,omitempty" yaml:"phase,omitempty"`
-	Conditions  []NodeCondition      `json:"conditions,omitempty" yaml:"conditions,omitempty"`
-	Addresses   []NodeAddress        `json:"addresses,omitempty" yaml:"addresses,omitempty"`
-	NodeInfo    NodeSystemInfo       `json:"nodeInfo,omitempty" yaml:"nodeInfo,omitempty"`
-	Images      []ContainerImage     `json:"images,omitempty" yaml:"images,omitempty"`
+	Capacity        ResourceList        `json:"capacity,omitempty" yaml:"capacity,omitempty"`
+	Allocatable     ResourceList        `json:"allocatable,omitempty" yaml:"allocatable,omitempty"`
+	Phase           string              `json:"phase,omitempty" yaml:"phase,omitempty"`
+	Conditions      []NodeCondition     `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	Addresses       []NodeAddress       `json:"addresses,omitempty" yaml:"addresses,omitempty"`
+	NodeInfo        NodeSystemInfo      `json:"nodeInfo,omitempty" yaml:"nodeInfo,omitempty"`
+	Images          []ContainerImage    `json:"images,omitempty" yaml:"images,omitempty"`
 	DaemonEndpoints NodeDaemonEndpoints `json:"daemonEndpoints,omitempty" yaml:"daemonEndpoints,omitempty"`
 }
 
@@ -262,11 +262,11 @@ type DaemonEndpoint struct {
 
 // ServiceAccount represents a Kubernetes ServiceAccount resource.
 type ServiceAccount struct {
-	TypeMeta                   `json:",inline" yaml:",inline"`
-	ObjectMeta                 `json:"metadata,omitempty" yaml:"metadata,omitempty"`
-	Secrets                    []ObjectReference `json:"secrets,omitempty" yaml:"secrets,omitempty"`
-	ImagePullSecrets           []LocalObjectReference `json:"imagePullSecrets,omitempty" yaml:"imagePullSecrets,omitempty"`
-	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
+	TypeMeta                     `json:",inline" yaml:",inline"`
+	ObjectMeta                   `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+	Secrets                      []ObjectReference      `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	ImagePullSecrets             []LocalObjectReference `json:"imagePullSecrets,omitempty" yaml:"imagePullSecrets,omitempty"`
+	AutomountServiceAccountToken *bool                  `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
 }
 
 // ServiceAccountList is a list of ServiceAccount resources.
@@ -292,35 +292,35 @@ type EndpointSubset struct {
 
 // EndpointAddress represents a single address in an EndpointSubset.
 type EndpointAddress struct {
-	IP       string          `json:"ip" yaml:"ip"`
-	Hostname string          `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	NodeName *string         `json:"nodeName,omitempty" yaml:"nodeName,omitempty"`
+	IP        string           `json:"ip" yaml:"ip"`
+	Hostname  string           `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	NodeName  *string          `json:"nodeName,omitempty" yaml:"nodeName,omitempty"`
 	TargetRef *ObjectReference `json:"targetRef,omitempty" yaml:"targetRef,omitempty"`
 }
 
 // EndpointPort represents a port in an EndpointSubset.
 type EndpointPort struct {
-	Name     string `json:"name,omitempty" yaml:"name,omitempty"`
-	Port     int32  `json:"port" yaml:"port"`
-	Protocol string `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	Name        string  `json:"name,omitempty" yaml:"name,omitempty"`
+	Port        int32   `json:"port" yaml:"port"`
+	Protocol    string  `json:"protocol,omitempty" yaml:"protocol,omitempty"`
 	AppProtocol *string `json:"appProtocol,omitempty" yaml:"appProtocol,omitempty"`
 }
 
 // Event represents a Kubernetes Event resource.
 type Event struct {
-	TypeMeta   `json:",inline" yaml:",inline"`
-	ObjectMeta `json:"metadata,omitempty" yaml:"metadata,omitempty"`
-	InvolvedObject ObjectReference `json:"involvedObject" yaml:"involvedObject"`
-	Reason         string          `json:"reason,omitempty" yaml:"reason,omitempty"`
-	Message        string          `json:"message,omitempty" yaml:"message,omitempty"`
-	Source         EventSource     `json:"source,omitempty" yaml:"source,omitempty"`
-	FirstTimestamp time.Time       `json:"firstTimestamp,omitempty" yaml:"firstTimestamp,omitempty"`
-	LastTimestamp  time.Time       `json:"lastTimestamp,omitempty" yaml:"lastTimestamp,omitempty"`
-	Count          int32           `json:"count,omitempty" yaml:"count,omitempty"`
-	Type           string          `json:"type,omitempty" yaml:"type,omitempty"`
-	Action         string          `json:"action,omitempty" yaml:"action,omitempty"`
-	ReportingController string     `json:"reportingController,omitempty" yaml:"reportingController,omitempty"`
-	ReportingInstance   string     `json:"reportingInstance,omitempty" yaml:"reportingInstance,omitempty"`
+	TypeMeta            `json:",inline" yaml:",inline"`
+	ObjectMeta          `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+	InvolvedObject      ObjectReference `json:"involvedObject" yaml:"involvedObject"`
+	Reason              string          `json:"reason,omitempty" yaml:"reason,omitempty"`
+	Message             string          `json:"message,omitempty" yaml:"message,omitempty"`
+	Source              EventSource     `json:"source,omitempty" yaml:"source,omitempty"`
+	FirstTimestamp      time.Time       `json:"firstTimestamp,omitempty" yaml:"firstTimestamp,omitempty"`
+	LastTimestamp       time.Time       `json:"lastTimestamp,omitempty" yaml:"lastTimestamp,omitempty"`
+	Count               int32           `json:"count,omitempty" yaml:"count,omitempty"`
+	Type                string          `json:"type,omitempty" yaml:"type,omitempty"`
+	Action              string          `json:"action,omitempty" yaml:"action,omitempty"`
+	ReportingController string          `json:"reportingController,omitempty" yaml:"reportingController,omitempty"`
+	ReportingInstance   string          `json:"reportingInstance,omitempty" yaml:"reportingInstance,omitempty"`
 }
 
 // EventSource represents the source of a Kubernetes Event.
@@ -379,14 +379,14 @@ type PersistentVolumeList struct {
 
 // PersistentVolumeSpec defines the desired state of a PersistentVolume.
 type PersistentVolumeSpec struct {
-	Capacity                      ResourceList                  `json:"capacity,omitempty" yaml:"capacity,omitempty"`
-	AccessModes                   []string                      `json:"accessModes,omitempty" yaml:"accessModes,omitempty"`
-	PersistentVolumeReclaimPolicy string                        `json:"persistentVolumeReclaimPolicy,omitempty" yaml:"persistentVolumeReclaimPolicy,omitempty"`
-	StorageClassName              string                        `json:"storageClassName,omitempty" yaml:"storageClassName,omitempty"`
-	VolumeMode                    *string                       `json:"volumeMode,omitempty" yaml:"volumeMode,omitempty"`
-	ClaimRef                      *ObjectReference              `json:"claimRef,omitempty" yaml:"claimRef,omitempty"`
-	HostPath                      *HostPathVolumeSource         `json:"hostPath,omitempty" yaml:"hostPath,omitempty"`
-	NFS                           *NFSVolumeSource              `json:"nfs,omitempty" yaml:"nfs,omitempty"`
+	Capacity                      ResourceList          `json:"capacity,omitempty" yaml:"capacity,omitempty"`
+	AccessModes                   []string              `json:"accessModes,omitempty" yaml:"accessModes,omitempty"`
+	PersistentVolumeReclaimPolicy string                `json:"persistentVolumeReclaimPolicy,omitempty" yaml:"persistentVolumeReclaimPolicy,omitempty"`
+	StorageClassName              string                `json:"storageClassName,omitempty" yaml:"storageClassName,omitempty"`
+	VolumeMode                    *string               `json:"volumeMode,omitempty" yaml:"volumeMode,omitempty"`
+	ClaimRef                      *ObjectReference      `json:"claimRef,omitempty" yaml:"claimRef,omitempty"`
+	HostPath                      *HostPathVolumeSource `json:"hostPath,omitempty" yaml:"hostPath,omitempty"`
+	NFS                           *NFSVolumeSource      `json:"nfs,omitempty" yaml:"nfs,omitempty"`
 }
 
 // PersistentVolumeStatus represents the observed state of a PersistentVolume.

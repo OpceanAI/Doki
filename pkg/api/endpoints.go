@@ -313,7 +313,7 @@ func (s *Server) handleContainerTop(w http.ResponseWriter, _ *http.Request, id s
 	procs := listProcesses(state.Pid)
 
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"Titles": []string{"PID", "USER", "TIME", "COMMAND"},
+		"Titles":    []string{"PID", "USER", "TIME", "COMMAND"},
 		"Processes": procs,
 	})
 }

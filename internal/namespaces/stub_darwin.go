@@ -15,8 +15,8 @@ type Manager struct{}
 // Config mirrors the Linux configuration type. Fields are documented but
 // unused on macOS.
 type Config struct {
-	UID          uint32
-	GID          uint32
+	UID           uint32
+	GID           uint32
 	DenySetgroups bool
 }
 

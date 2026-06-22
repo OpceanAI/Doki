@@ -3,6 +3,7 @@ package network
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 
@@ -31,7 +32,11 @@ func NewTapManager(bridge, subnet string) *TapManager {
 
 // CreateTap creates a TAP device for a VM.
 func (t *TapManager) CreateTap(vmID string) (string, error) {
-	tapName := fmt.Sprintf("doki-%s", vmID[:8])
+	idPart := vmID
+	if len(idPart) > 8 {
+		idPart = idPart[:8]
+	}
+	tapName := fmt.Sprintf("doki-%s", idPart)
 
 	// Create TAP device.
 	cmd := exec.Command("ip", "tuntap", "add", tapName, "mode", "tap")
@@ -71,7 +76,15 @@ func (t *TapManager) SetupBridge() error {
 		return fmt.Errorf("create bridge %s: %w", t.bridge, err)
 	}
 
-	cmd = exec.Command("ip", "addr", "add", "10.89.0.1/16", "dev", t.bridge)
+	_, ipNet, err := net.ParseCIDR(t.subnet)
+	if err != nil {
+		return fmt.Errorf("invalid subnet %s: %w", t.subnet, err)
+	}
+	ones, _ := ipNet.Mask.Size()
+	gatewayIP := make(net.IP, len(ipNet.IP))
+	copy(gatewayIP, ipNet.IP)
+	gatewayIP[len(gatewayIP)-1] |= 1
+	cmd = exec.Command("ip", "addr", "add", fmt.Sprintf("%s/%d", gatewayIP, ones), "dev", t.bridge)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("assign bridge IP: %w", err)
 	}
@@ -101,15 +114,21 @@ func (t *TapManager) EnableMasquerade() error {
 
 // ─── CNI Integration ──────────────────────────────────────────────
 
+// DefaultCNIBinDir is the default search path for CNI plugin binaries.
+var DefaultCNIBinDir = "/usr/lib/cni"
+
 // CNISetup runs a CNI plugin to configure networking.
 func CNISetup(_, _, _, cniBinDir string) error {
 	// Basic CNI ADD via bridge plugin.
 	if cniBinDir == "" {
-		cniBinDir = "/usr/lib/cni"
+		cniBinDir = DefaultCNIBinDir
 	}
 	bridgePlugin := fmt.Sprintf("%s/bridge", cniBinDir)
 	if !common.PathExists(bridgePlugin) {
-		return fmt.Errorf("CNI bridge plugin not found at %s", bridgePlugin)
+		bridgePlugin = fmt.Sprintf("%s/bridge", "/opt/cni/bin")
+		if !common.PathExists(bridgePlugin) {
+			return fmt.Errorf("CNI bridge plugin not found at %s", cniBinDir)
+		}
 	}
 
 	// CNI config should be written to cniConfDir before calling.

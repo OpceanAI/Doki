@@ -9,20 +9,20 @@ import (
 
 // SeccompProfile represents a seccomp profile.
 type SeccompProfile struct {
-	DefaultAction string            `json:"defaultAction"`
-	Architectures []string          `json:"architectures,omitempty"`
-	Syscalls      []SeccompSyscall  `json:"syscalls,omitempty"`
-	Flags         []string          `json:"flags,omitempty"`
-	ListenerPath  string            `json:"listenerPath,omitempty"`
+	DefaultAction    string            `json:"defaultAction"`
+	Architectures    []string          `json:"architectures,omitempty"`
+	Syscalls         []SeccompSyscall  `json:"syscalls,omitempty"`
+	Flags            []string          `json:"flags,omitempty"`
+	ListenerPath     string            `json:"listenerPath,omitempty"`
 	ListenerMetadata map[string]string `json:"listenerMetadata,omitempty"`
 }
 
 // SeccompSyscall represents a seccomp syscall rule.
 type SeccompSyscall struct {
-	Names   []string          `json:"names"`
-	Action  string            `json:"action"`
-	Args    []SeccompArg      `json:"args,omitempty"`
-	Comment string            `json:"comment,omitempty"`
+	Names   []string     `json:"names"`
+	Action  string       `json:"action"`
+	Args    []SeccompArg `json:"args,omitempty"`
+	Comment string       `json:"comment,omitempty"`
 }
 
 // SeccompArg represents a seccomp syscall argument filter.

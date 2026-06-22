@@ -493,9 +493,9 @@ func TestRestartPolicy_OnFailure_DoubleIncrement(t *testing.T) {
 	rt := newTestRuntime(t, root)
 
 	state := &ContainerState{
-		ID:      "restart-dbl",
-		Status:  common.StateExited,
-		Config:  &Config{RestartPolicy: common.RestartOnFailure, RestartMaxRetries: 1},
+		ID:       "restart-dbl",
+		Status:   common.StateExited,
+		Config:   &Config{RestartPolicy: common.RestartOnFailure, RestartMaxRetries: 1},
 		ExitChan: make(chan struct{}),
 	}
 	close(state.ExitChan)
@@ -650,7 +650,7 @@ func TestParseSignal_CaseInsensitive(t *testing.T) {
 
 func TestParseUser_Variants(t *testing.T) {
 	tests := []struct {
-		input  string
+		input   string
 		wantUID int
 		wantGID int
 	}{

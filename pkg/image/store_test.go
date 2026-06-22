@@ -36,14 +36,14 @@ func TestStoreSaveAndGet(t *testing.T) {
 	}
 
 	record := &ImageRecord{
-		ID:       "sha256:abc123test",
-		RepoTags: []string{"test:latest"},
-		Config:   &Config{Architecture: "arm64", OS: "linux"},
-		Size:     1024,
-		Created:  1700000000,
+		ID:           "sha256:abc123test",
+		RepoTags:     []string{"test:latest"},
+		Config:       &Config{Architecture: "arm64", OS: "linux"},
+		Size:         1024,
+		Created:      1700000000,
 		Architecture: "arm64",
-		OS:       "linux",
-		Layers:   []string{"sha256:layer1"},
+		OS:           "linux",
+		Layers:       []string{"sha256:layer1"},
 	}
 
 	if err := store.SaveRecord(record); err != nil {
@@ -225,11 +225,11 @@ func TestStorePrune(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewStore(dir)
 	store.SaveRecord(&ImageRecord{
-		ID: "sha256:prune111111111111111111111111111111111111111111111111111111111111",
+		ID:       "sha256:prune111111111111111111111111111111111111111111111111111111111111",
 		RepoTags: []string{"p1:latest"},
 	})
 	store.SaveRecord(&ImageRecord{
-		ID: "sha256:prune222222222222222222222222222222222222222222222222222222222222",
+		ID:       "sha256:prune222222222222222222222222222222222222222222222222222222222222",
 		RepoTags: []string{"p2:latest"},
 	})
 

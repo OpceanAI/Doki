@@ -22,56 +22,56 @@ type PodList struct {
 // PodSpec represents the desired state of a Pod: the containers to run,
 // volumes, scheduling preferences and security context.
 type PodSpec struct {
-	Containers         []Container          `json:"containers" yaml:"containers"`
-	InitContainers     []Container          `json:"initContainers,omitempty" yaml:"initContainers,omitempty"`
-	Volumes            []Volume             `json:"volumes,omitempty" yaml:"volumes,omitempty"`
-	ServiceAccountName string               `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
-	NodeName           string               `json:"nodeName,omitempty" yaml:"nodeName,omitempty"`
-	NodeSelector       map[string]string    `json:"nodeSelector,omitempty" yaml:"nodeSelector,omitempty"`
-	HostNetwork        bool                 `json:"hostNetwork,omitempty" yaml:"hostNetwork,omitempty"`
-	Hostname           string               `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	Subdomain          string               `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
-	DNSPolicy          string               `json:"dnsPolicy,omitempty" yaml:"dnsPolicy,omitempty"`
-	RestartPolicy      string               `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
-	TerminationGracePeriodSeconds *int64    `json:"terminationGracePeriodSeconds,omitempty" yaml:"terminationGracePeriodSeconds,omitempty"`
-	Tolerations        []Toleration         `json:"tolerations,omitempty" yaml:"tolerations,omitempty"`
-	Affinity           *Affinity            `json:"affinity,omitempty" yaml:"affinity,omitempty"`
-	SecurityContext    *PodSecurityContext   `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
-	ImagePullSecrets   []LocalObjectReference `json:"imagePullSecrets,omitempty" yaml:"imagePullSecrets,omitempty"`
-	PriorityClassName  string               `json:"priorityClassName,omitempty" yaml:"priorityClassName,omitempty"`
-	Priority           *int32               `json:"priority,omitempty" yaml:"priority,omitempty"`
-	RuntimeClassName   *string              `json:"runtimeClassName,omitempty" yaml:"runtimeClassName,omitempty"`
-	SchedulerName      string               `json:"schedulerName,omitempty" yaml:"schedulerName,omitempty"`
-	ActiveDeadlineSeconds *int64            `json:"activeDeadlineSeconds,omitempty" yaml:"activeDeadlineSeconds,omitempty"`
-	AutomountServiceAccountToken *bool      `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
-	EnableServiceLinks *bool                `json:"enableServiceLinks,omitempty" yaml:"enableServiceLinks,omitempty"`
-	HostAliases        []HostAlias          `json:"hostAliases,omitempty" yaml:"hostAliases,omitempty"`
-	TopologySpreadConstraints []TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty" yaml:"topologySpreadConstraints,omitempty"`
+	Containers                    []Container                `json:"containers" yaml:"containers"`
+	InitContainers                []Container                `json:"initContainers,omitempty" yaml:"initContainers,omitempty"`
+	Volumes                       []Volume                   `json:"volumes,omitempty" yaml:"volumes,omitempty"`
+	ServiceAccountName            string                     `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
+	NodeName                      string                     `json:"nodeName,omitempty" yaml:"nodeName,omitempty"`
+	NodeSelector                  map[string]string          `json:"nodeSelector,omitempty" yaml:"nodeSelector,omitempty"`
+	HostNetwork                   bool                       `json:"hostNetwork,omitempty" yaml:"hostNetwork,omitempty"`
+	Hostname                      string                     `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	Subdomain                     string                     `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
+	DNSPolicy                     string                     `json:"dnsPolicy,omitempty" yaml:"dnsPolicy,omitempty"`
+	RestartPolicy                 string                     `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
+	TerminationGracePeriodSeconds *int64                     `json:"terminationGracePeriodSeconds,omitempty" yaml:"terminationGracePeriodSeconds,omitempty"`
+	Tolerations                   []Toleration               `json:"tolerations,omitempty" yaml:"tolerations,omitempty"`
+	Affinity                      *Affinity                  `json:"affinity,omitempty" yaml:"affinity,omitempty"`
+	SecurityContext               *PodSecurityContext        `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
+	ImagePullSecrets              []LocalObjectReference     `json:"imagePullSecrets,omitempty" yaml:"imagePullSecrets,omitempty"`
+	PriorityClassName             string                     `json:"priorityClassName,omitempty" yaml:"priorityClassName,omitempty"`
+	Priority                      *int32                     `json:"priority,omitempty" yaml:"priority,omitempty"`
+	RuntimeClassName              *string                    `json:"runtimeClassName,omitempty" yaml:"runtimeClassName,omitempty"`
+	SchedulerName                 string                     `json:"schedulerName,omitempty" yaml:"schedulerName,omitempty"`
+	ActiveDeadlineSeconds         *int64                     `json:"activeDeadlineSeconds,omitempty" yaml:"activeDeadlineSeconds,omitempty"`
+	AutomountServiceAccountToken  *bool                      `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
+	EnableServiceLinks            *bool                      `json:"enableServiceLinks,omitempty" yaml:"enableServiceLinks,omitempty"`
+	HostAliases                   []HostAlias                `json:"hostAliases,omitempty" yaml:"hostAliases,omitempty"`
+	TopologySpreadConstraints     []TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty" yaml:"topologySpreadConstraints,omitempty"`
 }
 
 // Container represents a single container running inside a Pod, including
 // its image, command, ports, probes, resource requirements and security
 // context.
 type Container struct {
-	Name            string                 `json:"name" yaml:"name"`
-	Image           string                 `json:"image" yaml:"image"`
-	Command         []string               `json:"command,omitempty" yaml:"command,omitempty"`
-	Args            []string               `json:"args,omitempty" yaml:"args,omitempty"`
-	WorkingDir      string                 `json:"workingDir,omitempty" yaml:"workingDir,omitempty"`
-	Ports           []ContainerPort        `json:"ports,omitempty" yaml:"ports,omitempty"`
-	Env             []EnvVar               `json:"env,omitempty" yaml:"env,omitempty"`
-	EnvFrom         []EnvFromSource        `json:"envFrom,omitempty" yaml:"envFrom,omitempty"`
-	VolumeMounts    []VolumeMount          `json:"volumeMounts,omitempty" yaml:"volumeMounts,omitempty"`
-	Resources       ResourceRequirements   `json:"resources,omitempty" yaml:"resources,omitempty"`
-	LivenessProbe   *Probe                 `json:"livenessProbe,omitempty" yaml:"livenessProbe,omitempty"`
-	ReadinessProbe  *Probe                 `json:"readinessProbe,omitempty" yaml:"readinessProbe,omitempty"`
-	StartupProbe    *Probe                 `json:"startupProbe,omitempty" yaml:"startupProbe,omitempty"`
-	Lifecycle       *Lifecycle             `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
-	SecurityContext *SecurityContext        `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
-	ImagePullPolicy string                 `json:"imagePullPolicy,omitempty" yaml:"imagePullPolicy,omitempty"`
-	Stdin           bool                   `json:"stdin,omitempty" yaml:"stdin,omitempty"`
-	StdinOnce       bool                   `json:"stdinOnce,omitempty" yaml:"stdinOnce,omitempty"`
-	TTY             bool                   `json:"tty,omitempty" yaml:"tty,omitempty"`
+	Name            string               `json:"name" yaml:"name"`
+	Image           string               `json:"image" yaml:"image"`
+	Command         []string             `json:"command,omitempty" yaml:"command,omitempty"`
+	Args            []string             `json:"args,omitempty" yaml:"args,omitempty"`
+	WorkingDir      string               `json:"workingDir,omitempty" yaml:"workingDir,omitempty"`
+	Ports           []ContainerPort      `json:"ports,omitempty" yaml:"ports,omitempty"`
+	Env             []EnvVar             `json:"env,omitempty" yaml:"env,omitempty"`
+	EnvFrom         []EnvFromSource      `json:"envFrom,omitempty" yaml:"envFrom,omitempty"`
+	VolumeMounts    []VolumeMount        `json:"volumeMounts,omitempty" yaml:"volumeMounts,omitempty"`
+	Resources       ResourceRequirements `json:"resources,omitempty" yaml:"resources,omitempty"`
+	LivenessProbe   *Probe               `json:"livenessProbe,omitempty" yaml:"livenessProbe,omitempty"`
+	ReadinessProbe  *Probe               `json:"readinessProbe,omitempty" yaml:"readinessProbe,omitempty"`
+	StartupProbe    *Probe               `json:"startupProbe,omitempty" yaml:"startupProbe,omitempty"`
+	Lifecycle       *Lifecycle           `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
+	SecurityContext *SecurityContext     `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
+	ImagePullPolicy string               `json:"imagePullPolicy,omitempty" yaml:"imagePullPolicy,omitempty"`
+	Stdin           bool                 `json:"stdin,omitempty" yaml:"stdin,omitempty"`
+	StdinOnce       bool                 `json:"stdinOnce,omitempty" yaml:"stdinOnce,omitempty"`
+	TTY             bool                 `json:"tty,omitempty" yaml:"tty,omitempty"`
 }
 
 // ContainerPort represents a network port exposed by a container inside
@@ -111,9 +111,9 @@ type ObjectFieldSelector struct {
 // ResourceFieldSelector represents a container resource (CPU, memory)
 // whose value is exposed as an environment variable.
 type ResourceFieldSelector struct {
-	Resource   string `json:"resource" yaml:"resource"`
+	Resource      string `json:"resource" yaml:"resource"`
 	ContainerName string `json:"containerName,omitempty" yaml:"containerName,omitempty"`
-	Divisor    string `json:"divisor,omitempty" yaml:"divisor,omitempty"`
+	Divisor       string `json:"divisor,omitempty" yaml:"divisor,omitempty"`
 }
 
 // ConfigMapKeySelector represents a reference to a specific key in a
@@ -157,19 +157,19 @@ type SecretEnvSource struct {
 // VolumeMount represents a mount of a pod volume into a container at
 // a specific path, with optional read-only and propagation settings.
 type VolumeMount struct {
-	Name             string `json:"name" yaml:"name"`
-	ReadOnly         bool   `json:"readOnly,omitempty" yaml:"readOnly,omitempty"`
-	MountPath        string `json:"mountPath" yaml:"mountPath"`
-	SubPath          string `json:"subPath,omitempty" yaml:"subPath,omitempty"`
-	SubPathExpr      string `json:"subPathExpr,omitempty" yaml:"subPathExpr,omitempty"`
+	Name             string  `json:"name" yaml:"name"`
+	ReadOnly         bool    `json:"readOnly,omitempty" yaml:"readOnly,omitempty"`
+	MountPath        string  `json:"mountPath" yaml:"mountPath"`
+	SubPath          string  `json:"subPath,omitempty" yaml:"subPath,omitempty"`
+	SubPathExpr      string  `json:"subPathExpr,omitempty" yaml:"subPathExpr,omitempty"`
 	MountPropagation *string `json:"mountPropagation,omitempty" yaml:"mountPropagation,omitempty"`
 }
 
 // Volume represents a named volume that is mounted into containers
 // within a pod, sourced from one of the supported volume source types.
 type Volume struct {
-	Name                  string `json:"name" yaml:"name"`
-	VolumeSource          `json:",inline" yaml:",inline"`
+	Name         string `json:"name" yaml:"name"`
+	VolumeSource `json:",inline" yaml:",inline"`
 }
 
 // VolumeSource represents the kind of backing storage a Volume uses:
@@ -278,10 +278,10 @@ type DownwardAPIVolumeSource struct {
 // DownwardAPIVolumeFile represents a single file written into a
 // DownwardAPI volume, sourced from a pod field or a container resource.
 type DownwardAPIVolumeFile struct {
-	Path             string                `json:"path" yaml:"path"`
-	FieldRef         *ObjectFieldSelector  `json:"fieldRef,omitempty" yaml:"fieldRef,omitempty"`
+	Path             string                 `json:"path" yaml:"path"`
+	FieldRef         *ObjectFieldSelector   `json:"fieldRef,omitempty" yaml:"fieldRef,omitempty"`
 	ResourceFieldRef *ResourceFieldSelector `json:"resourceFieldRef,omitempty" yaml:"resourceFieldRef,omitempty"`
-	Mode             *int32                `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Mode             *int32                 `json:"mode,omitempty" yaml:"mode,omitempty"`
 }
 
 // ResourceRequirements represents the compute resource limits and
@@ -324,11 +324,11 @@ type ExecAction struct {
 // HTTPGetAction represents an HTTP GET probe or hook against a path
 // and port inside (or outside) the container.
 type HTTPGetAction struct {
-	Path        string        `json:"path,omitempty" yaml:"path,omitempty"`
-	Port        IntOrString   `json:"port" yaml:"port"`
-	Host        string        `json:"host,omitempty" yaml:"host,omitempty"`
-	Scheme      string        `json:"scheme,omitempty" yaml:"scheme,omitempty"`
-	HTTPHeaders []HTTPHeader  `json:"httpHeaders,omitempty" yaml:"httpHeaders,omitempty"`
+	Path        string       `json:"path,omitempty" yaml:"path,omitempty"`
+	Port        IntOrString  `json:"port" yaml:"port"`
+	Host        string       `json:"host,omitempty" yaml:"host,omitempty"`
+	Scheme      string       `json:"scheme,omitempty" yaml:"scheme,omitempty"`
+	HTTPHeaders []HTTPHeader `json:"httpHeaders,omitempty" yaml:"httpHeaders,omitempty"`
 }
 
 // HTTPHeader represents a custom header attached to an HTTP probe or
@@ -460,27 +460,27 @@ type WeightedPodAffinityTerm struct {
 // PodSecurityContext represents security settings applied at the pod
 // level (UID, GID, fs group, sysctls, etc.).
 type PodSecurityContext struct {
-	RunAsUser    *int64 `json:"runAsUser,omitempty" yaml:"runAsUser,omitempty"`
-	RunAsGroup   *int64 `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
-	RunAsNonRoot *bool  `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
-	FSGroup      *int64 `json:"fsGroup,omitempty" yaml:"fsGroup,omitempty"`
-	SupplementalGroups []int64 `json:"supplementalGroups,omitempty" yaml:"supplementalGroups,omitempty"`
-	Sysctls      []Sysctl `json:"sysctls,omitempty" yaml:"sysctls,omitempty"`
+	RunAsUser          *int64   `json:"runAsUser,omitempty" yaml:"runAsUser,omitempty"`
+	RunAsGroup         *int64   `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
+	RunAsNonRoot       *bool    `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
+	FSGroup            *int64   `json:"fsGroup,omitempty" yaml:"fsGroup,omitempty"`
+	SupplementalGroups []int64  `json:"supplementalGroups,omitempty" yaml:"supplementalGroups,omitempty"`
+	Sysctls            []Sysctl `json:"sysctls,omitempty" yaml:"sysctls,omitempty"`
 }
 
 // SecurityContext represents security settings applied at the
 // container level (UID, GID, capabilities, seccomp, etc.).
 type SecurityContext struct {
-	RunAsUser                *int64 `json:"runAsUser,omitempty" yaml:"runAsUser,omitempty"`
-	RunAsGroup               *int64 `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
-	RunAsNonRoot             *bool  `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
-	ReadOnlyRootFilesystem   *bool  `json:"readOnlyRootFilesystem,omitempty" yaml:"readOnlyRootFilesystem,omitempty"`
-	Privileged               *bool  `json:"privileged,omitempty" yaml:"privileged,omitempty"`
-	AllowPrivilegeEscalation *bool  `json:"allowPrivilegeEscalation,omitempty" yaml:"allowPrivilegeEscalation,omitempty"`
-	Capabilities             *Capabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	RunAsUser                *int64          `json:"runAsUser,omitempty" yaml:"runAsUser,omitempty"`
+	RunAsGroup               *int64          `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
+	RunAsNonRoot             *bool           `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
+	ReadOnlyRootFilesystem   *bool           `json:"readOnlyRootFilesystem,omitempty" yaml:"readOnlyRootFilesystem,omitempty"`
+	Privileged               *bool           `json:"privileged,omitempty" yaml:"privileged,omitempty"`
+	AllowPrivilegeEscalation *bool           `json:"allowPrivilegeEscalation,omitempty" yaml:"allowPrivilegeEscalation,omitempty"`
+	Capabilities             *Capabilities   `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
 	SELinuxOptions           *SELinuxOptions `json:"seLinuxOptions,omitempty" yaml:"seLinuxOptions,omitempty"`
 	SeccompProfile           *SeccompProfile `json:"seccompProfile,omitempty" yaml:"seccompProfile,omitempty"`
-	ProcMount                *string `json:"procMount,omitempty" yaml:"procMount,omitempty"`
+	ProcMount                *string         `json:"procMount,omitempty" yaml:"procMount,omitempty"`
 }
 
 // Capabilities represents the set of Linux capabilities to add or
@@ -501,7 +501,7 @@ type SELinuxOptions struct {
 // SeccompProfile represents a seccomp profile applied to a container,
 // either a runtime default or a localhost-hosted profile.
 type SeccompProfile struct {
-	Type             string `json:"type" yaml:"type"`
+	Type             string  `json:"type" yaml:"type"`
 	LocalhostProfile *string `json:"localhostProfile,omitempty" yaml:"localhostProfile,omitempty"`
 }
 
@@ -532,19 +532,19 @@ type TopologySpreadConstraint struct {
 // PodStatus represents the observed state of a Pod: its phase,
 // conditions, IP addresses and per-container statuses.
 type PodStatus struct {
-	Phase             string            `json:"phase,omitempty" yaml:"phase,omitempty"`
-	Conditions        []PodCondition    `json:"conditions,omitempty" yaml:"conditions,omitempty"`
-	Message           string            `json:"message,omitempty" yaml:"message,omitempty"`
-	Reason            string            `json:"reason,omitempty" yaml:"reason,omitempty"`
-	HostIP            string            `json:"hostIP,omitempty" yaml:"hostIP,omitempty"`
-	HostIPs           []HostIP          `json:"hostIPs,omitempty" yaml:"hostIPs,omitempty"`
-	PodIP             string            `json:"podIP,omitempty" yaml:"podIP,omitempty"`
-	PodIPs            []PodIP           `json:"podIPs,omitempty" yaml:"podIPs,omitempty"`
-	StartTime         *time.Time        `json:"startTime,omitempty" yaml:"startTime,omitempty"`
+	Phase                 string            `json:"phase,omitempty" yaml:"phase,omitempty"`
+	Conditions            []PodCondition    `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	Message               string            `json:"message,omitempty" yaml:"message,omitempty"`
+	Reason                string            `json:"reason,omitempty" yaml:"reason,omitempty"`
+	HostIP                string            `json:"hostIP,omitempty" yaml:"hostIP,omitempty"`
+	HostIPs               []HostIP          `json:"hostIPs,omitempty" yaml:"hostIPs,omitempty"`
+	PodIP                 string            `json:"podIP,omitempty" yaml:"podIP,omitempty"`
+	PodIPs                []PodIP           `json:"podIPs,omitempty" yaml:"podIPs,omitempty"`
+	StartTime             *time.Time        `json:"startTime,omitempty" yaml:"startTime,omitempty"`
 	InitContainerStatuses []ContainerStatus `json:"initContainerStatuses,omitempty" yaml:"initContainerStatuses,omitempty"`
-	ContainerStatuses []ContainerStatus `json:"containerStatuses,omitempty" yaml:"containerStatuses,omitempty"`
-	QOSClass          string            `json:"qosClass,omitempty" yaml:"qosClass,omitempty"`
-	NominatedNodeName string            `json:"nominatedNodeName,omitempty" yaml:"nominatedNodeName,omitempty"`
+	ContainerStatuses     []ContainerStatus `json:"containerStatuses,omitempty" yaml:"containerStatuses,omitempty"`
+	QOSClass              string            `json:"qosClass,omitempty" yaml:"qosClass,omitempty"`
+	NominatedNodeName     string            `json:"nominatedNodeName,omitempty" yaml:"nominatedNodeName,omitempty"`
 }
 
 // PodCondition represents a single condition attached to a Pod's
@@ -573,16 +573,16 @@ type PodIP struct {
 // ContainerStatus represents the observed state of a single container
 // inside a pod, including its current and last-termination state.
 type ContainerStatus struct {
-	Name                 string          `json:"name" yaml:"name"`
-	State                ContainerState  `json:"state,omitempty" yaml:"state,omitempty"`
-	LastTerminationState ContainerState  `json:"lastState,omitempty" yaml:"lastState,omitempty"`
-	Ready                bool            `json:"ready" yaml:"ready"`
-	RestartCount         int32           `json:"restartCount" yaml:"restartCount"`
-	Image                string          `json:"image" yaml:"image"`
-	ImageID              string          `json:"imageID" yaml:"imageID"`
-	ContainerID          string          `json:"containerID,omitempty" yaml:"containerID,omitempty"`
-	Started              *bool           `json:"started,omitempty" yaml:"started,omitempty"`
-	AllocatedResources   ResourceList    `json:"allocatedResources,omitempty" yaml:"allocatedResources,omitempty"`
+	Name                 string         `json:"name" yaml:"name"`
+	State                ContainerState `json:"state,omitempty" yaml:"state,omitempty"`
+	LastTerminationState ContainerState `json:"lastState,omitempty" yaml:"lastState,omitempty"`
+	Ready                bool           `json:"ready" yaml:"ready"`
+	RestartCount         int32          `json:"restartCount" yaml:"restartCount"`
+	Image                string         `json:"image" yaml:"image"`
+	ImageID              string         `json:"imageID" yaml:"imageID"`
+	ContainerID          string         `json:"containerID,omitempty" yaml:"containerID,omitempty"`
+	Started              *bool          `json:"started,omitempty" yaml:"started,omitempty"`
+	AllocatedResources   ResourceList   `json:"allocatedResources,omitempty" yaml:"allocatedResources,omitempty"`
 }
 
 // ContainerState represents the lifecycle state of a container:

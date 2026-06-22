@@ -13,11 +13,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/OpceanAI/Doki/internal/dokivm"
+	"github.com/OpceanAI/Doki/internal/dokivm/network"
 )
 
 // VMM implements the VMM interface using AWS Firecracker.
@@ -27,6 +29,8 @@ type VMM struct {
 	cfg    *dokivm.VMMConfig
 	binary string
 	jailer string
+	vmCfg  *dokivm.VMConfig
+	tapMgr *network.TapManager
 }
 
 func New(cfg *dokivm.VMMConfig) (*VMM, error) {
@@ -40,6 +44,7 @@ func New(cfg *dokivm.VMMConfig) (*VMM, error) {
 		cfg:    cfg,
 		binary: binary,
 		jailer: jailer,
+		tapMgr: network.NewTapManager("", ""),
 	}, nil
 }
 
@@ -60,6 +65,7 @@ func (v *VMM) Create(_ context.Context, vmCfg *dokivm.VMConfig) (*dokivm.MicroVM
 		State:     dokivm.VMStateCreated,
 		CreatedAt: time.Now(),
 	}
+	v.vmCfg = vmCfg
 	v.vms[vm.ID] = vm
 	return vm, nil
 }
@@ -142,10 +148,25 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 }
 
 func (v *VMM) configureMachine(client *http.Client) error {
+	vcpus := 1
+	if v.vmCfg != nil && v.vmCfg.CPUs > 0 {
+		vcpus = v.vmCfg.CPUs
+	}
+	memMib := 128
+	if v.vmCfg != nil && v.vmCfg.Memory > 0 {
+		memMib = v.vmCfg.Memory
+	}
+	cpuTemplate := "None"
+	switch runtime.GOARCH {
+	case "arm64":
+		cpuTemplate = "T2"
+	case "amd64":
+		cpuTemplate = "C3"
+	}
 	body := map[string]interface{}{
-		"vcpu_count":  1,
-		"mem_size_mib": 128,
-		"cpu_template": "T2",
+		"vcpu_count":   vcpus,
+		"mem_size_mib": memMib,
+		"cpu_template": cpuTemplate,
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -198,8 +219,8 @@ func (v *VMM) configureDrives(client *http.Client, vmID string) error {
 		return nil // no rootfs to configure
 	}
 	body := map[string]interface{}{
-		"drive_id":      "rootfs",
-		"path_on_host":  rootfsPath,
+		"drive_id":       "rootfs",
+		"path_on_host":   rootfsPath,
 		"is_root_device": true,
 		"is_read_only":   false,
 	}
@@ -224,13 +245,12 @@ func (v *VMM) configureDrives(client *http.Client, vmID string) error {
 }
 
 func (v *VMM) configureNetwork(client *http.Client, vmID string) error {
-	idPart := vmID
-	if len(idPart) > 8 {
-		idPart = idPart[:8]
+	tapName, err := v.tapMgr.CreateTap(vmID)
+	if err != nil {
+		return fmt.Errorf("create tap device: %w", err)
 	}
-	tapName := fmt.Sprintf("doki-fc-%s", idPart)
 	body := map[string]interface{}{
-		"iface_id":     "eth0",
+		"iface_id":      "eth0",
 		"host_dev_name": tapName,
 	}
 	data, err := json.Marshal(body)
@@ -297,7 +317,9 @@ func (v *VMM) Stop(ctx context.Context, vmID string, timeout time.Duration) erro
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	v.mu.Lock()
 	vm.State = dokivm.VMStateStopped
+	v.mu.Unlock()
 	return nil
 }
 
@@ -315,7 +337,9 @@ func (v *VMM) Kill(_ context.Context, vmID string) error {
 	if err := proc.Signal(syscall.SIGKILL); err != nil {
 		slog.Warn("firecracker: SIGKILL failed", "pid", vm.PID, "err", err)
 	}
+	v.mu.Lock()
 	vm.State = dokivm.VMStateStopped
+	v.mu.Unlock()
 	return nil
 }
 
@@ -332,9 +356,11 @@ func (v *VMM) State(_ context.Context, vmID string) (dokivm.VMState, error) {
 func (v *VMM) Exec(_ context.Context, _ string, _ []string, _ []string, _ bool) error {
 	return fmt.Errorf("exec via vsock not implemented")
 }
-func (v *VMM) Attach(_ context.Context, _ string) error                             { return nil }
-func (v *VMM) Logs(_ context.Context, _ string) (io.Reader, error)                 { return nil, nil }
-func (v *VMM) Stats(_ context.Context, _ string) (*dokivm.VMStats, error)          { return &dokivm.VMStats{}, nil }
+func (v *VMM) Attach(_ context.Context, _ string) error            { return nil }
+func (v *VMM) Logs(_ context.Context, _ string) (io.Reader, error) { return nil, nil }
+func (v *VMM) Stats(_ context.Context, _ string) (*dokivm.VMStats, error) {
+	return &dokivm.VMStats{}, nil
+}
 func (v *VMM) Cleanup(_ context.Context, vmID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()

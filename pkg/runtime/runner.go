@@ -210,20 +210,20 @@ type NetworkStats struct {
 
 // ContainerJSON holds full container information for inspect.
 type ContainerJSON struct {
-	ID              string
-	Pid             int
-	Status          string
-	Config          *Config
-	RootfsPath      string
-	LogPath         string
-	Mode            ExecutionMode
-	RestartCount    int
-	CreatedAt       time.Time
-	StartedAt       time.Time
-	FinishedAt      time.Time
-	ExitCode        int
-	GuestArch       string // For cross-arch modes
-	IsolationType   string // "hardware", "user-space", "none"
+	ID            string
+	Pid           int
+	Status        string
+	Config        *Config
+	RootfsPath    string
+	LogPath       string
+	Mode          ExecutionMode
+	RestartCount  int
+	CreatedAt     time.Time
+	StartedAt     time.Time
+	FinishedAt    time.Time
+	ExitCode      int
+	GuestArch     string // For cross-arch modes
+	IsolationType string // "hardware", "user-space", "none"
 }
 
 // Logger returns a default logger for runner packages.

@@ -96,10 +96,10 @@ func GenerateResolvConf(nameservers, search, options []string, dnsAddr string) [
 }
 
 // Mount operations are not supported on macOS.
-func ProcMount(target string) error    { return errUnsupported("proc") }
-func SysMount(target string) error     { return errUnsupported("sysfs") }
-func DevMount(target string) error     { return errUnsupported("dev") }
-func DevPtsMount(target string) error  { return errUnsupported("devpts") }
+func ProcMount(target string) error   { return errUnsupported("proc") }
+func SysMount(target string) error    { return errUnsupported("sysfs") }
+func DevMount(target string) error    { return errUnsupported("dev") }
+func DevPtsMount(target string) error { return errUnsupported("devpts") }
 func ShmMount(target string, size int64) error {
 	return errUnsupported("tmpfs")
 }

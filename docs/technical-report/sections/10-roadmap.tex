@@ -66,6 +66,7 @@ upgrades.
         supply chain security for images pulled from public registries.
 \end{itemize}
 
+% Shipped ahead of schedule in v0.11.0 — see notes below.
 \section{Long-term (v1.0)}
 \label{sec:roadmap-long}
 
@@ -77,21 +78,29 @@ integration.
         encrypted point-to-point tunnels between Doki instances.
         WireGuard provides kernel-level encryption with minimal
         overhead compared to userspace TLS.
+\end{itemize}
 
-  \item \textbf{NAT traversal.} Implement STUN/TURN hole-punching
-        for peer discovery across NAT boundaries. This enables
-        DokiLink connectivity between devices on different networks
-        without static IP addresses.
+% Implemented ahead of schedule in v0.11.0.
+\subsection*{Shipped in v0.11.0 (ahead of schedule)}
+
+The following features were originally planned for v1.0 but were
+implemented ahead of schedule in the v0.11.0 release:
+
+\begin{itemize}[leftmargin=*, itemsep=4pt]
+  \item \textbf{NAT traversal.} STUN/TURN hole-punching for peer
+        discovery across NAT boundaries, enabling DokiLink
+        connectivity between devices on different networks without
+        static IP addresses.
 
   \item \textbf{DHT peer discovery.} Distributed hash table for
-        decentralized peer discovery without static configuration.
-        This eliminates the need for manually adding peers via
+        decentralized peer discovery without static configuration,
+        eliminating the need for manually adding peers via
         \texttt{doki link add}.
 
   \item \textbf{Kubernetes compatibility.} Full CRI (Container
-        Runtime Interface) compliance for Kubernetes node integration.
-        This would enable Doki to serve as a runtime for Kubernetes
-        pods on Android devices.
+        Runtime Interface) compliance for Kubernetes node integration,
+        enabling Doki to serve as a runtime for Kubernetes pods on
+        Android devices.
 \end{itemize}
 
 \section{Feature Priority Matrix}

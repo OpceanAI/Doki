@@ -172,6 +172,7 @@ func (r *Runner) Wait(ctx context.Context, _ string) (int, error) {
 		}
 	}
 }
+
 // Stats returns resource usage metrics.
 func (r *Runner) Stats(_ context.Context, _ string) (*rt.ContainerStats, error) {
 	return &rt.ContainerStats{}, nil

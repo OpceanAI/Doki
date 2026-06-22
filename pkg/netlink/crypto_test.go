@@ -19,8 +19,8 @@ import (
 func TestDeriveSecretKey_DeterministicAndUnique(t *testing.T) {
 	a1 := make([]byte, 32)
 	b1 := make([]byte, 32)
-	rand.Read(a1)
-	rand.Read(b1)
+	_, _ = rand.Read(a1)
+	_, _ = rand.Read(b1)
 
 	k1 := DeriveSecretKey(a1, b1)
 	k2 := DeriveSecretKey(a1, b1)
@@ -28,18 +28,124 @@ func TestDeriveSecretKey_DeterministicAndUnique(t *testing.T) {
 		t.Error("DeriveSecretKey not deterministic")
 	}
 
-	// Order matters: swap inputs and key changes.
+	// Order-INDEPENDENT: both peers must derive the SAME shared key.
+	// Peer A calls DeriveSecretKey(Apub, Bpub); peer B calls
+	// DeriveSecretKey(Bpub, Apub). They MUST get the same key for
+	// symmetric encryption (NaCl secretbox) to work.
 	k3 := DeriveSecretKey(b1, a1)
-	if k1 == k3 {
-		t.Error("DeriveSecretKey order-insensitive (it MUST be order-sensitive)")
+	if k1 != k3 {
+		t.Error("DeriveSecretKey is order-sensitive — both peers must derive the same shared key")
 	}
 
 	// Different inputs -> different key.
 	a2 := make([]byte, 32)
-	rand.Read(a2)
+	_, _ = rand.Read(a2)
 	k4 := DeriveSecretKey(a2, b1)
 	if k1 == k4 {
 		t.Error("DeriveSecretKey produces same key for different inputs")
+	}
+}
+
+// TestDeriveSecretKey_TwoIndependentPeers verifies that two peers
+// deriving the key from opposite ends produce the SAME shared secret,
+// which is the actual security requirement for symmetric encryption.
+func TestDeriveSecretKey_TwoIndependentPeers(t *testing.T) {
+	peerAPub := make([]byte, 32)
+	peerBPub := make([]byte, 32)
+	_, _ = rand.Read(peerAPub)
+	_, _ = rand.Read(peerBPub)
+
+	// Peer A derives using its own pubkey first.
+	keyOnA := DeriveSecretKey(peerAPub, peerBPub)
+	// Peer B derives using its own pubkey first (swapped order).
+	keyOnB := DeriveSecretKey(peerBPub, peerAPub)
+
+	if keyOnA != keyOnB {
+		t.Fatal("two peers derived different shared keys — L2 encryption is broken")
+	}
+}
+
+// TestSecretboxStreamConn_NonceUniqueAcrossConnections verifies that
+// two independent connections sharing the same key (derived from the
+// same peer identity pair) never produce the same first nonce. Nonce
+// reuse in secretbox destroys confidentiality and integrity.
+func TestSecretboxStreamConn_NonceUniqueAcrossConnections(t *testing.T) {
+	var key [32]byte
+	_, _ = rand.Read(key[:])
+	sbox := NewSecretboxWrapper(key)
+
+	// Create two independent stream conns sharing the same key.
+	c1A, c1B := net.Pipe()
+	defer c1A.Close()
+	defer c1B.Close()
+	c2A, c2B := net.Pipe()
+	defer c2A.Close()
+	defer c2B.Close()
+
+	w1 := newSecretboxStreamConn(c1A, sbox)
+	w2 := newSecretboxStreamConn(c2A, sbox)
+
+	if w1.cnt == w2.cnt {
+		t.Fatal("two connections share the same nonce base — nonce reuse risk")
+	}
+	// The nonce bases should differ significantly (high entropy from
+	// crypto/rand). A collision in 2^64 space is astronomically unlikely.
+}
+
+// TestSecretboxStreamConn_TwoPeersEndToEnd verifies that two peers
+// with independently-derived shared keys can communicate. This catches
+// the order-sensitivity bug that the original tests missed.
+func TestSecretboxStreamConn_TwoPeersEndToEnd(t *testing.T) {
+	peerAPub := make([]byte, 32)
+	peerBPub := make([]byte, 32)
+	_, _ = rand.Read(peerAPub)
+	_, _ = rand.Read(peerBPub)
+
+	// Each peer derives the shared key from its own perspective.
+	keyOnA := DeriveSecretKey(peerAPub, peerBPub)
+	keyOnB := DeriveSecretKey(peerBPub, peerAPub)
+	if keyOnA != keyOnB {
+		t.Fatalf("shared key mismatch — A and B derived different keys")
+	}
+
+	// Both use the same key (they must agree).
+	sboxA := NewSecretboxWrapper(keyOnA)
+	sboxB := NewSecretboxWrapper(keyOnB)
+
+	cA, cB := net.Pipe()
+	defer cA.Close()
+	defer cB.Close()
+
+	wA := newSecretboxStreamConn(cA, sboxA)
+	wB := newSecretboxStreamConn(cB, sboxB)
+
+	_ = wA.SetDeadline(time.Now().Add(2 * time.Second))
+	_ = wB.SetDeadline(time.Now().Add(2 * time.Second))
+
+	payload := []byte("cross-peer-secretbox")
+
+	// net.Pipe is synchronous: writes block until a reader is ready.
+	// Run the reader in a goroutine.
+	type result struct {
+		buf []byte
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		buf := make([]byte, len(payload))
+		n, err := io.ReadFull(wB, buf)
+		resCh <- result{buf[:n], err}
+	}()
+
+	if _, err := wA.Write(payload); err != nil {
+		t.Fatalf("A write: %v", err)
+	}
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("B read: %v", res.err)
+	}
+	if !bytes.Equal(res.buf, payload) {
+		t.Errorf("B received %q, want %q", res.buf, payload)
 	}
 }
 

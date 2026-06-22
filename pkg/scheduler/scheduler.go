@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/OpceanAI/Doki/pkg/k8s-types"
 	"github.com/OpceanAI/Doki/pkg/store"
 )
 
 type Scheduler struct {
-	store    store.Store
-	queue    *SchedulingQueue
-	logger   *slog.Logger
-	mu       sync.Mutex
+	store  store.Store
+	queue  *SchedulingQueue
+	logger *slog.Logger
+	mu     sync.Mutex
 }
 
 type SchedulingQueue struct {
@@ -78,13 +81,25 @@ func (s *Scheduler) scheduleLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			pod := s.queue.Pop()
-			if pod == nil {
-				continue
+		}
+		pod := s.queue.Pop()
+		if pod == nil {
+			// No pods to schedule — block briefly instead of
+			// busy-waiting at 100% CPU. Use a short sleep that
+			// is interrupted by context cancellation.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
 			}
-			if err := s.scheduleOne(pod); err != nil {
-				s.logger.Error("schedule failed", "pod", pod.Name, "error", err)
-			}
+			continue
+		}
+		if err := s.scheduleOne(pod); err != nil {
+			s.logger.Error("schedule failed", "pod", pod.Name, "error", err)
+			// Re-queue with backoff.
+			time.AfterFunc(5*time.Second, func() {
+				s.queue.Add(pod)
+			})
 		}
 	}
 }
@@ -106,7 +121,10 @@ func (s *Scheduler) scheduleOne(pod *k8s.Pod) error {
 	best := s.score(pod, feasible)
 
 	pod.Spec.NodeName = best.Name
-	data, _ := json.Marshal(pod)
+	data, err := json.Marshal(pod)
+	if err != nil {
+		return fmt.Errorf("marshal pod: %w", err)
+	}
 	key := store.KeyFor("", "pods", pod.Namespace, pod.Name)
 	return s.store.Put(key, &store.StoredObject{Value: data})
 }
@@ -197,12 +215,81 @@ func (s *Scheduler) score(pod *k8s.Pod, nodes []k8s.Node) k8s.Node {
 	return scores[0].node
 }
 
-func (s *Scheduler) scoreImageLocality(_ *k8s.Pod, _ k8s.Node) int64 {
-	return 0
+// scoreImageLocality scores nodes based on whether they already have
+// the pod's container images pulled locally. A node that already has
+// the image gets a higher score (faster startup).
+func (s *Scheduler) scoreImageLocality(pod *k8s.Pod, node k8s.Node) int64 {
+	if len(node.Status.Images) == 0 {
+		return 0
+	}
+	imageSet := make(map[string]bool)
+	for _, img := range node.Status.Images {
+		for _, name := range img.Names {
+			imageSet[name] = true
+		}
+	}
+	var score int64
+	for _, c := range pod.Spec.Containers {
+		if imageSet[c.Image] {
+			score += 10
+		}
+	}
+	return score
 }
 
-func (s *Scheduler) scoreLeastRequested(_ *k8s.Pod, _ k8s.Node) int64 {
-	return 1
+// scoreLeastRequested scores nodes based on resource availability.
+// Nodes with more available CPU and memory get higher scores.
+func (s *Scheduler) scoreLeastRequested(pod *k8s.Pod, node k8s.Node) int64 {
+	cpuScore := int64(0)
+	memScore := int64(0)
+	for _, addr := range node.Status.Addresses {
+		_ = addr
+	}
+	// Parse capacity and allocatable from node status.
+	for resourceName, qty := range node.Status.Allocatable {
+		switch resourceName {
+		case "cpu":
+			n, _ := parseQuantity(qty)
+			cpuScore = n
+		case "memory":
+			n, _ := parseQuantity(qty)
+			memScore = n / (1024 * 1024)
+		}
+	}
+	// Prefer nodes with more available resources.
+	return cpuScore*100 + memScore/100
+}
+
+// parseQuantity parses a Kubernetes resource quantity string (e.g.,
+// "4", "8Gi", "512Mi") into an int64 value.
+func parseQuantity(q string) (int64, error) {
+	if q == "" {
+		return 0, fmt.Errorf("empty quantity")
+	}
+	// Strip suffixes.
+	multiplier := int64(1)
+	switch {
+	case strings.HasSuffix(q, "Ki"):
+		multiplier = 1024
+		q = q[:len(q)-2]
+	case strings.HasSuffix(q, "Mi"):
+		multiplier = 1024 * 1024
+		q = q[:len(q)-2]
+	case strings.HasSuffix(q, "Gi"):
+		multiplier = 1024 * 1024 * 1024
+		q = q[:len(q)-2]
+	case strings.HasSuffix(q, "Ti"):
+		multiplier = 1024 * 1024 * 1024 * 1024
+		q = q[:len(q)-2]
+	case strings.HasSuffix(q, "m"):
+		multiplier = 1
+		q = q[:len(q)-1]
+	}
+	n, err := strconv.ParseInt(q, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return n * multiplier, nil
 }
 
 func (q *SchedulingQueue) Add(pod *k8s.Pod) {

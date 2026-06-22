@@ -167,19 +167,19 @@ type BuildConfig struct {
 
 // Builder builds OCI images from Dokifiles.
 type Builder struct {
-	store         *image.Store
-	registry      *registry.Client
-	stageDirs     map[string]string
-	stages        []*Stage
-	envMap        map[string]string
-	argDefaults   map[string]string
-	cacheDir      string
-	secrets       map[string]string
-	dockerignore  *Dockerignore
-	noCache       bool
-	cache         *BuildCache
-	progress      *ProgressTracker
-	log           *slog.Logger
+	store        *image.Store
+	registry     *registry.Client
+	stageDirs    map[string]string
+	stages       []*Stage
+	envMap       map[string]string
+	argDefaults  map[string]string
+	cacheDir     string
+	secrets      map[string]string
+	dockerignore *Dockerignore
+	noCache      bool
+	cache        *BuildCache
+	progress     *ProgressTracker
+	log          *slog.Logger
 }
 
 // NewBuilder creates a new image builder.

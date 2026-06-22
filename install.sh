@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-VERSION="v0.9.3"
+VERSION="v0.10.0"
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 BINDIR="${PREFIX}/bin"
 
