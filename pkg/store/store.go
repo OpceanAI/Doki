@@ -54,11 +54,11 @@ type MemoryStore struct {
 }
 
 type watcher struct {
-	prefix  string
-	since   int64
-	ch      chan WatchEvent
-	store   *MemoryStore
-	id      int
+	prefix string
+	since  int64
+	ch     chan WatchEvent
+	store  *MemoryStore
+	id     int
 }
 
 func NewMemoryStore() *MemoryStore {

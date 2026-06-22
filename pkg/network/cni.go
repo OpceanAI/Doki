@@ -9,7 +9,6 @@ import (
 	"sync"
 )
 
-
 // CNIPlugin represents a CNI (Container Network Interface) plugin.
 type CNIPlugin struct {
 	Name    string
@@ -151,8 +150,8 @@ func (p *PastaManager) Start(pid int, opts ...string) (*exec.Cmd, error) {
 type FirewallBackend string
 
 const (
-	FirewallIptables  FirewallBackend = "iptables"
-	FirewallNftables  FirewallBackend = "nftables"
+	FirewallIptables FirewallBackend = "iptables"
+	FirewallNftables FirewallBackend = "nftables"
 )
 
 // FirewallManager manages firewall rules for containers.

@@ -180,17 +180,17 @@ type mockRunner struct {
 	detect bool
 }
 
-func (m *mockRunner) Name() ExecutionMode               { return m.mode }
-func (m *mockRunner) Detect() bool                      { return m.detect }
-func (m *mockRunner) Capabilities() RunnerCapabilities  { return RunnerCapabilities{} }
-func (m *mockRunner) Create(_ context.Context, _ *Config) (string, error) { return "", nil }
-func (m *mockRunner) Start(_ context.Context, _ string) (int, error)      { return 0, nil }
-func (m *mockRunner) Stop(_ context.Context, _ string, _ time.Duration) error { return nil }
+func (m *mockRunner) Name() ExecutionMode                                          { return m.mode }
+func (m *mockRunner) Detect() bool                                                 { return m.detect }
+func (m *mockRunner) Capabilities() RunnerCapabilities                             { return RunnerCapabilities{} }
+func (m *mockRunner) Create(_ context.Context, _ *Config) (string, error)          { return "", nil }
+func (m *mockRunner) Start(_ context.Context, _ string) (int, error)               { return 0, nil }
+func (m *mockRunner) Stop(_ context.Context, _ string, _ time.Duration) error      { return nil }
 func (m *mockRunner) Exec(_ context.Context, _ string, _ *ExecConfig) (int, error) { return 0, nil }
-func (m *mockRunner) Kill(_ context.Context, _ string, _ syscall.Signal) error { return nil }
-func (m *mockRunner) Pause(_ context.Context, _ string) error              { return nil }
-func (m *mockRunner) Resume(_ context.Context, _ string) error             { return nil }
-func (m *mockRunner) Wait(_ context.Context, _ string) (int, error)        { return 0, nil }
-func (m *mockRunner) Stats(_ context.Context, _ string) (*ContainerStats, error) { return nil, nil }
-func (m *mockRunner) Inspect(_ context.Context, _ string) (*ContainerJSON, error) { return nil, nil }
-func (m *mockRunner) Cleanup(_ context.Context, _ string) error            { return nil }
+func (m *mockRunner) Kill(_ context.Context, _ string, _ syscall.Signal) error     { return nil }
+func (m *mockRunner) Pause(_ context.Context, _ string) error                      { return nil }
+func (m *mockRunner) Resume(_ context.Context, _ string) error                     { return nil }
+func (m *mockRunner) Wait(_ context.Context, _ string) (int, error)                { return 0, nil }
+func (m *mockRunner) Stats(_ context.Context, _ string) (*ContainerStats, error)   { return nil, nil }
+func (m *mockRunner) Inspect(_ context.Context, _ string) (*ContainerJSON, error)  { return nil, nil }
+func (m *mockRunner) Cleanup(_ context.Context, _ string) error                    { return nil }

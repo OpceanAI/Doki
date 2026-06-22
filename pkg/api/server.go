@@ -24,6 +24,7 @@ import (
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/image"
 	"github.com/OpceanAI/Doki/pkg/network"
+	"github.com/OpceanAI/Doki/pkg/podman"
 	dokiruntime "github.com/OpceanAI/Doki/pkg/runtime"
 )
 
@@ -253,7 +254,7 @@ func (s *Server) handleVolumesPrune(w http.ResponseWriter, _ *http.Request) {
 }
 
 // NewServer creates a new API server.
-func NewServer(config *common.DokiConfig, rt *dokiruntime.Runtime, img *image.Store, net *network.Manager) *Server {
+func NewServer(config *common.DokiConfig, rt *dokiruntime.Runtime, img *image.Store, net *network.Manager) (*Server, error) {
 	s := &Server{
 		config:    config,
 		router:    http.NewServeMux(),
@@ -265,8 +266,15 @@ func NewServer(config *common.DokiConfig, rt *dokiruntime.Runtime, img *image.St
 		execStore: make(map[string]*common.ExecConfig),
 	}
 	s.registerRoutes()
+
+	podmanSrv, err := podman.NewPodmanServer(filepath.Join(config.DataDir, "podman"))
+	if err != nil {
+		return nil, fmt.Errorf("podman shim: %w", err)
+	}
+	podmanSrv.RegisterRoutes(s.router)
+
 	s.rebuildHandler()
-	return s
+	return s, nil
 }
 
 // RegisterHandler registers a custom handler for a path.
@@ -813,10 +821,11 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		// Pass healthcheck from image config.
 		if imgRecord.Config.Config.HealthCheck != nil {
 			cfg.HealthCheck = &dokiruntime.HealthCheckConfig{
-				Test:     imgRecord.Config.Config.HealthCheck.Test,
-				Interval: time.Duration(imgRecord.Config.Config.HealthCheck.Interval) * time.Nanosecond,
-				Timeout:  time.Duration(imgRecord.Config.Config.HealthCheck.Timeout) * time.Nanosecond,
-				Retries:  imgRecord.Config.Config.HealthCheck.Retries,
+				Test:        imgRecord.Config.Config.HealthCheck.Test,
+				Interval:    time.Duration(imgRecord.Config.Config.HealthCheck.Interval) * time.Nanosecond,
+				Timeout:     time.Duration(imgRecord.Config.Config.HealthCheck.Timeout) * time.Nanosecond,
+				Retries:     imgRecord.Config.Config.HealthCheck.Retries,
+				StartPeriod: time.Duration(imgRecord.Config.Config.HealthCheck.StartPeriod) * time.Nanosecond,
 			}
 		}
 	}
@@ -1488,14 +1497,14 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, _ *http.Request, i
 	}
 	defer func() { _ = conn.Close() }()
 	_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n"))
-	
+
 	// Stream container logs
 	if state.LogPath != "" {
 		// Read existing logs
 		if data, err := os.ReadFile(state.LogPath); err == nil {
 			_, _ = conn.Write(data)
 		}
-		
+
 		// Follow new logs
 		go func() {
 			file, err := os.Open(state.LogPath)
@@ -1503,10 +1512,10 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, _ *http.Request, i
 				return
 			}
 			defer func() { _ = file.Close() }()
-			
+
 			// Seek to end
 			_, _ = file.Seek(0, io.SeekEnd)
-			
+
 			buf := make([]byte, 4096)
 			for {
 				n, err := file.Read(buf)
@@ -1520,7 +1529,7 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, _ *http.Request, i
 			}
 		}()
 	}
-	
+
 	// Keep connection alive
 	_, _ = io.Copy(io.Discard, conn)
 }
@@ -1626,7 +1635,7 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 		if req.RestartPolicy.Name != "" {
 			state.Config.RestartPolicy = common.RestartPolicy(req.RestartPolicy.Name)
 		}
-		
+
 		// Persist changes
 		if err := s.runtime.SaveState(state); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "failed to save state: "+err.Error())
@@ -1926,14 +1935,14 @@ func (s *Server) handleImageInspect(w http.ResponseWriter, _ *http.Request, id s
 	}
 	if record.Config != nil {
 		dockerConfig := map[string]interface{}{
-			"Entrypoint":  record.Config.Config.Entrypoint,
-			"Cmd":         record.Config.Config.Cmd,
-			"Env":         record.Config.Config.Env,
-			"WorkingDir":  record.Config.Config.WorkingDir,
-			"Labels":      record.Config.Config.Labels,
-			"Volumes":     record.Config.Config.Volumes,
-			"StopSignal":  record.Config.Config.StopSignal,
-			"User":        record.Config.Config.User,
+			"Entrypoint": record.Config.Config.Entrypoint,
+			"Cmd":        record.Config.Config.Cmd,
+			"Env":        record.Config.Config.Env,
+			"WorkingDir": record.Config.Config.WorkingDir,
+			"Labels":     record.Config.Config.Labels,
+			"Volumes":    record.Config.Config.Volumes,
+			"StopSignal": record.Config.Config.StopSignal,
+			"User":       record.Config.Config.User,
 		}
 		if len(record.Config.Config.ExposedPorts) > 0 {
 			dockerConfig["ExposedPorts"] = record.Config.Config.ExposedPorts

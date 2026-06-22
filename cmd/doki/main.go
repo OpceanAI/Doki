@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/OpceanAI/Doki/internal/proot"
 	"github.com/OpceanAI/Doki/pkg/cli"
 	"github.com/OpceanAI/Doki/pkg/common"
+	"github.com/OpceanAI/Doki/pkg/deps"
 )
 
 // Command represents a CLI command with optional sub-commands.
@@ -1139,6 +1141,25 @@ Scan an image for known vulnerabilities (stub).`,
 			return c.Scout(target)
 		},
 	},
+	"deps": {
+		Name: "deps",
+		Help: `Usage: doki deps COMMAND
+
+Inspect and manage host dependencies.
+
+Commands:
+  ls              List system dependencies and their status
+  check           Exit non-zero if any required dependency is missing
+  go              List direct Go module dependencies from go.mod
+  install <name>  Install a dependency via the detected package manager
+
+Examples:
+  doki deps ls
+  doki deps check
+  doki deps go
+  doki deps install proot`,
+		Handler: handleDeps,
+	},
 }
 
 // groupCommands are top-level management command groups that proxy to existing commands.
@@ -1167,29 +1188,29 @@ Commands:
 // Build groupCommands sub-command proxies by referencing the original commands.
 func init() {
 	groupCommands["container"].SubCommands = map[string]*Command{
-		"ls":       commands["ps"],
-		"rm":       commands["rm"],
-		"inspect":  commands["inspect"],
-		"start":    commands["start"],
-		"stop":     commands["stop"],
-		"restart":  commands["restart"],
-		"kill":     commands["kill"],
-		"pause":    commands["pause"],
-		"unpause":  commands["unpause"],
-		"exec":     commands["exec"],
-		"logs":     commands["logs"],
-		"top":      commands["top"],
-		"stats":    commands["stats"],
-		"port":     commands["port"],
-		"rename":   commands["rename"],
-		"update":   commands["update"],
-		"wait":     commands["wait"],
-		"attach":   commands["attach"],
-		"commit":   commands["commit"],
-		"diff":     commands["diff"],
-		"cp":       commands["cp"],
-		"export":   commands["export"],
-		"prune":    commands["prune"],
+		"ls":      commands["ps"],
+		"rm":      commands["rm"],
+		"inspect": commands["inspect"],
+		"start":   commands["start"],
+		"stop":    commands["stop"],
+		"restart": commands["restart"],
+		"kill":    commands["kill"],
+		"pause":   commands["pause"],
+		"unpause": commands["unpause"],
+		"exec":    commands["exec"],
+		"logs":    commands["logs"],
+		"top":     commands["top"],
+		"stats":   commands["stats"],
+		"port":    commands["port"],
+		"rename":  commands["rename"],
+		"update":  commands["update"],
+		"wait":    commands["wait"],
+		"attach":  commands["attach"],
+		"commit":  commands["commit"],
+		"diff":    commands["diff"],
+		"cp":      commands["cp"],
+		"export":  commands["export"],
+		"prune":   commands["prune"],
 	}
 	groupCommands["image"].SubCommands = map[string]*Command{
 		"ls":      commands["images"],
@@ -1401,6 +1422,73 @@ func handleKube(c *cli.DokiCLI, args []string) error {
 	return nil
 }
 
+func handleDeps(_ *cli.DokiCLI, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("doki deps: requires a subcommand (ls, check, go, install)")
+	}
+	switch args[0] {
+	case "ls", "list":
+		return depsList()
+	case "check":
+		return depsCheck()
+	case "go", "go-mod", "gomod":
+		return depsGo()
+	case "install":
+		if len(args) < 2 {
+			return fmt.Errorf("doki deps install: requires a package name")
+		}
+		return deps.InstallDep(args[1])
+	default:
+		return fmt.Errorf("doki deps: '%s' is not a valid subcommand", args[0])
+	}
+}
+
+func depsList() error {
+	results := deps.CheckSystemDeps()
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tSTATUS\tVERSION\tTYPE\tHINT")
+	for _, r := range results {
+		status := "missing"
+		if r.Installed {
+			status = "ok"
+		}
+		typ := "optional"
+		if r.Required {
+			typ = "required"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, status, r.Version, typ, r.InstallHint)
+	}
+	return w.Flush()
+}
+
+func depsCheck() error {
+	results := deps.CheckSystemDeps()
+	var missing []string
+	for _, r := range results {
+		if r.Required && !r.Installed {
+			missing = append(missing, r.Name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required dependencies missing: %s", strings.Join(missing, ", "))
+	}
+	fmt.Println("All required dependencies are installed.")
+	return nil
+}
+
+func depsGo() error {
+	results, err := deps.CheckGoDeps()
+	if err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "MODULE\tVERSION")
+	for _, r := range results {
+		fmt.Fprintf(w, "%s\t%s\n", r.Path, r.Version)
+	}
+	return w.Flush()
+}
+
 func handleError(err error) {
 	if err == nil {
 		return
@@ -1429,6 +1517,7 @@ func printMainHelp() {
 	fmt.Println("  compose     Multi-container orchestration")
 	fmt.Println("  mesh        DokiLink-Lite mesh management")
 	fmt.Println("  link        DokiLink-Lite peer management")
+	fmt.Println("  deps        Inspect and manage host dependencies")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  run         Create and run a new container from an image")

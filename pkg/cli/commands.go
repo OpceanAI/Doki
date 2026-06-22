@@ -1110,13 +1110,13 @@ func (c *DokiCLI) Cp(containerID, srcPath, destPath string, _, _ bool) error {
 
 	// Extract tar to destination
 	tr := tar.NewReader(resp.Body)
-	
+
 	// Check if destination is an existing directory
 	destIsDir := false
 	if fi, err := os.Stat(destPath); err == nil && fi.IsDir() {
 		destIsDir = true
 	}
-	
+
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -1131,7 +1131,7 @@ func (c *DokiCLI) Cp(containerID, srcPath, destPath string, _, _ bool) error {
 		if destIsDir {
 			target = filepath.Join(destPath, filepath.Base(hdr.Name))
 		}
-		
+
 		if hdr.Typeflag == tar.TypeDir {
 			_ = os.MkdirAll(target, os.FileMode(hdr.Mode))
 		} else if hdr.Typeflag == tar.TypeReg {
@@ -1516,11 +1516,11 @@ func (c *DokiCLI) Images(all, quiet, noTrunc bool, filter string) error {
 	w := tabwriter.NewWriter(os.Stdout, 12, 0, 1, ' ', 0)
 	_, _ = fmt.Fprintln(w, "REPOSITORY\tTAG\tIMAGE ID\tCREATED\tSIZE")
 
-for _, img := range images {
-	created := formatDuration(time.Since(time.Unix(img.Created, 0)))
-	size := formatSize(img.Size)
-	id := img.ID
-	id = strings.TrimPrefix(id, "sha256:")
+	for _, img := range images {
+		created := formatDuration(time.Since(time.Unix(img.Created, 0)))
+		size := formatSize(img.Size)
+		id := img.ID
+		id = strings.TrimPrefix(id, "sha256:")
 		if !noTrunc && len(id) > 12 {
 			id = id[:12]
 		}
@@ -2357,7 +2357,9 @@ func (c *DokiCLI) VerifyImageSignature(imageName string) error {
 		return nil
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var result struct{ Signed bool `json:"signed"` }
+	var result struct {
+		Signed bool `json:"signed"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
@@ -2634,83 +2636,83 @@ func printOfflineVersion() error {
 
 // RunFlags holds all the flags accepted by the run command.
 type RunFlags struct {
-	Name          string
-	Detach        bool
-	Interactive   bool
-	TTY           bool
-	RM            bool
-	Privileged    bool
-	ReadOnly      bool
-	Network       string
-	RestartPolicy string
-	CPUShares     int64
-	Memory        int64
-	MemorySwap    int64
-	NanoCPUs      int64
-	CPUSetCPUs    string
-	CPUSetMems    string
-	CPUPeriod     int64
-	CPUQuota      int64
-	PidsLimit     int64
-	OOMKillDisable bool
-	ShmSize       int64
-	DNS           []string
-	DNSSearch     []string
-	DNSOptions    []string
-	ExtraHosts    []string
-	Env           []string
-	EnvFile       []string
-	Workdir       string
-	User          string
-	Entrypoint    string
-	StopSignal    string
-	StopTimeout   int
-	Init          bool
-	Pull          string
-	Platform      string
-	CapAdd        []string
-	CapDrop       []string
-	SecurityOpt   []string
-	Sysctls       map[string]string
-	Ulimits       []string
-	LogDriver     string
-	LogOpts       map[string]string
-	Ports         []string
-	PublishAll    bool
-	Volumes       []string
-	Mounts        []MountOpt
-	Devices       []string
+	Name              string
+	Detach            bool
+	Interactive       bool
+	TTY               bool
+	RM                bool
+	Privileged        bool
+	ReadOnly          bool
+	Network           string
+	RestartPolicy     string
+	CPUShares         int64
+	Memory            int64
+	MemorySwap        int64
+	NanoCPUs          int64
+	CPUSetCPUs        string
+	CPUSetMems        string
+	CPUPeriod         int64
+	CPUQuota          int64
+	PidsLimit         int64
+	OOMKillDisable    bool
+	ShmSize           int64
+	DNS               []string
+	DNSSearch         []string
+	DNSOptions        []string
+	ExtraHosts        []string
+	Env               []string
+	EnvFile           []string
+	Workdir           string
+	User              string
+	Entrypoint        string
+	StopSignal        string
+	StopTimeout       int
+	Init              bool
+	Pull              string
+	Platform          string
+	CapAdd            []string
+	CapDrop           []string
+	SecurityOpt       []string
+	Sysctls           map[string]string
+	Ulimits           []string
+	LogDriver         string
+	LogOpts           map[string]string
+	Ports             []string
+	PublishAll        bool
+	Volumes           []string
+	Mounts            []MountOpt
+	Devices           []string
 	DeviceCgroupRules []string
-	GroupAdd      []string
-	Hostname      string
-	Domainname    string
-	IP            string
-	IP6           string
-	Link          []string
-	LinkLocalIP   string
-	MACAddress    string
-	BlkioWeight   uint16
-	CgroupParent  string
-	CgroupNS      string
-	IPCMode       string
-	PIDMode       string
-	UTSMode       string
-	UsernsMode    string
-	Isolation     string
-	Runtime_RT    string
-	StorageOpt    map[string]string
-	VolumeDriver  string
-	VolumesFrom   []string
-	Expose        []string
-	Labels        map[string]string
-	LabelFile     []string
-	Annotations   map[string]string
-	HealthCmd     string
-	HealthInterval string
-	HealthTimeout string
-	HealthRetries int
+	GroupAdd          []string
+	Hostname          string
+	Domainname        string
+	IP                string
+	IP6               string
+	Link              []string
+	LinkLocalIP       string
+	MACAddress        string
+	BlkioWeight       uint16
+	CgroupParent      string
+	CgroupNS          string
+	IPCMode           string
+	PIDMode           string
+	UTSMode           string
+	UsernsMode        string
+	Isolation         string
+	Runtime_RT        string
+	StorageOpt        map[string]string
+	VolumeDriver      string
+	VolumesFrom       []string
+	Expose            []string
+	Labels            map[string]string
+	LabelFile         []string
+	Annotations       map[string]string
+	HealthCmd         string
+	HealthInterval    string
+	HealthTimeout     string
+	HealthRetries     int
 	HealthStartPeriod string
-	GPUs          string
+	GPUs              string
 }
 
 // MountOpt represents a single --mount flag value.

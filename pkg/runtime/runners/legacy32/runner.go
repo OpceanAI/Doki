@@ -44,7 +44,7 @@ func (r *Runner) Detect() bool { return true }
 // Capabilities returns the runner capabilities.
 func (r *Runner) Capabilities() rt.RunnerCapabilities {
 	return rt.RunnerCapabilities{
-		Arch: []string{"arm64", "armv7", "amd64", "386"},
+		Arch:      []string{"arm64", "armv7", "amd64", "386"},
 		GuestArch: []string{"armv7", "386"}, RootRequired: false,
 	}
 }
@@ -192,6 +192,7 @@ func (r *Runner) Wait(_ context.Context, _ string) (int, error) {
 	}
 	return 0, nil
 }
+
 // Stats returns resource usage metrics.
 func (r *Runner) Stats(_ context.Context, _ string) (*rt.ContainerStats, error) {
 	return &rt.ContainerStats{}, nil

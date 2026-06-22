@@ -20,9 +20,9 @@ func GenerateConfig(cfg *Config, rootfsPath string) *Spec {
 			Path:     rootfsPath,
 			Readonly: cfg.ReadOnly,
 		},
-		Process:    generateProcess(cfg),
-		Linux:      generateLinux(cfg),
-		Mounts:     generateMounts(cfg),
+		Process:     generateProcess(cfg),
+		Linux:       generateLinux(cfg),
+		Mounts:      generateMounts(cfg),
 		Annotations: cfg.Annotations,
 	}
 

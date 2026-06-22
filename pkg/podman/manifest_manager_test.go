@@ -9,7 +9,10 @@ import (
 
 func TestManifestManagerCreateAndInspect(t *testing.T) {
 	dir := t.TempDir()
-	mm := NewManifestManager(dir)
+	mm, err := NewManifestManager(dir)
+	if err != nil {
+		t.Fatalf("NewManifestManager: %v", err)
+	}
 
 	ml, err := mm.Create("ml1", []string{"alpine:3.19", "alpine:arm64"})
 	if err != nil {
@@ -33,7 +36,10 @@ func TestManifestManagerCreateAndInspect(t *testing.T) {
 
 func TestManifestManagerValidation(t *testing.T) {
 	dir := t.TempDir()
-	mm := NewManifestManager(dir)
+	mm, err := NewManifestManager(dir)
+	if err != nil {
+		t.Fatalf("NewManifestManager: %v", err)
+	}
 	if _, err := mm.Create("", nil); err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -41,7 +47,10 @@ func TestManifestManagerValidation(t *testing.T) {
 
 func TestManifestManagerAddAndRemove(t *testing.T) {
 	dir := t.TempDir()
-	mm := NewManifestManager(dir)
+	mm, err := NewManifestManager(dir)
+	if err != nil {
+		t.Fatalf("NewManifestManager: %v", err)
+	}
 	if _, err := mm.Create("ml2", nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -72,7 +81,10 @@ func TestManifestManagerAddAndRemove(t *testing.T) {
 
 func TestManifestManagerDelete(t *testing.T) {
 	dir := t.TempDir()
-	mm := NewManifestManager(dir)
+	mm, err := NewManifestManager(dir)
+	if err != nil {
+		t.Fatalf("NewManifestManager: %v", err)
+	}
 	if _, err := mm.Create("todelete", nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -90,11 +102,14 @@ func TestManifestManagerDelete(t *testing.T) {
 
 func TestManifestManagerDuplicateName(t *testing.T) {
 	dir := t.TempDir()
-	mm := NewManifestManager(dir)
+	mm, err := NewManifestManager(dir)
+	if err != nil {
+		t.Fatalf("NewManifestManager: %v", err)
+	}
 	if _, err := mm.Create("dup", nil); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
-	_, err := mm.Create("dup", nil)
+	_, err = mm.Create("dup", nil)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected duplicate error, got %v", err)
 	}

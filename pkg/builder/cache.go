@@ -38,10 +38,10 @@ type CacheEntry struct {
 
 // CacheStats returns cache statistics.
 type CacheStats struct {
-	Entries   int   `json:"entries"`
-	TotalSize int64 `json:"total_size"`
-	Hits      int64 `json:"hits"`
-	Misses    int64 `json:"misses"`
+	Entries   int     `json:"entries"`
+	TotalSize int64   `json:"total_size"`
+	Hits      int64   `json:"hits"`
+	Misses    int64   `json:"misses"`
 	HitRate   float64 `json:"hit_rate"`
 }
 
@@ -336,7 +336,7 @@ func (c *BuildCache) evict() {
 }
 
 func (c *BuildCache) loadIndex() {
-indexPath := filepath.Join(c.root, "index.json")
+	indexPath := filepath.Join(c.root, "index.json")
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
 		return
@@ -351,7 +351,7 @@ indexPath := filepath.Join(c.root, "index.json")
 }
 
 func (c *BuildCache) saveIndex() {
-indexPath := filepath.Join(c.root, "index.json")
+	indexPath := filepath.Join(c.root, "index.json")
 	data, err := json.MarshalIndent(c.index, "", "  ")
 	if err != nil {
 		return

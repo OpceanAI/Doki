@@ -2,9 +2,11 @@
 package macos
 
 import (
+	"errors"
 	"fmt"
-	"runtime"
+	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -89,11 +91,16 @@ func DetectCapabilities() *Capabilities {
 	caps := &Capabilities{
 		Arch:           runtime.GOARCH,
 		IsAppleSilicon: runtime.GOARCH == "arm64",
-		Hypervisor:     true,
+		Hypervisor:     checkHypervisor(),
 	}
 
-	major, minor, _ := getMacOSVersion()
-	caps.Version = fmt.Sprintf("%d.%d", major, minor)
+	major, minor, _, err := getMacOSVersion()
+	if err != nil {
+		// Could not detect version; default to safe minimum.
+		caps.Version = "unknown"
+	} else {
+		caps.Version = fmt.Sprintf("%d.%d", major, minor)
+	}
 
 	if major >= 26 {
 		caps.IsTahoe = true
@@ -101,7 +108,8 @@ func DetectCapabilities() *Capabilities {
 		caps.NFSv41 = true
 	}
 
-	if major >= 12 {
+	// Virtualization.framework was introduced in macOS 11 (Big Sur).
+	if major >= 11 {
 		caps.VZ = true
 		caps.VirtioFS = true
 		caps.BestBackend = "vz"
@@ -133,13 +141,21 @@ func DetectCapabilities() *Capabilities {
 	return caps
 }
 
-func getMacOSVersion() (int, int, int) {
+// getMacOSVersion returns the macOS version as (major, minor, patch).
+// Returns an error if the version cannot be determined.
+func getMacOSVersion() (int, int, int, error) {
 	out, err := exec.Command("sw_vers", "-productVersion").Output()
 	if err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, fmt.Errorf("detect macOS version: %w", err)
 	}
 	parts := strings.Split(strings.TrimSpace(string(out)), ".")
-	major, _ := strconv.Atoi(parts[0])
+	if len(parts) == 0 {
+		return 0, 0, 0, errors.New("empty macOS version")
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse major version %q: %w", parts[0], err)
+	}
 	minor := 0
 	patch := 0
 	if len(parts) > 1 {
@@ -148,36 +164,60 @@ func getMacOSVersion() (int, int, int) {
 	if len(parts) > 2 {
 		patch, _ = strconv.Atoi(parts[2])
 	}
-	return major, minor, patch
+	return major, minor, patch, nil
 }
 
-func checkRosetta() bool {
-	out, err := exec.Command("sysctl", "-n", "sysctl.proc_translated", "1").Output()
+// checkHypervisor probes whether the Hypervisor.framework is available
+// via sysctl kern.hv_support (macOS 10.15+). Returns false if the
+// sysctl is unavailable or reports no support.
+func checkHypervisor() bool {
+	out, err := exec.Command("sysctl", "-n", "kern.hv_support").Output()
 	if err != nil {
-		_, err = exec.LookPath("/usr/libexec/rosetta")
-		return err == nil
+		return false
 	}
 	return strings.TrimSpace(string(out)) == "1"
 }
 
-func SelectBackend(caps *Capabilities) Backend {
-	if caps.VZ {
-		return NewVZBackend()
+// checkRosetta detects whether Rosetta 2 is available on Apple Silicon.
+// Checks sysctl sysctl.proc_translated and the oahd runtime binary.
+func checkRosetta() bool {
+	// Check if the current process is translated (running under Rosetta).
+	out, err := exec.Command("sysctl", "-n", "sysctl.proc_translated").Output()
+	if err == nil && strings.TrimSpace(string(out)) == "1" {
+		return true
 	}
-	if caps.QEMU {
-		return NewQEMUBackend()
-	}
-	if caps.Sandbox {
-		return NewSandboxBackend()
-	}
-	return nil
+	// Check for the Rosetta runtime daemon.
+	_, err = exec.LookPath("/Library/Apple/usr/share/rosetta/rosetta")
+	return err == nil
 }
 
+// SelectBackend selects the best available backend based on detected
+// capabilities. Returns (backend, error) — the error is non-nil if no
+// backend is available.
+func SelectBackend(caps *Capabilities) (Backend, error) {
+	if caps == nil {
+		return nil, errors.New("macos: nil capabilities")
+	}
+	if caps.VZ && caps.Hypervisor {
+		return newVZBackend(), nil
+	}
+	if caps.QEMU {
+		return newQEMUBackend(), nil
+	}
+	if caps.Sandbox {
+		return newSandboxBackend(), nil
+	}
+	return nil, errors.New("macos: no virtualization backend available")
+}
+
+// DefaultVMImage returns the default VM image path for the given arch.
 func DefaultVMImage(arch string) string {
-	home, _ := exec.Command("sh", "-c", "echo $HOME").Output()
-	homeDir := strings.TrimSpace(string(home))
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		homeDir = os.Getenv("HOME")
+	}
 	if homeDir == "" {
-		homeDir = "~"
+		homeDir = "."
 	}
 	switch arch {
 	case "arm64":

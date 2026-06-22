@@ -230,7 +230,7 @@ func cmdVersion(server string) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
-	fmt.Printf("Client Version: v0.10.0\n")
+	fmt.Printf("Client Version: v%s\n", common.DokiVersion)
 	fmt.Printf("Server Version: %s\n", string(body))
 }
 

@@ -15,10 +15,10 @@ import (
 
 // AdvancedDNS provides SRV resolution, DNSSEC validation, persistent caching, and domain rules.
 type AdvancedDNS struct {
-	srvRecords   []SRVRecord
-	dnssec       *DNSSECValidator
-	cache        *PersistentCache
-	domains      *DomainResolver
+	srvRecords []SRVRecord
+	dnssec     *DNSSECValidator
+	cache      *PersistentCache
+	domains    *DomainResolver
 }
 
 // SRVRecord represents a DNS SRV record.
@@ -33,9 +33,9 @@ type SRVRecord struct {
 
 // DNSSECConfig holds DNSSEC validation settings.
 type DNSSECConfig struct {
-	Enabled    bool     `json:"enabled"`
-	Anchors    []string `json:"anchors"`
-	Validate   bool     `json:"validate"`
+	Enabled  bool     `json:"enabled"`
+	Anchors  []string `json:"anchors"`
+	Validate bool     `json:"validate"`
 }
 
 // CacheConfig holds persistent DNS cache settings.
@@ -62,11 +62,11 @@ type DNSSECValidator struct {
 
 // PersistentCache stores DNS responses in a SQLite database.
 type PersistentCache struct {
-	db         *sql.DB
-	maxEntries int
+	db          *sql.DB
+	maxEntries  int
 	positiveTTL time.Duration
 	negativeTTL time.Duration
-	mu         sync.RWMutex
+	mu          sync.RWMutex
 }
 
 // DomainResolver resolves domain names using pattern-based rules.

@@ -6,9 +6,30 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/OpceanAI/Doki/pkg/common"
 )
+
+// validateManifestName rejects names that could escape the manifest
+// store directory via path traversal.
+func validateManifestName(name string) error {
+	if name == "" {
+		return fmt.Errorf("manifest name is required")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("manifest name %q contains path separator", name)
+	}
+	if name == "." || name == ".." || strings.Contains(name, "..") {
+		return fmt.Errorf("manifest name %q contains path traversal sequence", name)
+	}
+	if !common.ValidContainerName(name) {
+		return fmt.Errorf("manifest name %q contains invalid characters", name)
+	}
+	return nil
+}
 
 type ManifestManager struct {
 	mu        sync.RWMutex
@@ -16,24 +37,24 @@ type ManifestManager struct {
 	store     string
 }
 
-func NewManifestManager(root string) *ManifestManager {
+func NewManifestManager(root string) (*ManifestManager, error) {
 	mm := &ManifestManager{
 		manifests: make(map[string]*ManifestList),
 		store:     filepath.Join(root, "manifests"),
 	}
-	if err := os.MkdirAll(mm.store, 0755); err != nil {
-		log.Printf("podman: create manifest store %s: %v", mm.store, err)
+	if err := os.MkdirAll(mm.store, 0750); err != nil {
+		return nil, fmt.Errorf("podman: create manifest store %s: %w", mm.store, err)
 	}
 	mm.loadManifests()
-	return mm
+	return mm, nil
 }
 
 func (mm *ManifestManager) Create(name string, images []string) (*ManifestList, error) {
 	mm.mu.Lock()
 	defer mm.mu.Unlock()
 
-	if name == "" {
-		return nil, fmt.Errorf("manifest name is required")
+	if err := validateManifestName(name); err != nil {
+		return nil, err
 	}
 	if _, exists := mm.manifests[name]; exists {
 		return nil, fmt.Errorf("manifest list %q already exists", name)
@@ -42,7 +63,7 @@ func (mm *ManifestManager) Create(name string, images []string) (*ManifestList, 
 	ml := &ManifestList{
 		Name:      name,
 		Images:    make([]ManifestEntry, 0),
-		MediaType: "application/vnd.docker.distribution.manifest.list.v2+json",
+		MediaType: "application/vnd.oci.image.index.v1+json",
 		Created:   time.Now(),
 		Modified:  time.Now(),
 	}
@@ -70,7 +91,9 @@ func (mm *ManifestManager) Inspect(name string) (*ManifestList, error) {
 	if !ok {
 		return nil, fmt.Errorf("manifest list %s not found", name)
 	}
-	return ml, nil
+	// Return a deep copy to avoid data race.
+	cp := *ml
+	return &cp, nil
 }
 
 func (mm *ManifestManager) Add(name, image string, platform Platform) error {
@@ -80,6 +103,13 @@ func (mm *ManifestManager) Add(name, image string, platform Platform) error {
 	ml, ok := mm.manifests[name]
 	if !ok {
 		return fmt.Errorf("manifest list %s not found", name)
+	}
+
+	// Check for duplicate image reference before adding.
+	for _, entry := range ml.Images {
+		if entry.Image == image {
+			return fmt.Errorf("image %s already in manifest list %s", image, name)
+		}
 	}
 
 	ml.Images = append(ml.Images, ManifestEntry{
@@ -100,7 +130,7 @@ func (mm *ManifestManager) Remove(name, image string) error {
 		return fmt.Errorf("manifest list %s not found", name)
 	}
 
-	filtered := make([]ManifestEntry, 0)
+	filtered := make([]ManifestEntry, 0, len(ml.Images))
 	for _, entry := range ml.Images {
 		if entry.Image != image {
 			filtered = append(filtered, entry)
@@ -115,6 +145,9 @@ func (mm *ManifestManager) Delete(name string) error {
 	mm.mu.Lock()
 	defer mm.mu.Unlock()
 
+	if err := validateManifestName(name); err != nil {
+		return fmt.Errorf("delete manifest: %w", err)
+	}
 	if _, ok := mm.manifests[name]; !ok {
 		return fmt.Errorf("manifest list %s not found", name)
 	}
@@ -133,7 +166,8 @@ func (mm *ManifestManager) List() []*ManifestList {
 
 	result := make([]*ManifestList, 0, len(mm.manifests))
 	for _, ml := range mm.manifests {
-		result = append(result, ml)
+		cp := *ml
+		result = append(result, &cp)
 	}
 	return result
 }
@@ -165,12 +199,15 @@ func (mm *ManifestManager) Annotate(name, image string, platform Platform) error
 }
 
 func (mm *ManifestManager) saveManifest(ml *ManifestList) error {
+	if err := validateManifestName(ml.Name); err != nil {
+		return fmt.Errorf("save manifest: %w", err)
+	}
 	data, err := json.MarshalIndent(ml, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest %s: %w", ml.Name, err)
 	}
 	path := filepath.Join(mm.store, ml.Name+".json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write manifest %s: %w", ml.Name, err)
 	}
 	return nil

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -90,7 +91,10 @@ func (ml *meshListener) acceptLoop(ctx context.Context) {
 func (ml *meshListener) serve(_ context.Context, c net.Conn) {
 	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
-	dec := json.NewDecoder(c)
+	// Limit the read to MaxGossipMessageBytes+1 to prevent OOM DoS.
+	// A legitimate gossip message is always <= MaxGossipMessageBytes.
+	// If a peer sends more, the decoder will hit the limit and fail.
+	dec := json.NewDecoder(io.LimitReader(c, MaxGossipMessageBytes+1))
 	dec.DisallowUnknownFields()
 	var msg GossipMessage
 	if err := dec.Decode(&msg); err != nil {

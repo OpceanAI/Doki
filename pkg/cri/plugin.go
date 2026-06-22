@@ -14,26 +14,47 @@ import (
 // CRIPlugin implements the Kubernetes Container Runtime Interface.
 // This provides a K8s-compatible container runtime via the CRI gRPC protocol.
 type CRIPlugin struct {
-	mu       sync.RWMutex
-	runtime  *runtime.Runtime
-	image    *image.Store
-	network  *network.Manager
+	mu           sync.RWMutex
+	runtime      *runtime.Runtime
+	image        *image.Store
+	network      *network.Manager
 	podSandboxes map[string]*PodSandbox
+	containers   map[string]*CRIContainer
+}
+
+// CRIContainer holds CRI-specific container metadata that is not stored in
+// the lower-level runtime.ContainerState (e.g. pod sandbox association and
+// CRI ContainerMetadata such as name/attempt).
+type CRIContainer struct {
+	ID           string
+	PodSandboxID string
+	Name         string
+	Attempt      uint32
+	Image        string
+	ImageRef     string
+	ImageID      string
+	Args         []string
+	Env          []string
+	WorkingDir   string
+	Labels       map[string]string
+	Annotations  map[string]string
+	CreatedAt    int64
+	LogPath      string
 }
 
 // PodSandbox represents a Kubernetes Pod.
 type PodSandbox struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Namespace   string            `json:"namespace"`
-	UID         string            `json:"uid"`
-	CreatedAt   int64             `json:"created_at"`
-	Labels      map[string]string `json:"labels"`
-	Annotations map[string]string `json:"annotations"`
-	Containers  []string          `json:"containers"`
-	Hostname    string            `json:"hostname"`
-	LogDirectory string           `json:"log_directory"`
-	State       string            `json:"state"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Namespace    string            `json:"namespace"`
+	UID          string            `json:"uid"`
+	CreatedAt    int64             `json:"created_at"`
+	Labels       map[string]string `json:"labels"`
+	Annotations  map[string]string `json:"annotations"`
+	Containers   []string          `json:"containers"`
+	Hostname     string            `json:"hostname"`
+	LogDirectory string            `json:"log_directory"`
+	State        string            `json:"state"`
 }
 
 // NewCRIPlugin creates a new CRI plugin.
@@ -43,6 +64,7 @@ func NewCRIPlugin(rt *runtime.Runtime, img *image.Store, net *network.Manager) *
 		image:        img,
 		network:      net,
 		podSandboxes: make(map[string]*PodSandbox),
+		containers:   make(map[string]*CRIContainer),
 	}
 }
 
@@ -116,7 +138,9 @@ func (c *CRIPlugin) StopPodSandbox(id string) error {
 	for _, containerID := range sandbox.Containers {
 		_ = c.runtime.Stop(containerID, 10)
 		_ = c.runtime.Delete(containerID, true)
+		delete(c.containers, containerID)
 	}
+	sandbox.Containers = nil
 
 	sandbox.State = "SANDBOX_NOTREADY"
 	// Cleanup network.
@@ -138,7 +162,9 @@ func (c *CRIPlugin) RemovePodSandbox(id string) error {
 	for _, containerID := range sandbox.Containers {
 		_ = c.runtime.Stop(containerID, 10)
 		_ = c.runtime.Delete(containerID, true)
+		delete(c.containers, containerID)
 	}
+	sandbox.Containers = nil
 
 	delete(c.podSandboxes, id)
 	return nil
@@ -170,37 +196,126 @@ func (c *CRIPlugin) ListPodSandbox() []*PodSandbox {
 	return pods
 }
 
-// CreateContainer creates a container within a pod sandbox.
-func (c *CRIPlugin) CreateContainer(podID, containerID string, imageName string, args, env []string) error {
+// CreateContainer creates a container within a pod sandbox but does NOT start
+// it. The CRI gRPC API separates CreateContainer and StartContainer, so the
+// caller is responsible for invoking StartContainer afterwards.
+func (c *CRIPlugin) CreateContainer(cc *CRIContainer) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	sandbox, ok := c.podSandboxes[podID]
+	sandbox, ok := c.podSandboxes[cc.PodSandboxID]
 	if !ok {
-		return common.NewErrNotFound("pod", podID)
+		return common.NewErrNotFound("pod", cc.PodSandboxID)
 	}
 
 	// Pull image if needed.
-	if !c.image.Exists(imageName) {
-		_, _ = c.image.Pull(imageName)
+	if cc.Image != "" && !c.image.Exists(cc.Image) {
+		_, _ = c.image.Pull(cc.Image)
+	}
+
+	// Resolve image ID/ref for status reporting.
+	if record, err := c.image.Get(cc.Image); err == nil {
+		cc.ImageID = record.ID
+		cc.ImageRef = record.ID
 	}
 
 	cfg := &runtime.Config{
-		ID: containerID,
-		Args:       args,
-		Env:        env,
+		ID:          cc.ID,
+		Args:        cc.Args,
+		Env:         cc.Env,
+		Cwd:         cc.WorkingDir,
+		Labels:      cc.Labels,
+		Annotations: cc.Annotations,
+		ImageRef:    cc.Image,
+		NetworkMode: common.NetworkBridge,
 	}
 
 	if _, err := c.runtime.Create(cfg); err != nil {
 		return err
 	}
 
-	if err := c.runtime.Start(containerID); err != nil {
-		return err
-	}
-
-	sandbox.Containers = append(sandbox.Containers, containerID)
+	cc.CreatedAt = common.NowTimestamp()
+	c.containers[cc.ID] = cc
+	sandbox.Containers = append(sandbox.Containers, cc.ID)
 	return nil
+}
+
+// StartContainer starts a previously created container.
+func (c *CRIPlugin) StartContainer(containerID string) error {
+	c.mu.Lock()
+	cc, ok := c.containers[containerID]
+	c.mu.Unlock()
+	if !ok {
+		return common.NewErrNotFound("container", containerID)
+	}
+	_ = cc
+	return c.runtime.Start(containerID)
+}
+
+// StopContainer stops a running container with a grace period (seconds).
+func (c *CRIPlugin) StopContainer(containerID string, timeout int) error {
+	c.mu.RLock()
+	_, ok := c.containers[containerID]
+	c.mu.RUnlock()
+	if !ok {
+		return common.NewErrNotFound("container", containerID)
+	}
+	return c.runtime.Stop(containerID, timeout)
+}
+
+// RemoveContainer removes a container. If it is still running it is forcibly
+// removed. This call is idempotent.
+func (c *CRIPlugin) RemoveContainer(containerID string) error {
+	c.mu.Lock()
+	cc, ok := c.containers[containerID]
+	if ok {
+		// Remove from the owning sandbox's container list.
+		if sandbox, sOK := c.podSandboxes[cc.PodSandboxID]; sOK {
+			sandbox.Containers = removeString(sandbox.Containers, containerID)
+		}
+		delete(c.containers, containerID)
+	}
+	c.mu.Unlock()
+
+	// Idempotent: if the container was never tracked or already removed,
+	// runtime.Delete with force=true still succeeds.
+	return c.runtime.Delete(containerID, true)
+}
+
+// GetContainer returns the CRI metadata for a container.
+func (c *CRIPlugin) GetContainer(containerID string) (*CRIContainer, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cc, ok := c.containers[containerID]
+	if !ok {
+		return nil, common.NewErrNotFound("container", containerID)
+	}
+	return cc, nil
+}
+
+// ListContainers returns the CRI metadata for all containers, optionally
+// filtered by pod sandbox ID. An empty podID returns every container.
+func (c *CRIPlugin) ListContainers(podID string) []*CRIContainer {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make([]*CRIContainer, 0, len(c.containers))
+	for _, cc := range c.containers {
+		if podID != "" && cc.PodSandboxID != podID {
+			continue
+		}
+		result = append(result, cc)
+	}
+	return result
+}
+
+func removeString(slice []string, s string) []string {
+	out := make([]string, 0, len(slice))
+	for _, v := range slice {
+		if v != s {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // PullImage pulls an image.

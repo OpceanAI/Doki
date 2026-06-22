@@ -94,7 +94,7 @@ func (d *BtrfsDriver) Remove(id string) error {
 }
 
 // Cleanup releases resources held by the btrfs driver.
-func (d *BtrfsDriver) Cleanup() error  { return nil }
+func (d *BtrfsDriver) Cleanup() error { return nil }
 
 // GetMetadata returns metadata for the given layer.
 func (d *BtrfsDriver) GetMetadata(_ string) (map[string]string, error) {
@@ -105,9 +105,9 @@ func (d *BtrfsDriver) GetMetadata(_ string) (map[string]string, error) {
 
 // ZFSDriver implements the storage driver using ZFS filesystems.
 type ZFSDriver struct {
-	root      string
-	pool      string
-	fsPrefix  string
+	root     string
+	pool     string
+	fsPrefix string
 }
 
 // NewZFSDriver creates a new ZFS storage driver.
@@ -172,7 +172,7 @@ func (d *ZFSDriver) Remove(id string) error {
 }
 
 // Cleanup releases resources held by the ZFS driver.
-func (d *ZFSDriver) Cleanup() error  { return nil }
+func (d *ZFSDriver) Cleanup() error { return nil }
 
 // GetMetadata returns metadata for the given layer.
 func (d *ZFSDriver) GetMetadata(_ string) (map[string]string, error) {
@@ -220,7 +220,7 @@ func (d *VFSDriver) Remove(id string) error {
 }
 
 // Cleanup releases resources held by the VFS driver.
-func (d *VFSDriver) Cleanup() error  { return nil }
+func (d *VFSDriver) Cleanup() error { return nil }
 
 // GetMetadata returns metadata for the given layer.
 func (d *VFSDriver) GetMetadata(_ string) (map[string]string, error) {
@@ -231,10 +231,10 @@ func (d *VFSDriver) GetMetadata(_ string) (map[string]string, error) {
 
 // GCConfig holds configuration for garbage collection.
 type GCConfig struct {
-	Enabled       bool
-	Interval      time.Duration
-	MaxAge        time.Duration
-	MinFreeSpace  int64
+	Enabled      bool
+	Interval     time.Duration
+	MaxAge       time.Duration
+	MinFreeSpace int64
 }
 
 // GarbageCollector runs periodic garbage collection on unused layers.

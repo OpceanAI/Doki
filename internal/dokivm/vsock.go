@@ -24,7 +24,7 @@ func NewVsockClient(cid, port uint32) *VsockClient {
 // VsockMessage represents a message exchanged via vsock.
 type VsockMessage struct {
 	Type string          `json:"type"`
-	Data json.RawMessage  `json:"data,omitempty"`
+	Data json.RawMessage `json:"data,omitempty"`
 	Cmd  []string        `json:"cmd,omitempty"`
 	Env  []string        `json:"env,omitempty"`
 	Cwd  string          `json:"cwd,omitempty"`
@@ -65,11 +65,11 @@ func (v *VsockClient) Exec(_ context.Context, cmd []string, env []string, cwd st
 		switch resp.Type {
 		case "stdout":
 			if stdout != nil {
-				_, _ = stdout.Write([]byte(string(resp.Data)))
+				_, _ = stdout.Write(resp.Data)
 			}
 		case "stderr":
 			if stderr != nil {
-				_, _ = stderr.Write([]byte(string(resp.Data)))
+				_, _ = stderr.Write(resp.Data)
 			}
 		case "exit":
 			if resp.Code != 0 {

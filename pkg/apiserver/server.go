@@ -3,13 +3,17 @@ package apiserver
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/k8s-types"
 	"github.com/OpceanAI/Doki/pkg/store"
 )
@@ -62,8 +66,8 @@ func (a *APIServer) registerRoutes() {
 	a.mux.HandleFunc("/apis/apps/v1/namespaces/", a.handleAppsNamespaced)
 	a.mux.HandleFunc("/apis/batch/v1", a.handleBatchV1Resources)
 	a.mux.HandleFunc("/apis/batch/v1/namespaces/", a.handleBatchNamespaced)
-	a.mux.HandleFunc("/apis/networking/v1/namespaces/", a.handleNetworkingNamespaced)
-	a.mux.HandleFunc("/apis/rbac/v1/", a.handleRBAC)
+	a.mux.HandleFunc("/apis/networking.k8s.io/v1/namespaces/", a.handleNetworkingNamespaced)
+	a.mux.HandleFunc("/apis/rbac.authorization.k8s.io/v1/", a.handleRBAC)
 
 	a.mux.HandleFunc("/healthz", a.handleHealthz)
 	a.mux.HandleFunc("/readyz", a.handleReadyz)
@@ -203,16 +207,16 @@ func (a *APIServer) handleAPIGroupList(w http.ResponseWriter, _ *http.Request) {
 			{
 				"name": "networking.k8s.io",
 				"versions": []map[string]string{
-					{"groupVersion": "networking/v1", "version": "v1"},
+					{"groupVersion": "networking.k8s.io/v1", "version": "v1"},
 				},
-				"preferredVersion": map[string]string{"groupVersion": "networking/v1", "version": "v1"},
+				"preferredVersion": map[string]string{"groupVersion": "networking.k8s.io/v1", "version": "v1"},
 			},
 			{
 				"name": "rbac.authorization.k8s.io",
 				"versions": []map[string]string{
-					{"groupVersion": "rbac/v1", "version": "v1"},
+					{"groupVersion": "rbac.authorization.k8s.io/v1", "version": "v1"},
 				},
-				"preferredVersion": map[string]string{"groupVersion": "rbac/v1", "version": "v1"},
+				"preferredVersion": map[string]string{"groupVersion": "rbac.authorization.k8s.io/v1", "version": "v1"},
 			},
 		},
 	})
@@ -251,11 +255,11 @@ func (a *APIServer) handleBatchNamespaced(w http.ResponseWriter, r *http.Request
 }
 
 func (a *APIServer) handleNetworkingNamespaced(w http.ResponseWriter, r *http.Request) {
-	a.handleGroupNamespaced(w, r, "networking")
+	a.handleGroupNamespaced(w, r, "networking.k8s.io")
 }
 
 func (a *APIServer) handleRBAC(w http.ResponseWriter, r *http.Request) {
-	a.handleGroupNamespaced(w, r, "rbac")
+	a.handleGroupNamespaced(w, r, "rbac.authorization.k8s.io")
 }
 
 func (a *APIServer) handleGroupNamespaced(w http.ResponseWriter, r *http.Request, group string) {
@@ -341,14 +345,38 @@ func (a *APIServer) handleResource(w http.ResponseWriter, r *http.Request, group
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		obj := &store.StoredObject{Value: body}
+		var objMap map[string]interface{}
+		if err := json.Unmarshal(body, &objMap); err != nil {
+			http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+		meta, _ := objMap["metadata"].(map[string]interface{})
+		if meta == nil {
+			meta = make(map[string]interface{})
+		}
+		if _, ok := meta["uid"]; !ok {
+			meta["uid"] = generateUUID()
+		}
+		if _, ok := meta["resourceVersion"]; !ok {
+			meta["resourceVersion"] = "1"
+		}
+		if _, ok := meta["creationTimestamp"]; !ok {
+			meta["creationTimestamp"] = time.Now().UTC().Format(time.RFC3339)
+		}
+		objMap["metadata"] = meta
+		stored, err := json.Marshal(objMap)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		obj := &store.StoredObject{Value: stored}
 		if err := a.store.Put(key, obj); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write(body)
+		_, _ = w.Write(stored)
 
 	case http.MethodPut:
 		body, err := io.ReadAll(r.Body)
@@ -375,9 +403,25 @@ func (a *APIServer) handleResource(w http.ResponseWriter, r *http.Request, group
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		_ = body
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(existing.Value)
+		ct := r.Header.Get("Content-Type")
+		switch ct {
+		case "application/merge-patch+json", "application/strategic-merge-patch+json":
+			merged, merr := mergePatch(existing.Value, body)
+			if merr != nil {
+				http.Error(w, merr.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := a.store.Put(key, &store.StoredObject{Value: merged}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(merged)
+		case "application/json-patch+json":
+			http.Error(w, "JSON Patch is not implemented", http.StatusNotImplemented)
+		default:
+			http.Error(w, "unsupported patch content type: "+ct, http.StatusUnsupportedMediaType)
+		}
 
 	case http.MethodDelete:
 		if err := a.store.Delete(key); err != nil {
@@ -422,7 +466,12 @@ func (a *APIServer) handleWatch(w http.ResponseWriter, r *http.Request, group, r
 	prefix := store.KeyFor(group, resource, namespace, "")
 	sinceRev := int64(0)
 	if rv := r.URL.Query().Get("resourceVersion"); rv != "" {
-		_, _ = fmt.Sscanf(rv, "%d", &sinceRev)
+		parsed, err := strconv.ParseInt(rv, 10, 64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("invalid resourceVersion %q: %v", rv, err), http.StatusBadRequest)
+			return
+		}
+		sinceRev = parsed
 	}
 
 	ch, err := a.store.Watch(prefix, sinceRev)
@@ -438,6 +487,7 @@ func (a *APIServer) handleWatch(w http.ResponseWriter, r *http.Request, group, r
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, private")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
@@ -451,7 +501,18 @@ func (a *APIServer) handleWatch(w http.ResponseWriter, r *http.Request, group, r
 			if !ok {
 				return
 			}
-			_ = json.NewEncoder(w).Encode(event)
+			encoded, err := json.Marshal(struct {
+				Type   string          `json:"type"`
+				Object json.RawMessage `json:"object"`
+			}{
+				Type:   event.Type,
+				Object: event.Object.Value,
+			})
+			if err != nil {
+				continue
+			}
+			_, _ = w.Write(encoded)
+			_, _ = w.Write([]byte("\n"))
 			flusher.Flush()
 		}
 	}
@@ -474,12 +535,14 @@ func (a *APIServer) handleLivez(w http.ResponseWriter, _ *http.Request) {
 
 func (a *APIServer) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"major":        "0",
-		"minor":        "10",
-		"gitVersion":   "v0.10.0",
-		"platform":     "linux/arm64",
-		"goVersion":    "go1.26",
-		"compiler":     "gc",
+		"major":      "0",
+		"minor":      "10",
+		"gitVersion": common.DokiVersion,
+		"gitCommit":  common.GitCommit,
+		"buildDate":  common.BuildDate,
+		"platform":   runtime.GOOS + "/" + runtime.GOARCH,
+		"goVersion":  runtime.Version(),
+		"compiler":   runtime.Compiler,
 	})
 }
 
@@ -488,7 +551,7 @@ func (a *APIServer) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 		"swagger": "2.0",
 		"info": map[string]string{
 			"title":   "Doki Kubernetes API",
-			"version": "v0.10.0",
+			"version": "v" + common.DokiVersion,
 		},
 	})
 }
@@ -527,4 +590,45 @@ func groupVersion(group string) string {
 		return "v1"
 	}
 	return group + "/v1"
+}
+
+func mergePatch(existing, patch json.RawMessage) (json.RawMessage, error) {
+	var base, delta map[string]interface{}
+	if err := json.Unmarshal(existing, &base); err != nil {
+		return nil, fmt.Errorf("invalid existing object: %w", err)
+	}
+	if err := json.Unmarshal(patch, &delta); err != nil {
+		return nil, fmt.Errorf("invalid patch: %w", err)
+	}
+	deepMerge(base, delta)
+	return json.Marshal(base)
+}
+
+func deepMerge(dst, src map[string]interface{}) {
+	for k, sv := range src {
+		if sv == nil {
+			delete(dst, k)
+			continue
+		}
+		dv, ok := dst[k]
+		if !ok {
+			dst[k] = sv
+			continue
+		}
+		if dvMap, dOK := dv.(map[string]interface{}); dOK {
+			if svMap, sOK := sv.(map[string]interface{}); sOK {
+				deepMerge(dvMap, svMap)
+				continue
+			}
+		}
+		dst[k] = sv
+	}
+}
+
+func generateUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

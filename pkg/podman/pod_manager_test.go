@@ -9,7 +9,10 @@ import (
 
 func TestPodManagerCreateAndList(t *testing.T) {
 	dir := t.TempDir()
-	pm := NewPodManager(dir)
+	pm, err := NewPodManager(dir)
+	if err != nil {
+		t.Fatalf("NewPodManager: %v", err)
+	}
 
 	pod, err := pm.CreatePod(&PodCreateConfig{Name: "web", Hostname: "web.local"})
 	if err != nil {
@@ -37,7 +40,10 @@ func TestPodManagerCreateAndList(t *testing.T) {
 
 func TestPodManagerValidation(t *testing.T) {
 	dir := t.TempDir()
-	pm := NewPodManager(dir)
+	pm, err := NewPodManager(dir)
+	if err != nil {
+		t.Fatalf("NewPodManager: %v", err)
+	}
 
 	if _, err := pm.CreatePod(&PodCreateConfig{Name: ""}); err == nil {
 		t.Fatal("expected error for empty name")
@@ -49,7 +55,10 @@ func TestPodManagerValidation(t *testing.T) {
 
 func TestPodManagerLifecycleAndPersistence(t *testing.T) {
 	dir := t.TempDir()
-	pm := NewPodManager(dir)
+	pm, err := NewPodManager(dir)
+	if err != nil {
+		t.Fatalf("NewPodManager: %v", err)
+	}
 
 	pod, err := pm.CreatePod(&PodCreateConfig{Name: "lifecycle"})
 	if err != nil {
@@ -102,11 +111,14 @@ func TestPodManagerLifecycleAndPersistence(t *testing.T) {
 
 func TestPodManagerDuplicateName(t *testing.T) {
 	dir := t.TempDir()
-	pm := NewPodManager(dir)
+	pm, err := NewPodManager(dir)
+	if err != nil {
+		t.Fatalf("NewPodManager: %v", err)
+	}
 	if _, err := pm.CreatePod(&PodCreateConfig{Name: "dup"}); err != nil {
 		t.Fatalf("first CreatePod: %v", err)
 	}
-	_, err := pm.CreatePod(&PodCreateConfig{Name: "dup"})
+	_, err = pm.CreatePod(&PodCreateConfig{Name: "dup"})
 	if err == nil || !strings.Contains(err.Error(), "already in use") {
 		t.Fatalf("expected duplicate error, got %v", err)
 	}

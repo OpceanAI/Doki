@@ -98,10 +98,10 @@ func TestDetectBestDriver(t *testing.T) {
 	driver := DetectBestDriver(dir)
 	// Should return a valid driver name.
 	validDrivers := map[string]bool{
-		DriverOverlay2: true,
+		DriverOverlay2:      true,
 		DriverFuseOverlayFS: true,
-		"btrfs": true,
-		"zfs": true,
+		"btrfs":             true,
+		"zfs":               true,
 	}
 	if !validDrivers[driver] {
 		t.Errorf("DetectBestDriver = %s, want valid driver", driver)

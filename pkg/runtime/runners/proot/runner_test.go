@@ -34,9 +34,9 @@ func TestNormalizeProotCwd(t *testing.T) {
 // including "uid:gid", "uid", and empty strings.
 func TestParseUser(t *testing.T) {
 	cases := []struct {
-		in       string
-		wantUID  int
-		wantGID  int
+		in      string
+		wantUID int
+		wantGID int
 	}{
 		{"", -1, -1},
 		{"0", 0, 0},

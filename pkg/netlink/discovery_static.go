@@ -20,8 +20,8 @@ type StaticPeersConfig struct {
 // StaticPeers is an in-memory view of $DOKI_ROOT/mesh/peers.json with
 // safe concurrent access and atomic file writes.
 type StaticPeers struct {
-	path string
-	mu   sync.RWMutex
+	path  string
+	mu    sync.RWMutex
 	peers map[string]*Peer
 }
 

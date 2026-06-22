@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,17 +16,29 @@ import (
 )
 
 type PodmanServer struct {
-	podMgr     *PodManager
-	secretMgr  *SecretManager
+	podMgr      *PodManager
+	secretMgr   *SecretManager
 	manifestMgr *ManifestManager
 }
 
-func NewPodmanServer(root string) *PodmanServer {
-	return &PodmanServer{
-		podMgr:      NewPodManager(root),
-		secretMgr:   NewSecretManager(root),
-		manifestMgr: NewManifestManager(root),
+func NewPodmanServer(root string) (*PodmanServer, error) {
+	pm, err := NewPodManager(root)
+	if err != nil {
+		return nil, err
 	}
+	sm, err := NewSecretManager(root)
+	if err != nil {
+		return nil, err
+	}
+	mm, err := NewManifestManager(root)
+	if err != nil {
+		return nil, err
+	}
+	return &PodmanServer{
+		podMgr:      pm,
+		secretMgr:   sm,
+		manifestMgr: mm,
+	}, nil
 }
 
 func (s *PodmanServer) RegisterRoutes(mux *http.ServeMux) {
@@ -35,7 +50,10 @@ func (s *PodmanServer) logMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
-		log.Printf("podman %s %s -> %d %s", r.Method, r.URL.Path, rw.status, time.Since(start))
+		// Sanitize log fields to prevent log injection via path/method.
+		method := sanitizeLogField(r.Method)
+		path := sanitizeLogField(r.URL.Path)
+		log.Printf("podman %s %s -> %d %s", method, path, rw.status, time.Since(start))
 	})
 }
 
@@ -144,21 +162,22 @@ func (s *PodmanServer) route(w http.ResponseWriter, r *http.Request) {
 }
 
 type Pod struct {
-	ID           string            `json:"Id"`
-	Name         string            `json:"Name"`
-	Namespace    string            `json:"Namespace,omitempty"`
-	Created      time.Time         `json:"Created"`
-	Hostname     string            `json:"Hostname,omitempty"`
-	Labels       map[string]string `json:"Labels,omitempty"`
-	State        string            `json:"State"`
-	Containers   []PodContainer    `json:"Containers"`
-	InfraID      string            `json:"InfraContainerId"`
-	CgroupPath   string            `json:"CgroupPath,omitempty"`
-	SharedNS     []string          `json:"SharedNamespaces,omitempty"`
-	CPUShares    int64             `json:"CpuShares,omitempty"`
-	ExitPolicy   string            `json:"ExitPolicy,omitempty"`
-	Restart      string            `json:"Restart,omitempty"`
-	MemoryLimit  int64             `json:"MemoryLimit,omitempty"`
+	ID          string            `json:"Id"`
+	Name        string            `json:"Name"`
+	Namespace   string            `json:"Namespace,omitempty"`
+	Created     time.Time         `json:"Created"`
+	Hostname    string            `json:"Hostname,omitempty"`
+	Labels      map[string]string `json:"Labels,omitempty"`
+	State       string            `json:"State"`
+	Containers  []PodContainer    `json:"Containers"`
+	InfraID     string            `json:"InfraContainerId"`
+	CgroupPath  string            `json:"CgroupPath,omitempty"`
+	SharedNS    []string          `json:"SharedNamespaces,omitempty"`
+	CPUShares   int64             `json:"CpuShares,omitempty"`
+	ExitPolicy  string            `json:"ExitPolicy,omitempty"`
+	Restart     string            `json:"Restart,omitempty"`
+	MemoryLimit int64             `json:"MemoryLimit,omitempty"`
+	ExitSignal  string            `json:"ExitSignal,omitempty"`
 }
 
 type PodContainer struct {
@@ -168,38 +187,38 @@ type PodContainer struct {
 }
 
 type PodCreateConfig struct {
-	Name            string                     `json:"name"`
-	Hostname        string                     `json:"hostname,omitempty"`
-	DomainName      string                     `json:"domainname,omitempty"`
-	Labels          map[string]string          `json:"labels,omitempty"`
-	ShareNamespaces []string                   `json:"share_parent,omitempty"`
-	InfraImage      string                     `json:"infra_image,omitempty"`
-	InfraCommand    []string                   `json:"infra_command,omitempty"`
-	InfraName       string                     `json:"infra_name,omitempty"`
-	PortBindings    map[string][]PortBinding   `json:"portmappings,omitempty"`
-	ExitPolicy      string                     `json:"exit_policy,omitempty"`
-	CPUShares       int64                      `json:"cpu_shares,omitempty"`
-	MemoryLimit     int64                      `json:"memory_limit,omitempty"`
-	CPULimit        float64                    `json:"cpu_limit,omitempty"`
-	Restart         string                     `json:"restart,omitempty"`
-	Networks        map[string]NetworkOptions  `json:"networks,omitempty"`
-	SecurityOpt     []string                   `json:"security_opt,omitempty"`
-	NoInfra         bool                       `json:"no_infra,omitempty"`
-	CgroupParent    string                     `json:"cgroup_parent,omitempty"`
-	Pid             string                     `json:"pid,omitempty"`
-	Userns          string                     `json:"userns,omitempty"`
-	Uts             string                     `json:"uts,omitempty"`
-	Volumes         []string                   `json:"volumes,omitempty"`
-	DNSOptions      []string                   `json:"dns_option,omitempty"`
-	DNSSearch       []string                   `json:"dns_search,omitempty"`
-	DNServers       []string                   `json:"dns_server,omitempty"`
-	HostAdd         []string                   `json:"hostadd,omitempty"`
+	Name            string                    `json:"name"`
+	Hostname        string                    `json:"hostname,omitempty"`
+	DomainName      string                    `json:"domainname,omitempty"`
+	Labels          map[string]string         `json:"labels,omitempty"`
+	ShareNamespaces []string                  `json:"share_parent,omitempty"`
+	InfraImage      string                    `json:"infra_image,omitempty"`
+	InfraCommand    []string                  `json:"infra_command,omitempty"`
+	InfraName       string                    `json:"infra_name,omitempty"`
+	PortBindings    map[string][]PortBinding  `json:"portmappings,omitempty"`
+	ExitPolicy      string                    `json:"exit_policy,omitempty"`
+	CPUShares       int64                     `json:"cpu_shares,omitempty"`
+	MemoryLimit     int64                     `json:"memory_limit,omitempty"`
+	CPULimit        float64                   `json:"cpu_limit,omitempty"`
+	Restart         string                    `json:"restart,omitempty"`
+	Networks        map[string]NetworkOptions `json:"networks,omitempty"`
+	SecurityOpt     []string                  `json:"security_opt,omitempty"`
+	NoInfra         bool                      `json:"no_infra,omitempty"`
+	CgroupParent    string                    `json:"cgroup_parent,omitempty"`
+	Pid             string                    `json:"pid,omitempty"`
+	Userns          string                    `json:"userns,omitempty"`
+	Uts             string                    `json:"uts,omitempty"`
+	Volumes         []string                  `json:"volumes,omitempty"`
+	DNSOptions      []string                  `json:"dns_option,omitempty"`
+	DNSSearch       []string                  `json:"dns_search,omitempty"`
+	DNServers       []string                  `json:"dns_server,omitempty"`
+	HostAdd         []string                  `json:"hostadd,omitempty"`
 }
 
 type NetworkOptions struct {
-	Aliases    []string `json:"aliases,omitempty"`
-	StaticIP   string   `json:"static_ip,omitempty"`
-	StaticMAC  string   `json:"static_mac,omitempty"`
+	Aliases   []string `json:"aliases,omitempty"`
+	StaticIP  string   `json:"static_ip,omitempty"`
+	StaticMAC string   `json:"static_mac,omitempty"`
 }
 
 type PortBinding struct {
@@ -214,10 +233,10 @@ type SecretSpec struct {
 }
 
 type Secret struct {
-	ID        string     `json:"ID"`
-	Spec      SecretSpec `json:"Spec"`
-	Created   time.Time  `json:"CreatedAt"`
-	Updated   time.Time  `json:"UpdatedAt"`
+	ID      string     `json:"ID"`
+	Spec    SecretSpec `json:"Spec"`
+	Created time.Time  `json:"CreatedAt"`
+	Updated time.Time  `json:"UpdatedAt"`
 }
 
 type ManifestList struct {
@@ -244,11 +263,11 @@ type Platform struct {
 }
 
 type Quadlet struct {
-	Name     string    `json:"name"`
-	Type     string    `json:"type"`
-	Path     string    `json:"path"`
-	Status   string    `json:"status"`
-	Created  time.Time `json:"created"`
+	Name    string    `json:"name"`
+	Type    string    `json:"type"`
+	Path    string    `json:"path"`
+	Status  string    `json:"status"`
+	Created time.Time `json:"created"`
 }
 
 type Artifact struct {
@@ -320,9 +339,13 @@ func (s *PodmanServer) handlePodAction(w http.ResponseWriter, nameOrID, action s
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *PodmanServer) handleContainerAction(w http.ResponseWriter, _, action string, _ *http.Request) {
+func (s *PodmanServer) handleContainerAction(w http.ResponseWriter, nameOrID, action string, r *http.Request) {
 	switch action {
 	case "start", "stop", "kill", "restart", "pause", "unpause":
+		if s.podMgr.Exists(nameOrID) {
+			s.handlePodAction(w, nameOrID, action, r)
+			return
+		}
 		writeError(w, http.StatusNotImplemented, "container lifecycle actions not yet supported by this build")
 	default:
 		writeError(w, http.StatusNotFound, "unsupported container action: "+action)
@@ -457,9 +480,18 @@ func (s *PodmanServer) handleContainersDispatch(w http.ResponseWriter, r *http.R
 	if action == "" {
 		switch r.Method {
 		case http.MethodGet:
-			writeJSON(w, http.StatusOK, map[string]interface{}{"Id": id})
+			pod, err := s.podMgr.GetPod(id)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "no such container")
+				return
+			}
+			writeJSON(w, http.StatusOK, pod)
 		case http.MethodDelete:
-			writeJSON(w, http.StatusOK, map[string]interface{}{})
+			if !s.podMgr.Exists(id) {
+				writeError(w, http.StatusNotFound, "no such container")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
@@ -527,6 +559,7 @@ func (s *PodmanServer) handlePodsDispatch(w http.ResponseWriter, r *http.Request
 }
 
 func (s *PodmanServer) handleImagesList(w http.ResponseWriter, _ *http.Request) {
+	// TODO(P4.2): integrate with image store to return actual images.
 	writeJSON(w, http.StatusOK, []interface{}{})
 }
 
@@ -791,24 +824,24 @@ func (s *PodmanServer) handleAutoUpdate(w http.ResponseWriter, _ *http.Request) 
 func (s *PodmanServer) handleSystemInfo(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"host": map[string]interface{}{
-			"arch":           "arm64",
-			"os":             "linux",
-			"kernel":         "6.8.0",
-			"MemTotal":       8 * 1024 * 1024 * 1024,
-			"SwapTotal":      int64(0),
-			"Conmon":         map[string]interface{}{"package": "unknown", "path": "/usr/bin/conmon"},
-			"OCIRuntime":     map[string]interface{}{"name": "doki", "path": "/usr/bin/doki"},
-			"Security":       map[string]interface{}{"rootless": true},
+			"arch":       runtime.GOARCH,
+			"os":         runtime.GOOS,
+			"kernel":     detectKernel(),
+			"MemTotal":   detectMemTotal(),
+			"SwapTotal":  int64(0),
+			"Conmon":     map[string]interface{}{"package": "unknown", "path": "/usr/bin/conmon"},
+			"OCIRuntime": map[string]interface{}{"name": "doki", "path": "/usr/bin/doki"},
+			"Security":   map[string]interface{}{"rootless": true},
 		},
 		"store": map[string]interface{}{
 			"GraphDriverName": "overlay",
 			"ImageStore":      map[string]interface{}{"number": 0},
 		},
 		"version": map[string]interface{}{
-			"APIVersion": "5.0.0",
-			"Version":    "0.10.0",
-			"GoVersion":  "go1.26",
-			"OsArch":     "linux/arm64",
+			"APIVersion": common.DokiAPIVersion,
+			"Version":    common.DokiVersion,
+			"GoVersion":  runtime.Version(),
+			"OsArch":     runtime.GOOS + "/" + runtime.GOARCH,
 		},
 	})
 }
@@ -816,10 +849,10 @@ func (s *PodmanServer) handleSystemInfo(w http.ResponseWriter, _ *http.Request) 
 func (s *PodmanServer) handleSystemVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"Client": map[string]interface{}{
-			"APIVersion": "5.0.0",
-			"Version":    "0.10.0",
-			"GoVersion":  "go1.26",
-			"OsArch":     "linux/arm64",
+			"APIVersion": common.DokiAPIVersion,
+			"Version":    common.DokiVersion,
+			"GoVersion":  runtime.Version(),
+			"OsArch":     runtime.GOOS + "/" + runtime.GOARCH,
 		},
 	})
 }
@@ -831,6 +864,9 @@ func (s *PodmanServer) handlePing(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *PodmanServer) handleEvents(w http.ResponseWriter, r *http.Request) {
+	// Real event streaming requires runtime integration to observe
+	// container/pod lifecycle transitions. Until then, we send periodic
+	// ping events to keep the SSE connection alive.
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
@@ -931,4 +967,38 @@ func (s *PodmanServer) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"name": rest})
+}
+
+func detectKernel() string {
+	data, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		return runtime.GOOS
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func detectMemTotal() int64 {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				kb, _ := strconv.ParseInt(parts[1], 10, 64)
+				return kb * 1024
+			}
+		}
+	}
+	return 0
+}
+
+// sanitizeLogField removes control characters (newlines, carriage
+// returns, tabs) from a log field to prevent log injection (CWE-117).
+func sanitizeLogField(s string) string {
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\t", "")
+	return s
 }

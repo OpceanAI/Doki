@@ -211,7 +211,7 @@ func parseBuildKitAddr(addr string) (network, address string) {
 
 // BuildKitProgressWriter parses BuildKit progress output and reports it.
 type BuildKitProgressWriter struct {
-	log     *slog.Logger
+	log *slog.Logger
 }
 
 func NewBuildKitProgressWriter(log *slog.Logger) *BuildKitProgressWriter {

@@ -92,6 +92,7 @@ func (r *Runner) Resume(_ context.Context, _ string) error {
 
 // Wait blocks until the container exits.
 func (r *Runner) Wait(_ context.Context, _ string) (int, error) { return 0, nil }
+
 // Stats returns resource usage metrics.
 func (r *Runner) Stats(_ context.Context, _ string) (*rt.ContainerStats, error) {
 	return &rt.ContainerStats{}, nil

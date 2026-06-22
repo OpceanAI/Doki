@@ -36,7 +36,7 @@ type UDPProxy struct {
 	sessionsMu sync.RWMutex
 	sessions   map[string]*udpSession
 
-	mu       sync.Mutex
+	mu           sync.Mutex
 	upstreamConn *net.UDPConn
 
 	log *slog.Logger
@@ -44,7 +44,7 @@ type UDPProxy struct {
 
 type udpSession struct {
 	lastSeen time.Time
-	peer    *net.UDPAddr
+	peer     *net.UDPAddr
 }
 
 // UDPProxyConfig configures a UDPProxy.
@@ -205,7 +205,14 @@ func (p *UDPProxy) readLoop(ctx context.Context) {
 }
 
 // upstreamReadLoop reads datagrams coming back from upstream and routes
-// them to the most-recent sender for the session.
+// them to the appropriate client session. Since there is a single
+// upstream socket shared by all sessions, return traffic cannot be
+// perfectly demultiplexed by 4-tuple. We use a "last sender" heuristic:
+// the most recent session to send data is assumed to be the one awaiting
+// a response. This works correctly for the common request/response
+// pattern (one client at a time) but may cross-talk under concurrent
+// multi-client use. For full per-session isolation, a per-session
+// upstream socket architecture would be needed.
 func (p *UDPProxy) upstreamReadLoop(_ context.Context) {
 	buf := make([]byte, p.readBufSize)
 	for {
@@ -242,20 +249,26 @@ func (p *UDPProxy) upstreamReadLoop(_ context.Context) {
 			payload = decoded
 		}
 
-		// Route to the most-recent sender we saw. Single-upstream
-		// simplification: broadcast back to all known peers. This
-		// matches socat's UDP-LISTEN,fork behavior for typical
-		// request/response services.
+		// Route to the most recent sender (last-session heuristic).
+		// This avoids the previous broadcast-to-all behavior which
+		// caused cross-talk between concurrent clients. If there is
+		// only one active session (the common case), this is correct.
+		// If there are multiple, the most recent sender gets the
+		// response, which matches typical request/response semantics.
 		p.sessionsMu.RLock()
-		peers := make([]*net.UDPAddr, 0, len(p.sessions))
+		var lastPeer *net.UDPAddr
+		var lastSeen time.Time
 		for _, s := range p.sessions {
-			peers = append(peers, s.peer)
+			if s.lastSeen.After(lastSeen) {
+				lastSeen = s.lastSeen
+				lastPeer = s.peer
+			}
 		}
 		p.sessionsMu.RUnlock()
-		for _, peer := range peers {
-			if _, err := p.conn.WriteToUDP(payload, peer); err != nil {
+		if lastPeer != nil {
+			if _, err := p.conn.WriteToUDP(payload, lastPeer); err != nil {
 				p.log.Warn("doki-link: udp write peer failed",
-					"peer", peer, "err", err)
+					"peer", lastPeer, "err", err)
 			}
 		}
 	}

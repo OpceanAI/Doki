@@ -18,8 +18,8 @@ var metrics = NewMetricsCollector()
 // MetricsCollector collects and exposes Prometheus-compatible metrics.
 type MetricsCollector struct {
 	// Counters
-	requestsTotal    atomic.Uint64
-	requestsErrors   atomic.Uint64
+	requestsTotal     atomic.Uint64
+	requestsErrors    atomic.Uint64
 	containersCreated atomic.Uint64
 	containersStarted atomic.Uint64
 	containersStopped atomic.Uint64
@@ -129,25 +129,25 @@ func (m *MetricsCollector) SetImagesCount(n int64) {
 
 // MetricsSnapshot is a point-in-time snapshot of metrics.
 type MetricsSnapshot struct {
-	RequestsTotal     uint64 `json:"requests_total"`
-	RequestsErrors    uint64 `json:"requests_errors"`
-	ContainersCreated uint64 `json:"containers_created"`
-	ContainersStarted uint64 `json:"containers_started"`
-	ContainersStopped uint64 `json:"containers_stopped"`
-	ContainersKilled  uint64 `json:"containers_killed"`
-	ContainersRunning int64  `json:"containers_running"`
-	ContainersPaused  int64  `json:"containers_paused"`
-	ImagesPulled      uint64 `json:"images_pulled"`
-	ImagesBuilt       uint64 `json:"images_built"`
-	ImagesCount       int64  `json:"images_count"`
-	NetworksCreated   uint64 `json:"networks_created"`
-	VolumesCreated    uint64 `json:"volumes_created"`
-	ExecCalls         uint64 `json:"exec_calls"`
-	Goroutines        int    `json:"goroutines"`
+	RequestsTotal     uint64  `json:"requests_total"`
+	RequestsErrors    uint64  `json:"requests_errors"`
+	ContainersCreated uint64  `json:"containers_created"`
+	ContainersStarted uint64  `json:"containers_started"`
+	ContainersStopped uint64  `json:"containers_stopped"`
+	ContainersKilled  uint64  `json:"containers_killed"`
+	ContainersRunning int64   `json:"containers_running"`
+	ContainersPaused  int64   `json:"containers_paused"`
+	ImagesPulled      uint64  `json:"images_pulled"`
+	ImagesBuilt       uint64  `json:"images_built"`
+	ImagesCount       int64   `json:"images_count"`
+	NetworksCreated   uint64  `json:"networks_created"`
+	VolumesCreated    uint64  `json:"volumes_created"`
+	ExecCalls         uint64  `json:"exec_calls"`
+	Goroutines        int     `json:"goroutines"`
 	UptimeSeconds     float64 `json:"uptime_seconds"`
-	AllocBytes        uint64 `json:"alloc_bytes"`
-	SysBytes          uint64 `json:"sys_bytes"`
-	NumGC             uint32 `json:"num_gc"`
+	AllocBytes        uint64  `json:"alloc_bytes"`
+	SysBytes          uint64  `json:"sys_bytes"`
+	NumGC             uint32  `json:"num_gc"`
 	AvgRequestMs      float64 `json:"avg_request_ms"`
 }
 
@@ -224,10 +224,10 @@ func HealthHandlerV2(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"status":    status,
-		"version":   common.Version,
-		"api":       common.DokiAPIVersion,
-		"uptime":    snap.UptimeSeconds,
+		"status":     status,
+		"version":    common.Version,
+		"api":        common.DokiAPIVersion,
+		"uptime":     snap.UptimeSeconds,
 		"goroutines": snap.Goroutines,
 		"memory": map[string]interface{}{
 			"alloc_bytes": snap.AllocBytes,

@@ -164796,5 +164796,6 @@ func table_init[T1, T2, T3 int | int32 | int64](tab, elems []any, dest T1, src T
 	w := z + uint64(n)
 	copy(tab[x:y], elems[z:w])
 }
+
 //go:embed sqlite3.dat
 var data string

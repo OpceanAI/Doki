@@ -29,24 +29,24 @@ import (
 	"time"
 
 	"github.com/OpceanAI/Doki/internal/dokivm"
-	runners_chroot "github.com/OpceanAI/Doki/pkg/runtime/runners/chroot"
-	runners_fex "github.com/OpceanAI/Doki/pkg/runtime/runners/fex"
-	runners_gvisor "github.com/OpceanAI/Doki/pkg/runtime/runners/gvisor"
-	runners_legacy32 "github.com/OpceanAI/Doki/pkg/runtime/runners/legacy32"
-	runners_microvm "github.com/OpceanAI/Doki/pkg/runtime/runners/microvm"
-	runners_native "github.com/OpceanAI/Doki/pkg/runtime/runners/native"
-	runners_namespaces "github.com/OpceanAI/Doki/pkg/runtime/runners/namespaces"
-	runners_pkdroid "github.com/OpceanAI/Doki/pkg/runtime/runners/pkdroid"
-	runners_proot "github.com/OpceanAI/Doki/pkg/runtime/runners/proot"
-	runners_qemuuser "github.com/OpceanAI/Doki/pkg/runtime/runners/qemuuser"
-	runners_sysbox "github.com/OpceanAI/Doki/pkg/runtime/runners/sysbox"
-	runners_wasm "github.com/OpceanAI/Doki/pkg/runtime/runners/wasm"
 	"github.com/OpceanAI/Doki/pkg/api"
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/image"
 	"github.com/OpceanAI/Doki/pkg/netlink"
 	"github.com/OpceanAI/Doki/pkg/network"
 	dr "github.com/OpceanAI/Doki/pkg/runtime"
+	runners_chroot "github.com/OpceanAI/Doki/pkg/runtime/runners/chroot"
+	runners_fex "github.com/OpceanAI/Doki/pkg/runtime/runners/fex"
+	runners_gvisor "github.com/OpceanAI/Doki/pkg/runtime/runners/gvisor"
+	runners_legacy32 "github.com/OpceanAI/Doki/pkg/runtime/runners/legacy32"
+	runners_microvm "github.com/OpceanAI/Doki/pkg/runtime/runners/microvm"
+	runners_namespaces "github.com/OpceanAI/Doki/pkg/runtime/runners/namespaces"
+	runners_native "github.com/OpceanAI/Doki/pkg/runtime/runners/native"
+	runners_pkdroid "github.com/OpceanAI/Doki/pkg/runtime/runners/pkdroid"
+	runners_proot "github.com/OpceanAI/Doki/pkg/runtime/runners/proot"
+	runners_qemuuser "github.com/OpceanAI/Doki/pkg/runtime/runners/qemuuser"
+	runners_sysbox "github.com/OpceanAI/Doki/pkg/runtime/runners/sysbox"
+	runners_wasm "github.com/OpceanAI/Doki/pkg/runtime/runners/wasm"
 	"github.com/OpceanAI/Doki/pkg/storage"
 )
 
@@ -227,9 +227,9 @@ func main() {
 						"install_id", identity.ShortID(),
 						"listen", meshListenAddr(),
 					)
-				meshStop = func() {
-					_ = mesh.Stop()
-					cancel()
+					meshStop = func() {
+						_ = mesh.Stop()
+						cancel()
 					}
 				}
 			}
@@ -264,7 +264,11 @@ func main() {
 	logger.Info("available runtimes", "count", len(registry.Available()))
 	logger.Info("container DNS", "addr", dnsAddr)
 
-	server := api.NewServer(cfg, rt, imgStore, netMgr)
+	server, err := api.NewServer(cfg, rt, imgStore, netMgr)
+	if err != nil {
+		logger.Error("failed to create API server", "err", err)
+		os.Exit(1)
+	}
 
 	mw := api.NewMiddleware()
 	server.SetMiddleware(mw.Logging, mw.CORS, mw.Recovery, mw.RequestID)

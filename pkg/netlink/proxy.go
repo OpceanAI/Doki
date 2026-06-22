@@ -76,11 +76,11 @@ func (noopWrapper) WrapClient(_ context.Context, c net.Conn) (net.Conn, error) {
 
 // TCPProxyConfig configures a TCPProxy.
 type TCPProxyConfig struct {
-	ListenAddr  string            // e.g. "0.0.0.0:8888" or "127.0.0.1:0"
-	Upstream    string            // e.g. "127.0.0.1:80"
-	Wrap        TransportWrapper  // optional
-	IdleTimeout time.Duration     // 0 = no timeout
-	Logger      *slog.Logger      // nil = slog.Default()
+	ListenAddr  string           // e.g. "0.0.0.0:8888" or "127.0.0.1:0"
+	Upstream    string           // e.g. "127.0.0.1:80"
+	Wrap        TransportWrapper // optional
+	IdleTimeout time.Duration    // 0 = no timeout
+	Logger      *slog.Logger     // nil = slog.Default()
 }
 
 // NewTCPProxy creates a TCPProxy in the "configured but not listening"
@@ -181,11 +181,11 @@ func (p *TCPProxy) handleConn(ctx context.Context, client net.Conn) {
 	defer p.untrackConn(client)
 	defer func() { _ = client.Close() }()
 
-	if p.idleTimeout > 0 {
-		_ = client.SetDeadline(time.Now().Add(p.idleTimeout))
-	}
-
-	upstream, err := net.Dial("tcp", p.upstream)
+	// Dial the upstream with a timeout instead of bare net.Dial which
+	// can block for the OS TCP timeout (~75s on Linux) if the upstream
+	// is unreachable.
+	upstreamDialer := &net.Dialer{Timeout: 5 * time.Second}
+	upstream, err := upstreamDialer.DialContext(ctx, "tcp", p.upstream)
 	if err != nil {
 		p.log.Warn("doki-link: upstream dial failed",
 			"upstream", p.upstream, "err", err)
@@ -193,16 +193,26 @@ func (p *TCPProxy) handleConn(ctx context.Context, client net.Conn) {
 	}
 	defer func() { _ = upstream.Close() }()
 
+	// Wrap conns with idle-timeout-refreshing readers if configured.
+	// The previous implementation set an absolute deadline once at
+	// connection establishment, which meant a long-lived but active
+	// connection would be killed after idleTimeout even if data was
+	// flowing. Now the deadline is refreshed on every successful read.
+	var serverSide, clientSide net.Conn
+	serverSide = client
+	clientSide = upstream
+
 	if p.idleTimeout > 0 {
-		_ = upstream.SetDeadline(time.Now().Add(p.idleTimeout))
+		serverSide = &idleTimeoutConn{Conn: client, timeout: p.idleTimeout}
+		clientSide = &idleTimeoutConn{Conn: upstream, timeout: p.idleTimeout}
 	}
 
-	serverSide, err := p.wrap.WrapServer(ctx, client)
+	wrappedServer, err := p.wrap.WrapServer(ctx, serverSide)
 	if err != nil {
 		p.log.Warn("doki-link: wrap server failed", "err", err)
 		return
 	}
-	clientSide, err := p.wrap.WrapClient(ctx, upstream)
+	wrappedClient, err := p.wrap.WrapClient(ctx, clientSide)
 	if err != nil {
 		p.log.Warn("doki-link: wrap client failed", "err", err)
 		return
@@ -213,20 +223,36 @@ func (p *TCPProxy) handleConn(ctx context.Context, client net.Conn) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(clientSide, serverSide)
+		_, _ = io.Copy(wrappedClient, wrappedServer)
 		// Half-close: signal the other side that no more writes are coming.
-		if cw, ok := clientSide.(closeWriter); ok {
+		if cw, ok := wrappedClient.(closeWriter); ok {
 			_ = cw.CloseWrite()
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(serverSide, clientSide)
-		if cw, ok := serverSide.(closeWriter); ok {
+		_, _ = io.Copy(wrappedServer, wrappedClient)
+		if cw, ok := wrappedServer.(closeWriter); ok {
 			_ = cw.CloseWrite()
 		}
 	}()
 	wg.Wait()
+}
+
+// idleTimeoutConn wraps a net.Conn and refreshes the read deadline on
+// every successful read, so the timeout is truly an IDLE timeout (not
+// a hard lifetime deadline). The deadline is set before each Read
+// call; if no data arrives within the timeout, the read fails.
+type idleTimeoutConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *idleTimeoutConn) Read(b []byte) (int, error) {
+	if c.timeout > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
+	}
+	return c.Conn.Read(b)
 }
 
 // closeWriter is implemented by *net.TCPConn on POSIX-like systems and

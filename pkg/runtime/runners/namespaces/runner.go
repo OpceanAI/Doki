@@ -4,8 +4,8 @@ package namespaces
 
 import (
 	"context"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/OpceanAI/Doki/pkg/common"
 	ns "github.com/OpceanAI/Doki/internal/namespaces"
+	"github.com/OpceanAI/Doki/pkg/common"
 	rt "github.com/OpceanAI/Doki/pkg/runtime"
 )
 
@@ -218,6 +218,7 @@ func (r *Runner) Wait(_ context.Context, _ string) (int, error) {
 	}
 	return 0, nil
 }
+
 // Stats returns resource usage metrics.
 func (r *Runner) Stats(_ context.Context, _ string) (*rt.ContainerStats, error) {
 	return &rt.ContainerStats{}, nil

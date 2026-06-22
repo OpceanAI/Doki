@@ -72,12 +72,20 @@ func (b *Builder) BuildRootfs(vmID string, rootfsDir string, sizeMB int) (string
 // BuildMinimalRootfs builds a minimal rootfs with just the OCI layers
 // and the doki-init binary injected.
 // Searches for doki-init-rust first, falls back to doki-init (Go).
-func (b *Builder) BuildMinimalRootfs(vmID string, _ string, dokiInitPath string) (string, error) {
+func (b *Builder) BuildMinimalRootfs(vmID string, rootfsDir string, dokiInitPath string) (string, error) {
 	vmDir := filepath.Join(b.workDir, vmID)
 	_ = common.EnsureDir(vmDir)
 
 	stagingDir := filepath.Join(vmDir, "staging")
 	_ = common.EnsureDir(stagingDir)
+
+	if rootfsDir != "" {
+		if entries, err := os.ReadDir(rootfsDir); err == nil && len(entries) > 0 {
+			if err := common.CopyDir(rootfsDir, stagingDir); err != nil {
+				return "", fmt.Errorf("copy rootfs layers: %w", err)
+			}
+		}
+	}
 
 	// Create essential directories.
 	for _, dir := range []string{"bin", "sbin", "dev", "proc", "sys", "tmp", "etc", "var", "run"} {

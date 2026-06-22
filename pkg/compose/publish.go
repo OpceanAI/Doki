@@ -19,10 +19,10 @@ type PublishConfig struct {
 }
 
 type OCIManifest struct {
-	SchemaVersion int              `json:"schemaVersion"`
-	MediaType     string           `json:"mediaType"`
-	Config        OCIDescriptor    `json:"config"`
-	Layers        []OCIDescriptor  `json:"layers"`
+	SchemaVersion int               `json:"schemaVersion"`
+	MediaType     string            `json:"mediaType"`
+	Config        OCIDescriptor     `json:"config"`
+	Layers        []OCIDescriptor   `json:"layers"`
 	Annotations   map[string]string `json:"annotations,omitempty"`
 }
 

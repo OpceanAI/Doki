@@ -2,7 +2,9 @@ package netlink
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -11,6 +13,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/crypto/nacl/secretbox"
 )
@@ -68,15 +71,22 @@ type TLSWrapper struct {
 
 // NewTLSWrapper builds a wrapper from a *tls.Config. The same config
 // is used for both WrapServer and WrapClient; whether the resulting
-// conn behaves as server or client is decided by the handshake.
+// conn behaves as server or client is decided by the handshake. The
+// caller's config is cloned so NewTLSWrapper has no side effects on it.
 func NewTLSWrapper(cfg *tls.Config) (*TLSWrapper, error) {
 	if cfg == nil {
 		return nil, errors.New("netlink: NewTLSWrapper with nil config")
 	}
-	if cfg.MinVersion == 0 {
-		cfg.MinVersion = tls.VersionTLS13
+	clone := cfg.Clone()
+	if clone.MinVersion == 0 {
+		clone.MinVersion = tls.VersionTLS13
 	}
-	return &TLSWrapper{cfg: cfg}, nil
+	// Enforce mTLS when a client CA pool is configured, so the server
+	// requires a client certificate signed by the Doki CA.
+	if clone.ClientCAs != nil && clone.ClientAuth == tls.NoClientCert {
+		clone.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return &TLSWrapper{cfg: clone}, nil
 }
 
 // WrapServer wraps the server-side (host) of a connection. The returned
@@ -125,14 +135,28 @@ type SecretboxWrapper struct {
 }
 
 // DeriveSecretKey derives a 32-byte symmetric key from two Ed25519
-// public keys. The order matters: peers MUST call this with their own
-// public key first, then the remote peer's, to get the same key.
+// public keys. The derivation is ORDER-INDEPENDENT: both peers derive
+// the SAME key regardless of which peer's pubkey is passed first, by
+// sorting the two pubkeys lexicographically before hashing. This is
+// critical for symmetric encryption (NaCl secretbox) where both sides
+// must share the key.
 func DeriveSecretKey(localPub, remotePub []byte) [32]byte {
+	// Order-independent: sort the two pubkeys so both peers hash the
+	// same byte sequence regardless of who is "local" vs "remote".
+	a := make([]byte, len(localPub))
+	copy(a, localPub)
+	b := make([]byte, len(remotePub))
+	copy(b, remotePub)
+	if subtle.ConstantTimeCompare(a, b) == 1 {
+		// Same key (self-connection) — still derive a stable key.
+	} else if string(b) < string(a) {
+		a, b = b, a
+	}
 	h := sha256.New()
 	h.Write([]byte("dokilink-v1|"))
-	h.Write(localPub)
+	h.Write(a)
 	h.Write([]byte("|"))
-	h.Write(remotePub)
+	h.Write(b)
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
@@ -148,14 +172,17 @@ func NewSecretboxWrapper(key [32]byte) *SecretboxWrapper {
 // secretbox stream that prepends a 4-byte big-endian length to each
 // encrypted frame. The frame payload itself is:
 //
-//   nonce (24 bytes) || secretbox(plaintext)
+//	nonce (24 bytes) || secretbox(plaintext)
+//
+// Each connection gets its own random nonce base to guarantee nonce
+// uniqueness across connections that share the same derived key.
 func (s *SecretboxWrapper) WrapServer(_ context.Context, c net.Conn) (net.Conn, error) {
-	return &secretboxStreamConn{Conn: c, sbox: s}, nil
+	return newSecretboxStreamConn(c, s), nil
 }
 
 // WrapClient mirrors WrapServer; the stream conn is symmetric.
 func (s *SecretboxWrapper) WrapClient(_ context.Context, c net.Conn) (net.Conn, error) {
-	return &secretboxStreamConn{Conn: c, sbox: s}, nil
+	return newSecretboxStreamConn(c, s), nil
 }
 
 // WrapOutbound / UnwrapInbound for UDP: each datagram is one
@@ -191,16 +218,39 @@ func (s *SecretboxWrapper) UnwrapInbound(payload []byte) ([]byte, error) {
 // secretboxStreamConn wraps a net.Conn in a length-prefixed,
 // counter-nonce'd secretbox stream. Each Write produces one frame:
 //
-//   4-byte big-endian length || nonce (24 bytes) || secretbox(plaintext)
+//	4-byte big-endian length || nonce (24 bytes) || secretbox(plaintext)
 //
 // each Read decodes one frame.
+//
+// The per-connection counter is seeded from crypto/rand so that two
+// independent connections sharing the same key (derived from the same
+// peer identity pair) NEVER reuse a nonce. Nonce reuse in secretbox
+// destroys confidentiality and integrity, so this seeding is critical.
 type secretboxStreamConn struct {
 	net.Conn
-	sbox   *SecretboxWrapper
-	mu     sync.Mutex
-	cnt    uint64
-	close  bool
+	sbox    *SecretboxWrapper
+	mu      sync.Mutex
+	cnt     uint64
+	closed  atomic.Bool
 	readBuf []byte // leftover decrypted data from previous frame
+}
+
+// newSecretboxStreamConn constructs a stream conn with a random nonce
+// base, guaranteeing nonce uniqueness across connections sharing a key.
+func newSecretboxStreamConn(c net.Conn, s *SecretboxWrapper) *secretboxStreamConn {
+	var seed [8]byte
+	_, _ = rand.Read(seed[:]) // crypto/rand never fails on supported platforms
+	var base uint64
+	for i := 0; i < 8; i++ {
+		base |= uint64(seed[i]) << (uint(7-i) * 8)
+	}
+	// Avoid counter starting at 0 to prevent any chance of overlap
+	// with a hypothetical unseeded connection. The high entropy from
+	// crypto/rand makes practical collision negligible (2^64 space).
+	if base == 0 {
+		base = 1
+	}
+	return &secretboxStreamConn{Conn: c, sbox: s, cnt: base}
 }
 
 func (c *secretboxStreamConn) Read(b []byte) (int, error) {
@@ -249,10 +299,10 @@ func (c *secretboxStreamConn) Write(b []byte) (int, error) {
 	}
 	sealed := secretbox.Seal(nonce[:], b, &nonce, &c.sbox.key)
 	frame := make([]byte, 4+len(sealed))
-	frame[0] = byte(len(sealed) >> 24)  // #nosec G115 -- frame header length encoding
-	frame[1] = byte(len(sealed) >> 16)  // #nosec G115 -- frame header length encoding
-	frame[2] = byte(len(sealed) >> 8)   // #nosec G115 -- frame header length encoding
-	frame[3] = byte(len(sealed))        // #nosec G115 -- frame header length encoding
+	frame[0] = byte(len(sealed) >> 24) // #nosec G115 -- frame header length encoding
+	frame[1] = byte(len(sealed) >> 16) // #nosec G115 -- frame header length encoding
+	frame[2] = byte(len(sealed) >> 8)  // #nosec G115 -- frame header length encoding
+	frame[3] = byte(len(sealed))       // #nosec G115 -- frame header length encoding
 	copy(frame[4:], sealed)
 	if _, err := c.Conn.Write(frame); err != nil {
 		return 0, err
@@ -261,10 +311,9 @@ func (c *secretboxStreamConn) Write(b []byte) (int, error) {
 }
 
 func (c *secretboxStreamConn) Close() error {
-	if c.close {
+	if !c.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	c.close = true
 	return c.Conn.Close()
 }
 

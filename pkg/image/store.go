@@ -23,11 +23,11 @@ import (
 
 // Store manages OCI images on disk.
 type Store struct {
-	mu             sync.RWMutex
-	root           string
-	registry       *registry.Client
-	manifestCache  map[string]*manifestCacheEntry
-	cacheMu        sync.RWMutex
+	mu            sync.RWMutex
+	root          string
+	registry      *registry.Client
+	manifestCache map[string]*manifestCacheEntry
+	cacheMu       sync.RWMutex
 }
 
 type manifestCacheEntry struct {
@@ -38,13 +38,13 @@ type manifestCacheEntry struct {
 
 // Config represents an OCI image configuration.
 type Config struct {
-	Created      FlexString         `json:"created,omitempty"`
-	Author       string            `json:"author,omitempty"`
-	Architecture string            `json:"architecture"`
-	OS           string            `json:"os"`
-	Config       ImageConfig       `json:"config"`
-	RootFS       RootFS            `json:"rootfs"`
-	History      []History         `json:"history,omitempty"`
+	Created      FlexString  `json:"created,omitempty"`
+	Author       string      `json:"author,omitempty"`
+	Architecture string      `json:"architecture"`
+	OS           string      `json:"os"`
+	Config       ImageConfig `json:"config"`
+	RootFS       RootFS      `json:"rootfs"`
+	History      []History   `json:"history,omitempty"`
 }
 
 // ImageConfig is the runtime configuration for a container.
@@ -114,17 +114,17 @@ func (fs *FlexString) UnmarshalJSON(data []byte) error {
 
 // ImageRecord stores image metadata on disk.
 type ImageRecord struct {
-	ID          string            `json:"id"`
-	RepoTags    []string          `json:"repo_tags"`
-	RepoDigests []string          `json:"repo_digests"`
-	Parent      string            `json:"parent,omitempty"`
-	Config      *Config           `json:"config"`
-	Manifest    *registry.ManifestV2 `json:"manifest,omitempty"`
-	Size        int64             `json:"size"`
-	Created     int64             `json:"created"`
-	Architecture string           `json:"architecture"`
-	OS          string            `json:"os"`
-	Layers      []string          `json:"layers"`
+	ID           string               `json:"id"`
+	RepoTags     []string             `json:"repo_tags"`
+	RepoDigests  []string             `json:"repo_digests"`
+	Parent       string               `json:"parent,omitempty"`
+	Config       *Config              `json:"config"`
+	Manifest     *registry.ManifestV2 `json:"manifest,omitempty"`
+	Size         int64                `json:"size"`
+	Created      int64                `json:"created"`
+	Architecture string               `json:"architecture"`
+	OS           string               `json:"os"`
+	Layers       []string             `json:"layers"`
 }
 
 // NewStore creates a new image store.
@@ -674,11 +674,11 @@ type SearchResult struct {
 
 // dockerHubSearchResult is the raw Docker Hub API response format.
 type dockerHubSearchResult struct {
-	RepoName        string `json:"repo_name"`
+	RepoName         string `json:"repo_name"`
 	ShortDescription string `json:"short_description"`
-	StarCount       int    `json:"star_count"`
-	IsOfficial      bool   `json:"is_official"`
-	IsAutomated     bool   `json:"is_automated"`
+	StarCount        int    `json:"star_count"`
+	IsOfficial       bool   `json:"is_official"`
+	IsAutomated      bool   `json:"is_automated"`
 }
 
 // Export exports an image to a Docker-format save tar.

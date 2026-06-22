@@ -50,9 +50,9 @@ const (
 type NetworkMode string
 
 const (
-	NetworkBridge   NetworkMode = "bridge"
-	NetworkHost     NetworkMode = "host"
-	NetworkNone     NetworkMode = "none"
+	NetworkBridge    NetworkMode = "bridge"
+	NetworkHost      NetworkMode = "host"
+	NetworkNone      NetworkMode = "none"
 	NetworkContainer NetworkMode = "container"
 )
 
@@ -80,10 +80,10 @@ const (
 type MountType string
 
 const (
-	MountBind   MountType = "bind"
-	MountVolume MountType = "volume"
-	MountTmpfs  MountType = "tmpfs"
-	MountNpipe  MountType = "npipe"
+	MountBind    MountType = "bind"
+	MountVolume  MountType = "volume"
+	MountTmpfs   MountType = "tmpfs"
+	MountNpipe   MountType = "npipe"
 	MountCluster MountType = "cluster"
 )
 
@@ -98,21 +98,21 @@ const (
 
 // DokiConfig holds the configuration for the Doki daemon.
 type DokiConfig struct {
-	Root               string `json:"root"`
-	SocketPath         string `json:"socket_path"`
-	StorageDriver      string `json:"storage_driver"`
-	DefaultNetwork     string `json:"default_network"`
-	Debug              bool   `json:"debug"`
-	LogLevel           string `json:"log_level"`
-	Rootless           bool   `json:"rootless"`
-	DataDir            string `json:"data_dir"`
-	ExecRoot           string `json:"exec_root"`
-	DNS                []string `json:"dns"`
-	DNSSearch          []string `json:"dns_search"`
-	DNSOptions         []string `json:"dns_options"`
+	Root               string            `json:"root"`
+	SocketPath         string            `json:"socket_path"`
+	StorageDriver      string            `json:"storage_driver"`
+	DefaultNetwork     string            `json:"default_network"`
+	Debug              bool              `json:"debug"`
+	LogLevel           string            `json:"log_level"`
+	Rootless           bool              `json:"rootless"`
+	DataDir            string            `json:"data_dir"`
+	ExecRoot           string            `json:"exec_root"`
+	DNS                []string          `json:"dns"`
+	DNSSearch          []string          `json:"dns_search"`
+	DNSOptions         []string          `json:"dns_options"`
 	DefaultUlimits     map[string]Ulimit `json:"default_ulimits"`
-	RegistryMirrors    []string `json:"registry_mirrors"`
-	InsecureRegistries []string `json:"insecure_registries"`
+	RegistryMirrors    []string          `json:"registry_mirrors"`
+	InsecureRegistries []string          `json:"insecure_registries"`
 
 	// VM Configuration (doki-OS)
 	VMImage      string `json:"vm_image,omitempty"`
@@ -152,58 +152,58 @@ func DefaultConfig() *DokiConfig {
 
 // ContainerInfo holds the information about a container.
 type ContainerInfo struct {
-	ID        string            `json:"Id"`
-	Name      string            `json:"Name"`
-	Image     string            `json:"Image"`
-	ImageID   string            `json:"ImageID"`
-	Command   string            `json:"Command"`
-	Created   int64             `json:"Created"`
-	State     ContainerState    `json:"State"`
-	Status    string            `json:"Status"`
-	Ports     []Port            `json:"Ports"`
-	Labels    map[string]string `json:"Labels"`
-	Names     []string          `json:"Names"`
-	SizeRw    int64             `json:"SizeRw,omitempty"`
-	SizeRootFs int64            `json:"SizeRootFs,omitempty"`
-	HostConfig *HostConfig       `json:"HostConfig,omitempty"`
-	NetworkSettings *NetworkSettings `json:"NetworkSettings,omitempty"`
-	Mounts    []MountPoint       `json:"Mounts"`
+	ID              string            `json:"Id"`
+	Name            string            `json:"Name"`
+	Image           string            `json:"Image"`
+	ImageID         string            `json:"ImageID"`
+	Command         string            `json:"Command"`
+	Created         int64             `json:"Created"`
+	State           ContainerState    `json:"State"`
+	Status          string            `json:"Status"`
+	Ports           []Port            `json:"Ports"`
+	Labels          map[string]string `json:"Labels"`
+	Names           []string          `json:"Names"`
+	SizeRw          int64             `json:"SizeRw,omitempty"`
+	SizeRootFs      int64             `json:"SizeRootFs,omitempty"`
+	HostConfig      *HostConfig       `json:"HostConfig,omitempty"`
+	NetworkSettings *NetworkSettings  `json:"NetworkSettings,omitempty"`
+	Mounts          []MountPoint      `json:"Mounts"`
 }
 
 // HostConfig is the host-dependent container configuration.
 type HostConfig struct {
-	Binds          []string            `json:"Binds"`
-	NetworkMode    NetworkMode         `json:"NetworkMode"`
-	PortBindings   PortMap             `json:"PortBindings"`
-	RestartPolicy  RestartPolicyConfig `json:"RestartPolicy"`
-	AutoRemove     bool                `json:"AutoRemove"`
-	Privileged     bool                `json:"Privileged"`
-	PublishAllPorts bool               `json:"PublishAllPorts"`
-	ReadonlyRootfs bool                `json:"ReadonlyRootfs"`
-	DNS            []string            `json:"Dns"`
-	DNSOptions     []string            `json:"DnsOptions"`
-	DNSSearch      []string            `json:"DnsSearch"`
-	ExtraHosts     []string            `json:"ExtraHosts"`
-	VolumesFrom    []string            `json:"VolumesFrom"`
-	CapAdd         []string            `json:"CapAdd"`
-	CapDrop        []string            `json:"CapDrop"`
-	Sysctls        map[string]string   `json:"Sysctls"`
-	ShmSize        int64               `json:"ShmSize"`
-	Tmpfs          map[string]string   `json:"Tmpfs"`
-	Ulimits        []Ulimit            `json:"Ulimits"`
-	SecurityOpt    []string            `json:"SecurityOpt"`
-	Mounts         []Mount             `json:"Mounts"`
-	Init           bool                `json:"Init"`
-	Runtime        string              `json:"Runtime"`
-	Isolation      string              `json:"Isolation"`
-	CPUShares      int64               `json:"CpuShares"`
-	Memory         int64               `json:"Memory"`
-	NanoCpus       int64               `json:"NanoCpus"`
-	CgroupParent   string              `json:"CgroupParent"`
-	BlkioWeight    uint16              `json:"BlkioWeight"`
-	PidsLimit      int64               `json:"PidsLimit"`
-	OomKillDisable bool                `json:"OomKillDisable"`
-	OomScoreAdj    int64               `json:"OomScoreAdj"`
+	Binds           []string            `json:"Binds"`
+	NetworkMode     NetworkMode         `json:"NetworkMode"`
+	PortBindings    PortMap             `json:"PortBindings"`
+	RestartPolicy   RestartPolicyConfig `json:"RestartPolicy"`
+	AutoRemove      bool                `json:"AutoRemove"`
+	Privileged      bool                `json:"Privileged"`
+	PublishAllPorts bool                `json:"PublishAllPorts"`
+	ReadonlyRootfs  bool                `json:"ReadonlyRootfs"`
+	DNS             []string            `json:"Dns"`
+	DNSOptions      []string            `json:"DnsOptions"`
+	DNSSearch       []string            `json:"DnsSearch"`
+	ExtraHosts      []string            `json:"ExtraHosts"`
+	VolumesFrom     []string            `json:"VolumesFrom"`
+	CapAdd          []string            `json:"CapAdd"`
+	CapDrop         []string            `json:"CapDrop"`
+	Sysctls         map[string]string   `json:"Sysctls"`
+	ShmSize         int64               `json:"ShmSize"`
+	Tmpfs           map[string]string   `json:"Tmpfs"`
+	Ulimits         []Ulimit            `json:"Ulimits"`
+	SecurityOpt     []string            `json:"SecurityOpt"`
+	Mounts          []Mount             `json:"Mounts"`
+	Init            bool                `json:"Init"`
+	Runtime         string              `json:"Runtime"`
+	Isolation       string              `json:"Isolation"`
+	CPUShares       int64               `json:"CpuShares"`
+	Memory          int64               `json:"Memory"`
+	NanoCpus        int64               `json:"NanoCpus"`
+	CgroupParent    string              `json:"CgroupParent"`
+	BlkioWeight     uint16              `json:"BlkioWeight"`
+	PidsLimit       int64               `json:"PidsLimit"`
+	OomKillDisable  bool                `json:"OomKillDisable"`
+	OomScoreAdj     int64               `json:"OomScoreAdj"`
 }
 
 // RestartPolicyConfig describes container restart behavior.
@@ -255,14 +255,14 @@ type PortBinding struct {
 
 // Mount represents a mount point inside a container.
 type Mount struct {
-	Type          MountType       `json:"Type"`
-	Source        string          `json:"Source,omitempty"`
-	Target        string          `json:"Target"`
-	ReadOnly      bool            `json:"ReadOnly,omitempty"`
-	Consistency   string          `json:"Consistency,omitempty"`
-	BindOptions   *BindOptions    `json:"BindOptions,omitempty"`
-	VolumeOptions *VolumeOptions  `json:"VolumeOptions,omitempty"`
-	TmpfsOptions  *TmpfsOptions   `json:"TmpfsOptions,omitempty"`
+	Type          MountType      `json:"Type"`
+	Source        string         `json:"Source,omitempty"`
+	Target        string         `json:"Target"`
+	ReadOnly      bool           `json:"ReadOnly,omitempty"`
+	Consistency   string         `json:"Consistency,omitempty"`
+	BindOptions   *BindOptions   `json:"BindOptions,omitempty"`
+	VolumeOptions *VolumeOptions `json:"VolumeOptions,omitempty"`
+	TmpfsOptions  *TmpfsOptions  `json:"TmpfsOptions,omitempty"`
 }
 
 // BindOptions for bind mounts.
@@ -289,7 +289,7 @@ type DriverConfig struct {
 
 // TmpfsOptions for tmpfs mounts.
 type TmpfsOptions struct {
-	SizeBytes int64 `json:"SizeBytes,omitempty"`
+	SizeBytes int64  `json:"SizeBytes,omitempty"`
 	Mode      uint32 `json:"Mode,omitempty"`
 }
 
@@ -307,34 +307,34 @@ type MountPoint struct {
 
 // ImageInfo holds information about an image.
 type ImageInfo struct {
-	ID          string            `json:"Id"`
-	RepoTags    []string          `json:"RepoTags"`
-	RepoDigests []string          `json:"RepoDigests"`
-	Parent      string            `json:"Parent"`
-	Comment     string            `json:"Comment"`
-	Created     int64             `json:"Created"`
-	Container   string            `json:"Container"`
-	Size        int64             `json:"Size"`
-	VirtualSize int64             `json:"VirtualSize"`
-	Author      string            `json:"Author"`
-	Architecture string           `json:"Architecture"`
-	Os          string            `json:"Os"`
-	Labels      map[string]string `json:"Labels"`
+	ID           string            `json:"Id"`
+	RepoTags     []string          `json:"RepoTags"`
+	RepoDigests  []string          `json:"RepoDigests"`
+	Parent       string            `json:"Parent"`
+	Comment      string            `json:"Comment"`
+	Created      int64             `json:"Created"`
+	Container    string            `json:"Container"`
+	Size         int64             `json:"Size"`
+	VirtualSize  int64             `json:"VirtualSize"`
+	Author       string            `json:"Author"`
+	Architecture string            `json:"Architecture"`
+	Os           string            `json:"Os"`
+	Labels       map[string]string `json:"Labels"`
 }
 
 // NetworkInfo holds information about a network.
 type NetworkInfo struct {
-	ID         string            `json:"Id"`
-	Name       string            `json:"Name"`
-	Driver     string            `json:"Driver"`
-	Scope      string            `json:"Scope"`
-	Internal   bool              `json:"Internal"`
-	EnableIPv6 bool              `json:"EnableIPv6"`
-	IPAM       *IPAM             `json:"IPAM"`
-	Options    map[string]string `json:"Options"`
-	Labels     map[string]string `json:"Labels"`
+	ID         string                      `json:"Id"`
+	Name       string                      `json:"Name"`
+	Driver     string                      `json:"Driver"`
+	Scope      string                      `json:"Scope"`
+	Internal   bool                        `json:"Internal"`
+	EnableIPv6 bool                        `json:"EnableIPv6"`
+	IPAM       *IPAM                       `json:"IPAM"`
+	Options    map[string]string           `json:"Options"`
+	Labels     map[string]string           `json:"Labels"`
 	Containers map[string]EndpointResource `json:"Containers"`
-	Created    time.Time         `json:"Created"`
+	Created    time.Time                   `json:"Created"`
 }
 
 // IPAM represents IP address management configuration.
@@ -488,67 +488,67 @@ type HealthStatus struct {
 
 // SystemInfo holds system-wide information.
 type SystemInfo struct {
-	ID              string   `json:"ID"`
-	Name            string   `json:"Name"`
-	ServerVersion   string   `json:"ServerVersion"`
-	OSType          string   `json:"OSType"`
-	OperatingSystem string   `json:"OperatingSystem"`
-	Architecture    string   `json:"Architecture"`
-	NCPU            int      `json:"NCPU"`
-	MemTotal        int64    `json:"MemTotal"`
-	Driver          string   `json:"Driver"`
-	DriverStatus    [][2]string `json:"DriverStatus"`
-	DockerRootDir   string   `json:"DockerRootDir"`
-	Images          int      `json:"Images"`
-	Containers      int      `json:"Containers"`
-	ContainersRunning int    `json:"ContainersRunning"`
-	ContainersPaused int     `json:"ContainersPaused"`
-	ContainersStopped int    `json:"ContainersStopped"`
+	ID                string      `json:"ID"`
+	Name              string      `json:"Name"`
+	ServerVersion     string      `json:"ServerVersion"`
+	OSType            string      `json:"OSType"`
+	OperatingSystem   string      `json:"OperatingSystem"`
+	Architecture      string      `json:"Architecture"`
+	NCPU              int         `json:"NCPU"`
+	MemTotal          int64       `json:"MemTotal"`
+	Driver            string      `json:"Driver"`
+	DriverStatus      [][2]string `json:"DriverStatus"`
+	DockerRootDir     string      `json:"DockerRootDir"`
+	Images            int         `json:"Images"`
+	Containers        int         `json:"Containers"`
+	ContainersRunning int         `json:"ContainersRunning"`
+	ContainersPaused  int         `json:"ContainersPaused"`
+	ContainersStopped int         `json:"ContainersStopped"`
 }
 
 // ContainerJSON holds full container information.
 type ContainerJSON struct {
 	*ContainerInfo
-	Config           *ContainerConfig   `json:"Config"`
-	HostConfig       *HostConfig        `json:"HostConfig"`
-	Image            string             `json:"Image"`
-	ImageID          string             `json:"ImageID"`
-	Name             string             `json:"Name"`
-	ResolvConfPath   string             `json:"ResolvConfPath"`
-	HostnamePath     string             `json:"HostnamePath"`
-	HostsPath        string             `json:"HostsPath"`
-	LogPath           string             `json:"LogPath"`
-	RestartCount     int                `json:"RestartCount"`
-	Driver           string             `json:"Driver"`
-	Platform         string             `json:"Platform"`
-	MountLabel       string             `json:"MountLabel"`
-	ProcessLabel     string             `json:"ProcessLabel"`
-	AppArmorProfile  string             `json:"AppArmorProfile"`
-	GraphDriver      *GraphDriverData   `json:"GraphDriver"`
+	Config          *ContainerConfig `json:"Config"`
+	HostConfig      *HostConfig      `json:"HostConfig"`
+	Image           string           `json:"Image"`
+	ImageID         string           `json:"ImageID"`
+	Name            string           `json:"Name"`
+	ResolvConfPath  string           `json:"ResolvConfPath"`
+	HostnamePath    string           `json:"HostnamePath"`
+	HostsPath       string           `json:"HostsPath"`
+	LogPath         string           `json:"LogPath"`
+	RestartCount    int              `json:"RestartCount"`
+	Driver          string           `json:"Driver"`
+	Platform        string           `json:"Platform"`
+	MountLabel      string           `json:"MountLabel"`
+	ProcessLabel    string           `json:"ProcessLabel"`
+	AppArmorProfile string           `json:"AppArmorProfile"`
+	GraphDriver     *GraphDriverData `json:"GraphDriver"`
 }
 
 // ContainerConfig holds container-specific configuration.
 type ContainerConfig struct {
-	Hostname     string            `json:"Hostname"`
-	Domainname   string            `json:"Domainname"`
-	User         string            `json:"User"`
-	AttachStdin  bool              `json:"AttachStdin"`
-	AttachStdout bool              `json:"AttachStdout"`
-	AttachStderr bool              `json:"AttachStderr"`
+	Hostname     string              `json:"Hostname"`
+	Domainname   string              `json:"Domainname"`
+	User         string              `json:"User"`
+	AttachStdin  bool                `json:"AttachStdin"`
+	AttachStdout bool                `json:"AttachStdout"`
+	AttachStderr bool                `json:"AttachStderr"`
 	ExposedPorts map[string]struct{} `json:"ExposedPorts"`
-	Tty          bool              `json:"Tty"`
-	OpenStdin    bool              `json:"OpenStdin"`
-	StdinOnce    bool              `json:"StdinOnce"`
-	Env          []string          `json:"Env"`
-	Cmd          []string          `json:"Cmd"`
-	Image        string            `json:"Image"`
+	Tty          bool                `json:"Tty"`
+	OpenStdin    bool                `json:"OpenStdin"`
+	StdinOnce    bool                `json:"StdinOnce"`
+	Env          []string            `json:"Env"`
+	Cmd          []string            `json:"Cmd"`
+	Image        string              `json:"Image"`
 	Volumes      map[string]struct{} `json:"Volumes"`
-	WorkingDir   string            `json:"WorkingDir"`
-	Entrypoint   []string          `json:"Entrypoint"`
-	Labels       map[string]string `json:"Labels"`
-	StopSignal   string            `json:"StopSignal"`
-	StopTimeout  *int              `json:"StopTimeout,omitempty"`
-	Shell        []string          `json:"Shell"`
+	WorkingDir   string              `json:"WorkingDir"`
+	Entrypoint   []string            `json:"Entrypoint"`
+	Labels       map[string]string   `json:"Labels"`
+	StopSignal   string              `json:"StopSignal"`
+	StopTimeout  *int                `json:"StopTimeout,omitempty"`
+	Shell        []string            `json:"Shell"`
 }
 
 // GraphDriverData holds information about the storage driver.
@@ -559,14 +559,14 @@ type GraphDriverData struct {
 
 // SystemEventsResponse holds events from the system.
 type SystemEventsResponse struct {
-	Status   string    `json:"status"`
-	ID       string    `json:"id"`
-	From     string    `json:"from"`
-	Type     string    `json:"Type"`
-	Action   string    `json:"Action"`
+	Status   string     `json:"status"`
+	ID       string     `json:"id"`
+	From     string     `json:"from"`
+	Type     string     `json:"Type"`
+	Action   string     `json:"Action"`
 	Actor    EventActor `json:"Actor"`
-	Time     int64     `json:"time"`
-	TimeNano int64     `json:"timeNano"`
+	Time     int64      `json:"time"`
+	TimeNano int64      `json:"timeNano"`
 }
 
 // EventActor describes something that generates events.

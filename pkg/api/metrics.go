@@ -92,12 +92,12 @@ func HealthHandler(w http.ResponseWriter, _ *http.Request) {
 
 	// Collect overall info.
 	response := map[string]interface{}{
-		"status":   status,
-		"version":  common.Version,
-		"uptime":   time.Since(startTime).String(),
+		"status":     status,
+		"version":    common.Version,
+		"uptime":     time.Since(startTime).String(),
 		"goroutines": goruntime.NumGoroutine(),
-		"checks":   checks,
-		"registry": registryStatus,
+		"checks":     checks,
+		"registry":   registryStatus,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

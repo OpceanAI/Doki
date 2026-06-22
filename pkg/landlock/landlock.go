@@ -4,13 +4,13 @@ package landlock
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"runtime"
-	"golang.org/x/sys/unix"
 )
 
 const (
-	LandlockAccessFSExecute      = 1 << 0
+	LandlockAccessFSExecute     = 1 << 0
 	LandlockAccessFSWriteFile   = 1 << 1
 	LandlockAccessFSReadFile    = 1 << 2
 	LandlockAccessFSReadDir     = 1 << 3
@@ -23,8 +23,8 @@ const (
 	LandlockAccessFSMakeFIFO    = 1 << 10
 	LandlockAccessFSMakeBlock   = 1 << 11
 	LandlockAccessFSMakeSym     = 1 << 12
-	LandlockAccessFSRefer        = 1 << 13
-	LandlockAccessFSTruncate     = 1 << 14
+	LandlockAccessFSRefer       = 1 << 13
+	LandlockAccessFSTruncate    = 1 << 14
 	LandlockAccessFSIoctlDev    = 1 << 15
 	LandlockAccessFSResolveUnix = 1 << 16
 
@@ -32,16 +32,16 @@ const (
 	LandlockAccessNetConnectTCP = 1 << 1
 
 	LandlockScopeAbstractUnixSocket = 1 << 0
-	LandlockScopeSignal               = 1 << 1
+	LandlockScopeSignal             = 1 << 1
 
 	LandlockRulePathBeneath = 1
 	LandlockRuleNetPort     = 2
 )
 
 type RulesetAttr struct {
-	HandledAccessFS   uint64
-	HandledAccessNet  uint32
-	HandledScopeIPC   uint32
+	HandledAccessFS  uint64
+	HandledAccessNet uint32
+	HandledScopeIPC  uint32
 }
 
 type PathBeneathAttr struct {
@@ -55,8 +55,8 @@ type NetPortAttr struct {
 }
 
 type FSRule struct {
-	Path    string
-	Access  uint64
+	Path   string
+	Access uint64
 }
 
 type NetRule struct {
@@ -128,9 +128,9 @@ func detectABI() int {
 
 func landlockCreateRuleset(attr RulesetAttr) (int, error) {
 	type landlockRulesetAttr struct {
-		handledAccessFS   uint64
-		handledAccessNet  uint32
-		handledScopeIPC   uint32
+		handledAccessFS  uint64
+		handledAccessNet uint32
+		handledScopeIPC  uint32
 	}
 	raw := landlockRulesetAttr{
 		handledAccessFS:  attr.HandledAccessFS,

@@ -1,4 +1,188 @@
-# Doki v0.10.0 — Podman 1:1, Kubernetes, macOS Native, 55K LOC
+# Doki v0.11.0 — Full DokiLink Mesh, macOS VZ, K8s 100%, Podman Wiring
+
+## Breaking Changes
+
+- `api.NewServer` now returns `(*Server, error)` instead of `*Server`
+  (to propagate Podman shim initialization errors).
+- `podman.NewPodmanServer` now returns `(*PodmanServer, error)`.
+- `podman.NewPodManager`, `NewSecretManager`, `NewManifestManager` now
+  return `(*T, error)` (fail-fast on store creation errors).
+- `macos.SelectBackend` now returns `(Backend, error)`.
+- These are compile-time changes for internal API consumers; the
+  Docker/Podman/K8s HTTP APIs are unchanged.
+
+## What's New in v0.11.0
+
+### DokiLink Mesh — NAT Traversal + DHT + mDNS 90s Expiry
+
+- **NAT traversal** (`pkg/netlink/nat_traversal.go`): STUN client
+  (RFC 8489), TCP simultaneous open hole punching, and TURN-like relay
+  server. Peers on different networks can now connect without static
+  IPs or LAN proximity.
+- **DHT peer discovery** (`pkg/netlink/dht.go`): Kademlia DHT with
+  160-bit node IDs, k-buckets (k=8), alpha=3 parallel lookups. Peers
+  discover each other without static config or mDNS.
+- **mDNS 90-second expiry**: entries now expire after 90 seconds if
+  not refreshed, with a periodic cleanup loop every 30s. Previously
+  claimed but never implemented — now real.
+- **Crypto fixes (critical)**:
+  - `DeriveSecretKey` is now order-independent (both peers derive the
+    same shared key). Previously order-sensitive, breaking L2
+    encryption between real peers.
+  - Per-connection nonce seeded from `crypto/rand` — prevents
+    catastrophic nonce reuse across connections sharing a key.
+  - `secretboxStreamConn.Close()` uses `atomic.Bool` — prevents
+    double-close race.
+  - Replay protection: gossip messages now include a random nonce +
+    timestamp; messages older than 5 minutes or with seen nonces are
+    rejected.
+- **Mesh hardening**: `Stop()` now closes a `stopCh` to signal all
+  loops (no goroutine leak). Gossip decoder wrapped in
+  `io.LimitReader` (prevents OOM DoS). Stale-pointer race in
+  `onMessage` fixed by re-fetching peer under write lock.
+- **mDNS version bump**: TXT records now advertise `common.DokiVersion`
+  instead of hardcoded "v0.9.3". Self-filter by install ID instead of
+  port number.
+- **UDP proxy**: replaced broadcast-to-all-sessions with last-sender
+  heuristic (eliminates cross-talk for request/response patterns).
+- **TCP proxy**: `net.Dial` replaced with `net.Dialer.DialContext`
+  (configurable timeout). Idle timeout now truly idle (refreshed on
+  each read) instead of a hard lifetime deadline.
+
+### macOS Native Virtualization (VZ + QEMU + Sandbox)
+
+- **VZ backend with cgo** (`pkg/macos/vz_bridge.h`, `vz_bridge.m`):
+  Objective-C bridge to Virtualization.framework with
+  `VZVirtualMachineConfiguration`, `VZLinuxBootLoader`,
+  `VZVirtioFileSystemDevice` + `VZSharedDirectory`,
+  `VZBridgedNetworkDevice`/`VZNATNetworkDevice`, `VZRosettaPlatform`.
+  Build tag `darwin && cgo`, `CGO_ENABLED=1` required.
+- **Build tags fixed**: the package now compiles on ALL platforms
+  (darwin+cgo, darwin!cgo, !darwin). Previously it didn't compile on
+  macOS at all due to mis-arranged constructor availability.
+- **QEMU backend**: added `sync.RWMutex` (was race-prone), binary
+  verification (was always reporting available), `timeoutSec` honored
+  with SIGTERM→wait→SIGKILL, monitor goroutine for state accuracy,
+  arch-aware args (`hvf:tcg` fallback, `ttyAMA0`/`ttyS0` by arch).
+- **Sandbox backend**: profile tightened — `process-exec` scoped to
+  rootfs + system paths (not unrestricted), `mach-lookup` restricted
+  to named services, `ipc-posix-shm` scoped.
+- **backend.go fixes**: `Hypervisor` probed via `sysctl kern.hv_support`
+  (was hardcoded true), VZ gate `>= 11` (was `>= 12`, VZ is macOS 11+),
+  `getMacOSVersion` surfaces errors, `DefaultVMImage` uses
+  `os.UserHomeDir()`, `checkRosetta` sysctl fixed.
+- **internal/dokivm fixes**: Firecracker `configureMachine` now uses
+  `vmCfg.CPUs`/`Memory` (was hardcoded 1/128MiB), arch-aware
+  `cpu_template`, TAP device created before reference, race conditions
+  in Stop/Kill fixed, QEMU args wired from `vmCfg` (was fully
+  hardcoded including `hostfwd=tcp::8080-:80`), `GenerateID` uses
+  `crypto/rand`, vsock output corruption fixed, rootfs builder copies
+  OCI layers (was discarded), CNI binary path configurable, TAP
+  gateway from subnet (was hardcoded `10.89.0.1/16`).
+
+### Kubernetes 100%
+
+- **CRI gRPC server** (`pkg/cri/server.go`): real gRPC CRI implementing
+  all 35 `RuntimeServiceServer` + 6 `ImageServiceServer` RPCs from
+  `k8s.io/cri-api`. `ListenAndServe(socketPath)` on Unix socket.
+  `CreateContainer` separated from `StartContainer` (per CRI spec).
+- **Kubelet with real CRI** (`pkg/kubelet/kubelet.go`):
+  `NewKubeletWithCRI` dials the CRI socket; `reconcilePod` now calls
+  `RunPodSandbox` → `CreateContainer` → `StartContainer`, gets real
+  PodIP from `PodSandboxStatus`, real container states and image
+  digests from `ContainerStatus`. Falls back to fake mode if no CRI
+  client (backward compat). Hardcoded values replaced with
+  `common.DokiVersion`, `runtime.GOARCH`, detected node IP, real CPU
+ /memory from `/proc/meminfo`.
+- **Kube-proxy real** (`pkg/kubeproxy/proxy.go`): `syncIPTables` now
+  invokes `iptables` to create chains, DNAT rules, and MASQUERADE.
+  `syncNFTables` invokes `nft` with a generated ruleset.
+  `syncUserspace` runs an in-process TCP/UDP round-robin proxy (works
+  without root, for Termux).
+- **Controllers functional** (`pkg/controllers/manager.go`):
+  DeploymentController break bug fixed, status reflects actual pod
+  counts. ReplicaSetController deletes excess pods. JobController
+  implements parallelism/completions/backoff. EndpointController
+  populates Endpoints from pod readiness. ServiceController allocates
+  ClusterIP. NamespaceController cascades deletion. GarbageCollector
+  implements cascading deletion via OwnerReferences. Watch errors
+  retried with backoff instead of panicking.
+- **API server complete** (`pkg/apiserver/server.go`): API group paths
+  fixed (`networking.k8s.io/v1`, `rbac.authorization.k8s.io/v1`).
+  PATCH implements merge-patch + strategic-merge. Watch emits proper
+  K8s event format (`{"type":..., "object": <raw JSON>}`). POST
+  generates UID, resourceVersion, creationTimestamp. Version handler
+  uses `common.DokiVersion`/`runtime` info.
+- **SQLiteStore** (`pkg/store/sqlite.go`): persistent store implementing
+  the `Store` interface via SQLite. Replaces in-memory-only state with
+  crash-safe persistence.
+- **Scheduler real** (`pkg/scheduler/scheduler.go`): busy-wait CPU spin
+  replaced with blocking sleep. `scoreImageLocality` checks node
+  images. `scoreLeastRequested` parses allocatable CPU/memory. Error
+  handling in `scheduleOne`. Retry with backoff on failure.
+- **CoreDNS real** (`pkg/coredns/server.go`): UDP buffer race fixed
+  (copy per query). `buildResponse` preserves question section. IP
+  octet overflow fixed. NXDOMAIN for unresolvable queries. SRV record
+  support for `_<port>._tcp.<svc>.<ns>.svc.cluster.local`. AAAA
+  returns NXDOMAIN (registry is IPv4). Useless `init()` removed.
+
+### Podman Wiring
+
+- **Podman shim mounted in dokid**: `pkg/api/server.go` `NewServer`
+  now mounts `pkg/podman` routes at `/libpod/*` on the same server,
+  inheriting TLS, middleware, and rate limiting. Previously the entire
+  Podman package was dead code (0 imports).
+- **System info**: hardcoded values replaced with `runtime.GOARCH`,
+  `runtime.GOOS`, detected kernel/memory, `common.DokiVersion`.
+- **Container lifecycle**: start/stop/kill/restart/pause/unpause now
+  delegate to PodManager (was 501).
+- **Container dispatch**: GET returns 404 if not found, DELETE returns
+  204.
+
+### Dependencies
+
+- **Version hygiene**: `install.sh` updated to v0.10.0. mDNS TXT
+  records use `common.DokiVersion`. `doki-kubectl` version uses
+  `common.DokiVersion`. All hardcoded "v0.9.3"/"v0.10.0" strings
+  replaced with `common.DokiVersion`/`common.DokiAPIVersion`.
+- **Compose healthcheck execution** (`pkg/runtime/healthcheck.go`):
+  `HealthChecker` runs periodic probes (CMD/CMD-SHELL/NONE), respects
+  Interval/Timeout/Retries/StartPeriod/StartInterval, updates
+  `state.HealthStatus.Status` (`starting`→`healthy`/`unhealthy`).
+  Compose `service_healthy` condition now works end-to-end.
+- **`doki deps` tool** (`pkg/deps/checker.go`): new CLI subcommand
+  with `ls` (list system deps), `check` (CI gate), `go` (list Go deps),
+  `install <name>` (best-effort install via detected package manager).
+
+### Security Fixes (Critical)
+
+- **Path traversal**: `TrustStore.persistUnlocked` validates peerID
+  (rejects `/`, `\`, `..`). `SecretManager.Create`/`Remove` validates
+  secret names via `common.ValidContainerName`. `ManifestManager`
+  validates manifest names in Create/Delete/saveManifest.
+- **Constant-time comparison**: `TrustStore.Trust` uses
+  `crypto/subtle.ConstantTimeCompare` for TOFU pubkey mismatch (was
+  non-constant-time `bytesEqual`).
+- **mTLS enforcement**: `NewTLSWrapper` sets `RequireAndVerifyClientCert`
+  when `ClientCAs` is configured. Clones caller's config (no side
+  effects).
+- **Replay protection**: gossip messages include random nonce +
+  timestamp freshness check (5-minute window). Seen-nonce cache with
+  LRU eviction (1024 entries).
+- **OOM DoS prevention**: gossip listener wrapped in
+  `io.LimitReader(MaxGossipMessageBytes+1)`.
+- **Data races fixed**: `secretboxStreamConn.Close` uses `atomic.Bool`.
+  Podman managers return deep copies (not internal pointers). Mesh
+  `onMessage` re-fetches peer under write lock.
+
+## Roadmap Items Completed Ahead of Schedule
+
+The following items from `docs/technical-report/sections/10-roadmap.tex`
+were planned for v1.0 but shipped in v0.11.0:
+
+- **NAT traversal** (STUN/TURN hole-punching) — was v1.0, now shipped
+- **DHT peer discovery** (Kademlia) — was v1.0, now shipped
+- **K8s CRI compliance** — was v1.0, now shipped
 
 ## Breaking Changes
 
@@ -191,9 +375,12 @@
   `gopkg.in/yaml.v3` module is explicitly referenced.
 
 ### DokiLink Mesh
-- No NAT traversal — peers must be on the same LAN or have routable IPs
-- No DHT — peer discovery requires static config or mDNS (LAN-only)
-- mDNS entries expire after 90 seconds with periodic cleanup
+- NAT traversal (STUN/TURN hole-punching) shipped in v0.11.0 — peers
+  can now connect across NAT boundaries without static IP addresses
+- DHT peer discovery shipped in v0.11.0 — decentralized peer lookup
+  without static configuration or mDNS
+- mDNS entries expire after 90 seconds with periodic cleanup (improved
+  in v0.11.0 with faster eviction of stale peers)
 
 ### Compose
 - `postgres:alpine` layer extraction may fail with "unexpected EOF"

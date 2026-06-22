@@ -30,8 +30,6 @@ import (
 	"github.com/OpceanAI/Doki/pkg/storage"
 )
 
-
-
 // ExecutionMode, ContainerRunner, RunnerCapabilities, and all Mode* constants
 // are defined in runner.go.
 
@@ -47,57 +45,62 @@ type Runtime struct {
 	mode     ExecutionMode
 	registry *Registry
 	dnsAddr  string // Internal DNS server address (e.g., "127.0.0.11:53")
+
+	hcMu           sync.Mutex
+	healthCheckers map[string]*HealthChecker
 }
 
 // Config holds the configuration for a container.
 type Config struct {
-	ID            string
-	Rootfs        string
-	Args          []string
-	Env           []string
-	Cwd           string
-	User          string
-	Tty           bool
-	Interactive   bool
-	Privileged    bool
-	ReadOnly      bool
-	NetworkMode   common.NetworkMode
-	Hostname      string
-	Labels        map[string]string
-	Annotations   map[string]string
-	Mounts        []common.Mount
-	Ports         []common.Port
-	DNS           []string
-	DNSSearch     []string
-	DNSOptions    []string
-	ExtraHosts    []string
-	CapAdd        []string
-	CapDrop       []string
-	SecurityOpt   []string
-	Sysctls       map[string]string
-	Resources     *Resources
-	StopSignal    string
-	StopTimeout   int
-	Init               bool
-	RestartPolicy      common.RestartPolicy
-	RestartMaxRetries  int
-	HealthCheck        *HealthCheckConfig
-	Runtime            string
-	LogDriver     common.LogDriver
-	ImageRef      string
-	ImageDigest   string
-	ImageLayers   []string // paths to image layer tarballs
-	ImageConfig   *ImageOCIConfig
-	RootfsReady   string // path to extracted rootfs
-	Platform      string // "linux/arm64", "linux/amd64", "wasi/wasm", etc.
+	ID                string
+	Rootfs            string
+	Args              []string
+	Env               []string
+	Cwd               string
+	User              string
+	Tty               bool
+	Interactive       bool
+	Privileged        bool
+	ReadOnly          bool
+	NetworkMode       common.NetworkMode
+	Hostname          string
+	Labels            map[string]string
+	Annotations       map[string]string
+	Mounts            []common.Mount
+	Ports             []common.Port
+	DNS               []string
+	DNSSearch         []string
+	DNSOptions        []string
+	ExtraHosts        []string
+	CapAdd            []string
+	CapDrop           []string
+	SecurityOpt       []string
+	Sysctls           map[string]string
+	Resources         *Resources
+	StopSignal        string
+	StopTimeout       int
+	Init              bool
+	RestartPolicy     common.RestartPolicy
+	RestartMaxRetries int
+	HealthCheck       *HealthCheckConfig
+	Runtime           string
+	LogDriver         common.LogDriver
+	ImageRef          string
+	ImageDigest       string
+	ImageLayers       []string // paths to image layer tarballs
+	ImageConfig       *ImageOCIConfig
+	RootfsReady       string // path to extracted rootfs
+	Platform          string // "linux/arm64", "linux/amd64", "wasi/wasm", etc.
 }
 
 // HealthCheckConfig defines the health check parameters for a container.
 type HealthCheckConfig struct {
-	Test     []string
-	Interval time.Duration
-	Timeout  time.Duration
-	Retries  int
+	Test          []string
+	Interval      time.Duration
+	Timeout       time.Duration
+	Retries       int
+	StartPeriod   time.Duration
+	StartInterval time.Duration
 }
 
 // Resources defines the resource limits for a container.
@@ -322,7 +325,11 @@ func extractTarGz(tarPath, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { if err := f.Close(); err != nil { slog.Default().Warn("close failed", "error", err) } }()
+	defer func() {
+		if err := f.Close(); err != nil {
+			slog.Default().Warn("close failed", "error", err)
+		}
+	}()
 
 	// C12: Detect compression format from magic bytes.
 	magic := make([]byte, 4)
@@ -341,7 +348,11 @@ func extractTarGz(tarPath, dest string) error {
 		if err != nil {
 			return err
 		}
-		defer func() { if err := gz.Close(); err != nil { slog.Default().Warn("close failed", "error", err) } }()
+		defer func() {
+			if err := gz.Close(); err != nil {
+				slog.Default().Warn("close failed", "error", err)
+			}
+		}()
 		decompressed = gz
 	case n >= 2 && magic[0] == 0x42 && magic[1] == 0x5a:
 		decompressed = bzip2.NewReader(f)
@@ -490,7 +501,7 @@ func extractTarGz(tarPath, dest string) error {
 			}
 			linkTarget := filepath.Clean(filepath.Join(dest, hdr.Linkname))
 			if !strings.HasPrefix(linkTarget, cleanDest+string(os.PathSeparator)) && linkTarget != cleanDest {
-					return fmt.Errorf("tar: hardlink escape attempt")
+				return fmt.Errorf("tar: hardlink escape attempt")
 			}
 			_ = os.Remove(target)
 			// C8: Hardlink with fallback to copy; return error if both fail.
@@ -504,7 +515,7 @@ func extractTarGz(tarPath, dest string) error {
 					return fmt.Errorf("tar: hardlink failed for %s: %w", hdr.Name, err)
 				}
 			}
-			if err := os.Chmod(target, os.FileMode(hdr.Mode & 07777)); err != nil {
+			if err := os.Chmod(target, os.FileMode(hdr.Mode&07777)); err != nil {
 				return fmt.Errorf("tar: chmod hardlink %s: %w", hdr.Name, err)
 			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
@@ -707,8 +718,7 @@ func (rt *Runtime) Start(id string) error {
 		if err := rt.saveState(state); err != nil {
 			_, _ = os.Stderr.Write([]byte(fmt.Sprintf("DOKI: failed to save healthcheck state for %s: %v\n", id, err)))
 		}
-		rt.StartHealthcheck(id, cfg.HealthCheck.Test, cfg.HealthCheck.Interval,
-			cfg.HealthCheck.Timeout, cfg.HealthCheck.Retries)
+		rt.startHealthchecker(id, cfg.HealthCheck)
 	}
 
 	return nil
@@ -742,6 +752,9 @@ func (rt *Runtime) monitorProcess(state *ContainerState, logFile *os.File) {
 	if state.ExitChan != nil {
 		close(state.ExitChan)
 	}
+
+	// Stop the health checker before marking the container as exited.
+	rt.stopHealthchecker(state.ID)
 
 	// Lock for state modification and persistence only.
 	rt.mu.Lock()
@@ -1602,7 +1615,7 @@ func (rt *Runtime) GetLogs(id string, tail int) (string, error) {
 		return "", err
 	}
 	lines := strings.Split(string(data), "\n")
-	
+
 	// Remove empty lines (especially trailing newline)
 	var nonEmptyLines []string
 	for _, line := range lines {
@@ -1610,12 +1623,12 @@ func (rt *Runtime) GetLogs(id string, tail int) (string, error) {
 			nonEmptyLines = append(nonEmptyLines, line)
 		}
 	}
-	
+
 	// Apply tail filter
 	if tail > 0 && len(nonEmptyLines) > tail {
 		nonEmptyLines = nonEmptyLines[len(nonEmptyLines)-tail:]
 	}
-	
+
 	return strings.Join(nonEmptyLines, "\n"), nil
 }
 
@@ -1844,116 +1857,40 @@ func parseExtraHosts(hosts []string) map[string]string {
 // ─── Healthcheck ──────────────────────────────────────────────────
 
 // StartHealthcheck begins periodic health checks for a container.
+// This is a backward-compatible wrapper that delegates to HealthChecker.
 func (rt *Runtime) StartHealthcheck(id string, cmd []string, interval, timeout time.Duration, retries int) {
-	go func() {
-		if interval <= 0 {
-			interval = 30 * time.Second
-		}
-		if timeout <= 0 {
-			timeout = 5 * time.Second
-		}
-		if retries <= 0 {
-			retries = 3
-		}
+	cfg := &HealthCheckConfig{
+		Test:     cmd,
+		Interval: interval,
+		Timeout:  timeout,
+		Retries:  retries,
+	}
+	rt.startHealthchecker(id, cfg)
+}
 
-		failures := 0
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+// startHealthchecker creates and starts a HealthChecker for the given container.
+func (rt *Runtime) startHealthchecker(id string, cfg *HealthCheckConfig) {
+	hc := NewHealthChecker(rt, id, cfg)
+	rt.hcMu.Lock()
+	if rt.healthCheckers == nil {
+		rt.healthCheckers = make(map[string]*HealthChecker)
+	}
+	rt.healthCheckers[id] = hc
+	rt.hcMu.Unlock()
+	hc.Start()
+}
 
-		for range ticker.C {
-			state, err := rt.State(id)
-			if err != nil || state.Status != common.StateRunning {
-				return
-			}
-
-			rootfsDir := ""
-			if state.Config != nil {
-				rootfsDir = state.Config.RootfsReady
-			}
-			if rootfsDir == "" && state.Bundle != "" {
-				rootfsDir = filepath.Join(state.Bundle, "rootfs")
-			}
-
-			// G3: Run healthcheck command INSIDE the container.
-			var hcmd *exec.Cmd
-			containerPath := rootfsDir + "/usr/local/sbin:" + rootfsDir + "/usr/local/bin:" +
-				rootfsDir + "/usr/sbin:" + rootfsDir + "/usr/bin:" +
-				rootfsDir + "/sbin:" + rootfsDir + "/bin"
-			if rt.mode == ModeProot && proot.IsAvailable() {
-				hcmd = exec.Command(proot.FindProotBinary(), append([]string{"-r", rootfsDir}, cmd...)...)
-			} else {
-				hcmd = exec.Command(cmd[0], cmd[1:]...)
-				hcmd.Dir = rootfsDir
-				hcmd.Env = append(os.Environ(), "PATH="+containerPath)
-			}
-			hcmd.Stdout = nil
-			hcmd.Stderr = nil
-			hcmd.Stdin = nil
-			done := make(chan error, 1)
-			go func() { done <- hcmd.Run() }()
-
-			select {
-			case err := <-done:
-				if err != nil {
-					failures++
-					// Update health status.
-					rt.mu.Lock()
-					if state.HealthStatus != nil {
-						state.HealthStatus.FailingStreak = failures
-						state.HealthStatus.Status = "unhealthy"
-					}
-					if err := rt.saveState(state); err != nil {
-						slog.Default().Warn("saveState failed", "error", err)
-					}
-					rt.mu.Unlock()
-					if failures >= retries {
-						go func() { _ = rt.Stop(id, 10) }()
-						return
-					}
-				} else {
-					failures = 0
-					rt.mu.Lock()
-					if state.HealthStatus != nil {
-						state.HealthStatus.FailingStreak = 0
-						state.HealthStatus.Status = "healthy"
-						state.HealthStatus.Log = append(state.HealthStatus.Log, common.HealthCheckResult{
-							Start:    time.Now().Add(-timeout),
-							End:      time.Now(),
-							ExitCode: 0,
-							Output:   "",
-						})
-						if len(state.HealthStatus.Log) > 5 {
-							state.HealthStatus.Log = state.HealthStatus.Log[len(state.HealthStatus.Log)-5:]
-						}
-					}
-					if err := rt.saveState(state); err != nil {
-						slog.Default().Warn("saveState failed", "error", err)
-					}
-					rt.mu.Unlock()
-				}
-			case <-time.After(timeout):
-				if hcmd.Process != nil {
-					if err := hcmd.Process.Kill(); err != nil {
-						slog.Default().Warn("healthcheck kill failed", "error", err)
-					}
-				}
-				failures++
-				rt.mu.Lock()
-				if state.HealthStatus != nil {
-					state.HealthStatus.FailingStreak = failures
-					state.HealthStatus.Status = "unhealthy"
-				}
-				if err := rt.saveState(state); err != nil {
-					slog.Default().Warn("saveState failed", "error", err)
-				}
-				rt.mu.Unlock()
-				if failures >= retries {
-					_ = rt.Stop(id, 10)
-					return
-				}
-			}
-		}
-	}()
+// stopHealthchecker stops the HealthChecker for the given container, if any.
+func (rt *Runtime) stopHealthchecker(id string) {
+	rt.hcMu.Lock()
+	hc, ok := rt.healthCheckers[id]
+	if ok {
+		delete(rt.healthCheckers, id)
+	}
+	rt.hcMu.Unlock()
+	if ok {
+		hc.Stop()
+	}
 }
 
 // ─── Seccomp enforcement ───────────────────────────────────────────

@@ -2,6 +2,8 @@ package netlink
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,13 +17,13 @@ import (
 // is JSON, ed25519-signed, and capped at 4 KiB. Larger messages are
 // truncated by the sender.
 type GossipMessage struct {
-	Type      string         `json:"type"` // "hello", "peer", "container"
-	From      string         `json:"from"` // sender short id
-	Time      int64          `json:"time"` // unix nanos
-	Nonce     string         `json:"nonce,omitempty"`
-	Peers     []PeerSnapshot `json:"peers,omitempty"`
+	Type      string           `json:"type"` // "hello", "peer", "container"
+	From      string           `json:"from"` // sender short id
+	Time      int64            `json:"time"` // unix nanos
+	Nonce     string           `json:"nonce,omitempty"`
+	Peers     []PeerSnapshot   `json:"peers,omitempty"`
 	Container *RemoteContainer `json:"container,omitempty"`
-	Signature string         `json:"sig"` // base64 ed25519 sig over canonical JSON
+	Signature string           `json:"sig"` // base64 ed25519 sig over canonical JSON
 }
 
 // PeerSnapshot is a compact, wire-friendly peer record. It is what
@@ -43,7 +45,15 @@ func (m *GossipMessage) Verify(pub []byte) error {
 }
 
 // Sign signs the message in-place using priv. The signature is base64.
+// A random nonce is generated and included in the signed body so that
+// receivers can detect and reject replayed messages.
 func (m *GossipMessage) Sign(priv []byte) error {
+	// Generate a random 16-byte nonce for replay protection.
+	var nonceBuf [16]byte
+	if _, err := rand.Read(nonceBuf[:]); err != nil {
+		return fmt.Errorf("mesh: generate nonce: %w", err)
+	}
+	m.Nonce = base64.StdEncoding.EncodeToString(nonceBuf[:])
 	body, err := canonicalJSON(m)
 	if err != nil {
 		return err
@@ -59,6 +69,16 @@ func (m *GossipMessage) Sign(priv []byte) error {
 // MaxGossipMessageBytes is the on-wire size cap.
 const MaxGossipMessageBytes = 4 * 1024
 
+// replayWindow is the maximum age of a gossip message to be accepted.
+// Messages with timestamps older than this are rejected to prevent
+// replay attacks.
+const replayWindow = 5 * time.Minute
+
+// seenNonceLimit is the maximum number of nonces retained in the
+// replay cache. This bounds memory usage while providing adequate
+// replay protection.
+const seenNonceLimit = 1024
+
 // Mesh wires together identity, trust, discovery, and a TCP listener
 // that exchanges gossip with peers. It is the single entry point for
 // the daemon to start participating in a DokiLink-Lite mesh.
@@ -70,12 +90,14 @@ type Mesh struct {
 	listenAddr string
 	logger     *slog.Logger
 
-	mu        sync.RWMutex
-	peers     map[string]*Peer      // id -> latest
-	conns     map[string]chan GossipMessage
-	started   bool
-	gossipQ   chan GossipMessage
-	listener  *meshListener
+	mu         sync.RWMutex
+	peers      map[string]*Peer // id -> latest
+	started    bool
+	listener   *meshListener
+	stopCh     chan struct{} // closed by Stop() to signal all loops
+	stopOnce   sync.Once
+	seenNonces map[string]time.Time // replay protection: nonce -> recv time
+	nonceMu    sync.Mutex
 }
 
 // MeshConfig configures a Mesh.
@@ -109,8 +131,8 @@ func NewMesh(cfg MeshConfig) (*Mesh, error) {
 		listenAddr: cfg.ListenAddr,
 		logger:     cfg.Logger,
 		peers:      make(map[string]*Peer),
-		conns:      make(map[string]chan GossipMessage),
-		gossipQ:    make(chan GossipMessage, 64),
+		seenNonces: make(map[string]time.Time),
+		stopCh:     make(chan struct{}),
 	}
 	if cfg.EnableMDNS {
 		_, port, _ := splitHostPort(cfg.ListenAddr)
@@ -176,14 +198,19 @@ func (m *Mesh) Start(ctx context.Context) error {
 
 	go m.gossipLoop(ctx)
 	go m.staticRefreshLoop(ctx)
+	go m.nonceCleanupLoop(ctx)
 	return nil
 }
 
-// Stop closes the listener, mDNS, and stops the gossip loop.
+// Stop closes the listener, mDNS, and stops all background loops.
+// Safe to call multiple times.
 func (m *Mesh) Stop() error {
 	m.mu.Lock()
 	m.started = false
 	m.mu.Unlock()
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
 	if m.listener != nil {
 		m.listener.close()
 	}
@@ -252,6 +279,8 @@ func (m *Mesh) gossipLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-m.stopCh:
+			return
 		case <-t.C:
 			m.tick()
 		}
@@ -291,6 +320,8 @@ func (m *Mesh) staticRefreshLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-m.stopCh:
+			return
 		case <-t.C:
 			m.refreshFromStatic()
 		}
@@ -310,10 +341,15 @@ func (m *Mesh) refreshFromStatic() {
 }
 
 // onMessage is called by the listener when a gossip message arrives.
-// It verifies the signature, applies the changes locally, and merges
-// the peer's view of the world.
+// It verifies the signature, checks for replay (nonce + timestamp
+// freshness), applies the changes locally, and merges the peer's view
+// of the world.
 func (m *Mesh) onMessage(msg GossipMessage) {
 	if msg.From == "" || msg.From == m.identity.ShortID() {
+		return
+	}
+	// Replay protection: check timestamp freshness and nonce uniqueness.
+	if !m.checkReplay(msg) {
 		return
 	}
 	m.mu.RLock()
@@ -333,8 +369,17 @@ func (m *Mesh) onMessage(msg GossipMessage) {
 		m.logger.Warn("doki-link: gossip signature invalid", "id", msg.From, "err", err)
 		return
 	}
-	// Hold write lock for mutations
+	// Hold write lock for mutations. Re-fetch the peer pointer under
+	// the write lock to avoid the stale-pointer race: between releasing
+	// the RLock above and acquiring the Lock below, refreshFromStatic()
+	// or mergePeers() may have replaced m.peers[msg.From] with a new
+	// *Peer, making the earlier-captured `p` point to a stale object.
 	m.mu.Lock()
+	p = m.peers[msg.From]
+	if p == nil {
+		m.mu.Unlock()
+		return
+	}
 	if p.LastSeen.IsZero() || time.Since(p.LastSeen) > 5*time.Minute {
 		p.LastSeen = time.Now()
 	}
@@ -349,6 +394,63 @@ func (m *Mesh) onMessage(msg GossipMessage) {
 		m.mu.Unlock()
 	default:
 		m.mu.Unlock()
+	}
+}
+
+// checkReplay validates that the message timestamp is within the
+// replay window and that the nonce has not been seen before. This
+// prevents an attacker who captures a valid signed message from
+// replaying it indefinitely.
+func (m *Mesh) checkReplay(msg GossipMessage) bool {
+	// Timestamp freshness: reject messages older than replayWindow.
+	msgTime := time.Unix(0, msg.Time)
+	if msgTime.IsZero() || time.Since(msgTime) > replayWindow {
+		m.logger.Debug("doki-link: gossip timestamp too old or invalid", "id", msg.From)
+		return false
+	}
+	// Nonce uniqueness: reject messages with nonces we've already seen.
+	if msg.Nonce == "" {
+		m.logger.Debug("doki-link: gossip missing nonce", "id", msg.From)
+		return false
+	}
+	m.nonceMu.Lock()
+	defer m.nonceMu.Unlock()
+	if _, seen := m.seenNonces[msg.Nonce]; seen {
+		m.logger.Debug("doki-link: gossip nonce replay detected", "id", msg.From)
+		return false
+	}
+	// Evict expired nonces to bound memory usage.
+	if len(m.seenNonces) >= seenNonceLimit {
+		for n, t := range m.seenNonces {
+			if time.Since(t) > replayWindow {
+				delete(m.seenNonces, n)
+			}
+		}
+	}
+	m.seenNonces[msg.Nonce] = time.Now()
+	return true
+}
+
+// nonceCleanupLoop periodically evicts expired nonces from the replay
+// cache to bound memory usage.
+func (m *Mesh) nonceCleanupLoop(ctx context.Context) {
+	t := time.NewTicker(replayWindow)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case <-t.C:
+			m.nonceMu.Lock()
+			for n, t := range m.seenNonces {
+				if time.Since(t) > replayWindow {
+					delete(m.seenNonces, n)
+				}
+			}
+			m.nonceMu.Unlock()
+		}
 	}
 }
 
@@ -390,9 +492,9 @@ func canonicalJSON(v interface{}) ([]byte, error) {
 	// Marshal without the signature field by wrapping.
 	switch msg := v.(type) {
 	case *GossipMessage:
-		copy := *msg
-		copy.Signature = ""
-		return json.Marshal(&copy)
+		clone := *msg
+		clone.Signature = ""
+		return json.Marshal(&clone)
 	case GossipMessage:
 		msg.Signature = ""
 		return json.Marshal(&msg)
