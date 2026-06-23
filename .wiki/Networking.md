@@ -516,83 +516,43 @@ records are dropped and the peer is marked untrusted.
 
 ### Gossip Exchange
 
-```text
-  Doki A                                  Doki B
-  :7432                                   :7432
-  ┌──────────────┐                        ┌──────────────┐
-  │ gossip tick  │  every 15s             │              │
-  │ (mesh.go)    │──── dial TLS 1.3 ────> │ listener     │
-  │              │     ed25519 signed     │              │
-  │              │<── peer records ──────│ │ TrustStore   │
-  │              │     ed25519 signed     │              │
-  │ TrustStore   │                        │ TrustStore   │
-  │  updated     │                        │  updated     │
-  │  mesh router │                        │  mesh router │
-  │  recomputes  │                        │  recomputes  │
-  └──────────────┘                        └──────────────┘
-        |                                        |
-        | record expired (90s mDNS TTL)          | same
-        v                                        v
-  mDNS re-announce                         mDNS re-announce
-```
+Every 15 seconds, each Doki instance dials its known peers on port
+7432 using TLS 1.3 with Ed25519-signed messages. The dialer sends
+its peer records (ID, address, public key); the listener verifies
+the signature against its TrustStore, merges new peers into its
+mesh registry, and responds with its own peer records. Both sides
+update their TrustStore and recompute the mesh routing table. mDNS
+re-announcement occurs when a record expires after 90 seconds.
 
 ### Peer Discovery
 
-```text
-  install identity (Ed25519 + CA)
-            |
-            +----------+----------+
-            |                     |
-       static                mDNS browser
-       peers.json            (90s expiry, LAN-only,
-            |                 -tags netlink_mdns)
-            |                     |
-            +----------+----------+
-                       |
-                  TrustStore
-                       |
-                  Mesh registry
-                       |
-                  Gossip every 15s
-                       |
-                  Container announcements
-                       |
-                  DHT lookup (Kademlia)
-                  for off-LAN endpoints
-```
+Discovery starts from the install identity (Ed25519 keypair plus a
+self-signed CA). Two channels feed the TrustStore: static
+configuration via `peers.json`, and mDNS browsing (LAN-only, 90s
+TTL, requires the `netlink_mdns` build tag). The TrustStore feeds
+the mesh registry, which drives gossip every 15 seconds. Container
+announcements propagate through the same gossip channel. For
+off-LAN endpoints, DHT lookups via Kademlia resolve peer addresses
+without static configuration.
 
 ### NAT Traversal
 
 <sub>[STUN / TURN / HOLE PUNCHING / v0.11.0]</sub>
 
-```text
-LEGEND
-  A, B    Doki peers behind NAT
-  STUN    public reflexive endpoint discovery
-  TURN    relay fallback for symmetric NAT
-  DHT     endpoint exchange channel (Kademlia)
+NAT traversal follows a four-stage sequence:
 
-  1. BIND
-     A --binding req--> STUN_A
-     A <--mapped addr-- STUN_A      (A's public IP:port)
-     B --binding req--> STUN_B
-     B <--mapped addr-- STUN_B      (B's public IP:port)
-
-  2. EXCHANGE
-     A --put(B, pubA:portA)--> DHT
-     B --get(A)---------------> DHT  --> pubA:portA
-     B --put(A, pubB:portB)--> DHT
-     A --get(B)---------------> DHT  --> pubB:portB
-
-  3. PUNCH  (both ends send first to open NAT state)
-     A === SYN/UDP to pubB:portB ===>  B's NAT  (may drop, opens A's hole)
-     B === SYN/UDP to pubA:portA ===>  A's NAT  (may drop, opens B's hole)
-
-  4. OUTCOME
-     cone + cone       --> direct path established, TLS 1.3 wraps it
-     symmetric either  --> fall back to TURN relay (turn.go)
-     both fail         --> peer marked unreachable, mesh prunes in 90s
-```
+1. **Bind**: each peer sends a STUN binding request to a public STUN
+   server. The server responds with the XOR-MAPPED-ADDRESS attribute,
+   revealing the peer's public IP and port as seen by the NAT.
+2. **Exchange**: peers publish their public endpoints to the DHT.
+   Each peer retrieves the other's public address via a DHT lookup.
+3. **Punch**: both peers simultaneously send SYN packets to each
+   other's public address. This opens a pinhole in each NAT's state
+   table, allowing the inbound SYN to pass through.
+4. **Outcome**: if both NATs are cone-type, a direct TLS 1.3 channel
+   is established. If either NAT is symmetric, traffic falls back to
+   a TURN relay. If all methods fail, the peer is marked unreachable
+   and pruned from the mesh after 90 seconds.
 
 STUN binding is implemented in `pkg/netlink/stun.go` (RFC 5389
 classic STUN, no ICE candidate trickle). TURN relay uses

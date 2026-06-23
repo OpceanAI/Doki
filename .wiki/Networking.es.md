@@ -518,83 +518,47 @@ como no confiable.
 
 ### Intercambio de gossip
 
-```text
-  Doki A                                  Doki B
-  :7432                                   :7432
-  ┌──────────────┐                        ┌──────────────┐
-  │ gossip tick  │  cada 15s              │              │
-  │ (mesh.go)    │──── dial TLS 1.3 ────> │ listener     │
-  │              │     ed25519 firmado    │              │
-  │              │<── peer records ──────│ │ TrustStore   │
-  │              │     ed25519 firmado    │              │
-  │ TrustStore   │                        │ TrustStore   │
-  │  updated     │                        │  updated     │
-  │  mesh router │                        │  mesh router │
-  │  recomputes  │                        │  recomputes  │
-  └──────────────┘                        └──────────────┘
-        |                                        |
-        | registro expirado (90s TTL mDNS)       | mismo
-        v                                        v
-  mDNS re-announce                         mDNS re-announce
-```
+Cada 15 segundos, cada instancia Doki marca a sus pares conocidos
+en el puerto 7432 usando TLS 1.3 con mensajes firmados Ed25519. El
+marcador envia sus registros de pares (ID, direccion, clave
+publica); el oyente verifica la firma contra su TrustStore, fusiona
+los pares nuevos en su registro mesh, y responde con sus propios
+registros. Ambos lados actualizan su TrustStore y recomputan la
+tabla de routing mesh. El re-anuncio mDNS ocurre cuando un registro
+expira despues de 90 segundos.
 
 ### Descubrimiento de pares
 
-```text
-  identidad de instalacion (Ed25519 + CA)
-            |
-            +----------+----------+
-            |                     |
-       estatico              browser mDNS
-       peers.json            (90s expiry, solo LAN,
-            |                 -tags netlink_mdns)
-            |                     |
-            +----------+----------+
-                       |
-                  TrustStore
-                       |
-                  Registro mesh
-                       |
-                  Gossip cada 15s
-                       |
-                  Anuncios de contenedores
-                       |
-                  DHT lookup (Kademlia)
-                  para endpoints fuera de LAN
-```
+El descubrimiento empieza desde la identidad de instalacion (par de
+claves Ed25519 mas una CA auto-firmada). Dos canales alimentan el
+TrustStore: configuracion estatica via `peers.json`, y browsing mDNS
+(solo LAN, TTL 90s, requiere el build tag `netlink_mdns`). El
+TrustStore alimenta el registro mesh, que controla el gossip cada 15
+segundos. Los anuncios de contenedores se propagan por el mismo canal
+de gossip. Para endpoints fuera de LAN, las busquedas DHT via
+Kademlia resuelven las direcciones de los pares sin configuracion
+estatica.
 
 ### NAT Traversal
 
 <sub>[STUN / TURN / HOLE PUNCHING / v0.11.0]</sub>
 
-```text
-LEYENDA
-  A, B    pares Doki detras de NAT
-  STUN    descubrimiento de endpoint reflexivo publico
-  TURN    relevo fallback para NAT simetrico
-  DHT     canal de intercambio de endpoints (Kademlia)
+El NAT traversal sigue una secuencia de cuatro etapas:
 
-  1. BIND
-     A --binding req--> STUN_A
-     A <--mapped addr-- STUN_A      (IP:port publico de A)
-     B --binding req--> STUN_B
-     B <--mapped addr-- STUN_B      (IP:port publico de B)
-
-  2. EXCHANGE
-     A --put(B, pubA:portA)--> DHT
-     B --get(A)---------------> DHT  --> pubA:portA
-     B --put(A, pubB:portB)--> DHT
-     A --get(B)---------------> DHT  --> pubB:portB
-
-  3. PUNCH  (ambos extremos envian primero para abrir estado NAT)
-     A === SYN/UDP a pubB:portB ===>  NAT de B  (puede drop, abre hole de A)
-     B === SYN/UDP a pubA:portA ===>  NAT de A  (puede drop, abre hole de B)
-
-  4. OUTCOME
-     cone + cone       --> camino directo establecido, TLS 1.3 lo envuelve
-     simetrico en uno --> fallback a relevo TURN (turn.go)
-     ambos fallan      --> par marcado inalcanzable, mesh poda en 90s
-```
+1. **Bind**: cada par envia una peticion STUN binding a un servidor
+   STUN publico. El servidor responde con el atributo
+   XOR-MAPPED-ADDRESS, revelando la IP y puerto publicos del par
+   segun los ve el NAT.
+2. **Exchange**: los pares publican sus endpoints publicos al DHT.
+   Cada par recupera la direccion publica del otro via una busqueda
+   DHT.
+3. **Punch**: ambos pares envian simultaneamente paquetes SYN a la
+   direccion publica del otro. Esto abre un pinhole en la tabla de
+   estado del NAT de cada lado, permitiendo que el SYN entrante pase.
+4. **Outcome**: si ambos NAT son tipo cone, se establece un canal
+   directo TLS 1.3. Si cualquiera es simetrico, el trafico cae al
+   relay TURN. Si todos los metodos fallan, el par se marca
+   inalcanzable y se poda del mesh despues de 90 segundos.
 
 STUN binding esta implementado en `pkg/netlink/stun.go` (RFC 5389
 STUN clasico, sin ICE candidate trickle). El relevo TURN usa

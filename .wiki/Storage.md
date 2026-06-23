@@ -72,22 +72,18 @@ layer store that layer exactly once. Deduplication is a side effect of
 addressing, not a separate pass.
 
 ```text
-~/.doki/
-└── data/
-    ├── layers/                       one dir per layer SHA
-    │   ├── sha256:abc.../
-    │   ├── sha256:def.../
-    │   └── sha256:ghi.../
-    ├── merged/                       mount points  (overlay2)
-    ├── diff/                         upper dirs    (overlay2)
-    ├── work/                         work dirs     (overlay2)
-    ├── images/                       image metadata
-    ├── containers/                   container state
-    │   └── <id>/
-    │       ├── state.json
-    │       ├── rootfs/               extracted rootfs
-    │       └── logs/
-    └── volumes/                      named volumes
+~/.doki/data/
+  layers/           one dir per layer SHA (sha256:abc.../, sha256:def.../, ...)
+  merged/           mount points (overlay2)
+  diff/             upper dirs (overlay2)
+  work/             work dirs (overlay2)
+  images/           image metadata
+  containers/       container state (one dir per container ID)
+    <id>/
+      state.json    container status, PID, config
+      rootfs/       extracted rootfs
+      logs/         container log output
+  volumes/          named volumes
 ```
 
 <hr>

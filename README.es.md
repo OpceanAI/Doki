@@ -55,36 +55,20 @@ macOS VZ             puente cgo a Virtualization   VZVirtualMachine + ObjC
 
 <sub>[CICLO DE VIDA DEL CONTENEDOR / PIPELINE DEL DAEMON]</sub>
 
-```
-USUARIO            CLI (doki)              DAEMON (dokid)              KERNEL
- │                     │                        │                         │
- │  doki run alpine    │                        │                         │
- │────────────────────>│                        │                         │
- │                     │  POST /containers/     │                         │
- │                     │  create                │                         │
- │                     │───────────────────────>│                         │
- │                     │                        │  pull capas OCI         │
- │                     │                        │  extraer tar -> rootfs  │
- │                     │                        │  seleccionar runner     │
- │                     │                        │  (proot/native/gVisor)  │
- │                     │                        │                         │
- │                     │  201 Created           │  fork+exec runner       │
- │                     │<───────────────────────│  configurar red         │
- │                     │                        │  asignar IP / port fwd  │
- │                     │                        │                         │
- │                     │  POST /containers/     │                         │
- │                     │  {id}/start            │                         │
- │                     │───────────────────────>│                         │
- │                     │                        │  ejecutar binario       │
- │                     │                        │  proot -S rootfs /bin/sh│
- │                     │                        │────────────────────────>│
- │                     │                        │                         │
- │  stdout contenedor  │                        │  stream logs            │
- │<────────────────────│<───────────────────────│<────────────────────────│
- │                     │                        │                         │
- │  exit code 0        │                        │  cleanup + remove       │
- │<────────────────────│                        │                         │
-```
+1. El usuario invoca `doki run alpine`.
+2. El CLI envia `POST /containers/create` al daemon.
+3. El daemon descarga las capas OCI y extrae el stream tar a un
+   directorio rootfs. Se selecciona el runner (proot, native, gVisor,
+   etc.).
+4. El daemon responde `201 Created`. Se configuran la red y el port
+   forwarding.
+5. El CLI envia `POST /containers/{id}/start`.
+6. El daemon hace fork del binario runner con la spec OCI. Para
+   proot: `proot -S rootfs /bin/sh`.
+7. El stdout del contenedor se streamea al CLI via
+   `GET /containers/{id}/logs`.
+8. Al salir, el daemon limpia el rootfs y elimina el contenedor si
+   se especifico `--rm`.
 
 ---
 
@@ -257,26 +241,14 @@ se descubren via mDNS (LAN), DHT (internet) o configuracion estatica.
 Todo el trafico se autentica con firmas Ed25519 y se cifra
 opcionalmente con TLS 1.3 o NaCl secretbox.
 
-```
-PAR A                     PAR B
-  │                         │
-  │  STUN binding request   │
-  │─────────────────────────>│
-  │                         │
-  │  XOR-MAPPED-ADDRESS     │
-  │<─────────────────────────│
-  │                         │
-  │  TCP simultaneous open  │
-  │<─────────────────────────│
-  │  (hole punching)        │
-  │─────────────────────────>│
-  │                         │
-  │  gossip firmado Ed25519 │
-  │  TLS 1.3 o secretbox    │
-  │<─────────────────────────│
-  │  (canal encriptado)     │
-  │─────────────────────────>│
-```
+El NAT traversal sigue una secuencia de cuatro etapas: (1) ambos
+pares consultan un servidor STUN para descubrir su IP y puerto
+publicos, (2) los pares intercambian sus direcciones publicas via
+el protocolo gossip, (3) ambos pares envian SYN TCP simultaneos a
+la direccion publica del otro (hole punching), (4) si el NAT permite
+el SYN entrante a traves del pinhole, se establece un canal directo
+encriptado. Si el hole punching falla, el trafico usa un peer relay
+que actua como proxy TURN.
 
 La derivacion de clave es independiente del orden (ambos pares
 computan la misma clave compartida via SHA-256 de pubkeys

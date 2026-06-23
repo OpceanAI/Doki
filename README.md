@@ -55,36 +55,19 @@ macOS VZ             cgo bridge to Virtualization fw   VZVirtualMachine + ObjC
 
 <sub>[CONTAINER LIFECYCLE / DAEMON PIPELINE]</sub>
 
-```
-USER                CLI (doki)              DAEMON (dokid)              KERNEL
- │                     │                        │                         │
- │  doki run alpine    │                        │                         │
- │────────────────────>│                        │                         │
- │                     │  POST /containers/     │                         │
- │                     │  create                │                         │
- │                     │───────────────────────>│                         │
- │                     │                        │  pull OCI layers        │
- │                     │                        │  extract tar -> rootfs  │
- │                     │                        │  select runner          │
- │                     │                        │  (proot/native/gVisor)  │
- │                     │                        │                         │
- │                     │  201 Created           │  fork+exec runner       │
- │                     │<───────────────────────│  setup network          │
- │                     │                        │  assign IP / port fwd   │
- │                     │                        │                         │
- │                     │  POST /containers/     │                         │
- │                     │  {id}/start            │                         │
- │                     │───────────────────────>│                         │
- │                     │                        │  exec runner binary     │
- │                     │                        │  proot -S rootfs /bin/sh│
- │                     │                        │────────────────────────>│
- │                     │                        │                         │
- │  container stdout   │                        │  stream logs            │
- │<────────────────────│<───────────────────────│<────────────────────────│
- │                     │                        │                         │
- │  exit code 0        │                        │  cleanup + remove       │
- │<────────────────────│                        │                         │
-```
+1. User invokes `doki run alpine`.
+2. CLI sends `POST /containers/create` to the daemon.
+3. Daemon pulls OCI layers and extracts the tar stream to a rootfs
+   directory. Runner selection occurs (proot, native, gVisor, etc.).
+4. Daemon responds `201 Created`. Network setup and port forwarding
+   are configured.
+5. CLI sends `POST /containers/{id}/start`.
+6. Daemon forks the runner binary with the OCI spec. For proot:
+   `proot -S rootfs /bin/sh`.
+7. Container stdout streams back to the CLI via
+   `GET /containers/{id}/logs`.
+8. On exit, the daemon cleans up the rootfs and removes the container
+   if `--rm` was specified.
 
 ---
 
@@ -256,26 +239,13 @@ broker. Peers discover each other via mDNS (LAN), DHT (internet),
 or static configuration. All traffic is authenticated via Ed25519
 signatures and optionally encrypted with TLS 1.3 or NaCl secretbox.
 
-```
-PEER A                    PEER B
-  │                         │
-  │  STUN binding request   │
-  │─────────────────────────>│
-  │                         │
-  │  XOR-MAPPED-ADDRESS     │
-  │<─────────────────────────│
-  │                         │
-  │  TCP simultaneous open  │
-  │<─────────────────────────│
-  │  (hole punching)        │
-  │─────────────────────────>│
-  │                         │
-  │  Ed25519 signed gossip  │
-  │  TLS 1.3 or secretbox   │
-  │<─────────────────────────│
-  │  (encrypted channel)    │
-  │─────────────────────────>│
-```
+NAT traversal follows a four-stage sequence: (1) both peers query a
+STUN server to discover their public IP and port mapping, (2) peers
+exchange public addresses via the gossip protocol, (3) both peers
+issue simultaneous TCP SYN packets to each other's public address
+(hole punching), (4) if the NAT allows the inbound SYN through the
+pinhole, a direct encrypted channel is established. If hole punching
+fails, traffic falls back to a relay peer acting as a TURN proxy.
 
 Key derivation is order-independent (both peers compute the same
 shared key via sorted-pubkey SHA-256). Per-connection nonces are
