@@ -72,22 +72,18 @@ capa base almacenan esa capa exactamente una vez. La deduplicacion es
 un efecto lateral del direccionamiento, no un paso separado.
 
 ```text
-~/.doki/
-└── data/
-    ├── layers/                       un dir por SHA de capa
-    │   ├── sha256:abc.../
-    │   ├── sha256:def.../
-    │   └── sha256:ghi.../
-    ├── merged/                       puntos de mount  (overlay2)
-    ├── diff/                         dirs upper       (overlay2)
-    ├── work/                         dirs de work     (overlay2)
-    ├── images/                       metadata de imagenes
-    ├── containers/                   estado de contenedores
-    │   └── <id>/
-    │       ├── state.json
-    │       ├── rootfs/               rootfs extraido
-    │       └── logs/
-    └── volumes/                      volumenes con nombre
+~/.doki/data/
+  layers/           un dir por SHA de capa (sha256:abc.../, sha256:def.../, ...)
+  merged/           puntos de mount (overlay2)
+  diff/             dirs upper (overlay2)
+  work/             dirs de work (overlay2)
+  images/           metadata de imagenes
+  containers/       estado de contenedores (un dir por ID de contenedor)
+    <id>/
+      state.json    status del contenedor, PID, config
+      rootfs/       rootfs extraido
+      logs/         salida de logs del contenedor
+  volumes/          volumenes con nombre
 ```
 
 <hr>
