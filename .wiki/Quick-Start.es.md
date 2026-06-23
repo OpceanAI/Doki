@@ -1,253 +1,169 @@
-# Inicio Rápido
+# Inicio Rapido
 
-Este tutorial toma ~5 minutos y te lleva por: instalar → iniciar el daemon → pull de imagen → correr contenedor → logs → compose stack → limpieza.
+<sub>[TUTORIAL DE 5 MINUTOS / v0.11.0]</sub>
+
+> Recorrido: instalar, verificar, daemon, pull, run, compose, cleanup.
+> Probado en Termux/Android 12 aarch64 y Linux AMD64.
+
+---
 
 ## 0. Prerrequisitos
 
-- Doki instalado (ver [Instalación](Installation.es))
-- ~100 MB de espacio libre en disco para la primera imagen
+- Doki instalado (ver [Instalacion](Installation.es))
+- 100 MB libres en disco para la primera imagen
+- `proot` instalado en Termux (`pkg install proot`)
 
-## 1. Verifica la instalación
+---
+
+## 1. Verificar la Instalacion
 
 ```bash
 $ doki version
 Client: Doki
- Version:    0.9.3
- API version: 1.48
- GitCommit:  faab400
- Built:      2026-06-08
+ Version:       0.11.0
+ API version:   1.54
+ Go version:    go1.26.3
+ OS/Arch:       android/arm64
 ```
 
-Si ves el banner de versión, todo bien. Si `dokid` también está instalado, el mismo comando muestra info del daemon.
+```bash
+$ doki doctor
+[ok]   proot       /data/data/com.termux/files/usr/bin/proot
+[ok]   iptables    /usr/sbin/iptables
+[warn] pasta       no encontrado (opcional, networking sin root)
+[ok]   fuse-overlayfs  /usr/bin/fuse-overlayfs
+```
 
-## 2. Inicia el daemon
+Si `doki doctor` reporta que falta `proot` en Termux:
 
-El daemon `dokid` escucha en un Unix socket y expone la Docker Engine API v1.54.
+```bash
+pkg install proot
+```
 
-### En primer plano (ves los logs)
+---
+
+## 2. Arrancar el Daemon
+
+<sub>[PRIMER PLANO / VISIBILIDAD DE LOGS]</sub>
 
 ```bash
 $ dokid
-INFO  daemon starting  root=/home/user/.doki  socket=/var/run/doki.sock
-INFO  storage driver: fuse-overlayfs
-INFO  dns server: 127.0.0.11:53
-INFO  daemon ready
+INFO  dokid starting   version=0.11.0  mode=proot
+INFO  storage driver   name=fuse-overlayfs
+INFO  dns server       listen=127.0.0.11:8053
+INFO  doki-link ready  listen=127.0.0.1:7432
+INFO  runtime mode     mode=proot
+INFO  dokid ready      images=18
 ```
 
-### En segundo plano (producción / CI)
+<sub>[SEGUNDO PLANO / PRODUCCION]</sub>
 
 ```bash
 $ dokid > /tmp/dokid.log 2>&1 &
 $ echo $! > /tmp/dokid.pid
 ```
 
-### Con compatibilidad del CLI de Docker
+---
 
-```bash
-$ export DOCKER_HOST=unix:///var/run/doki.sock
-$ docker ps
-CONTAINER ID    IMAGE    COMMAND    CREATED    STATUS    PORTS    NAMES
-```
-
-El CLI y los SDKs de Docker funcionan contra Doki sin modificación.
-
-## 3. Pull de una imagen
+## 3. Descargar una Imagen
 
 ```bash
 $ doki pull alpine
-INFO  resolving alpine:latest for linux/arm64
-INFO  downloading layer sha256:abcd... 4.0 MB / 4.0 MB [====] 1.2s
-INFO  downloaded 3 layers, total 4.0 MB
-INFO  pulled alpine:latest
+INFO  resolviendo    alpine:latest  para  linux/arm64
+INFO  descargando    layer sha256:abcd...  4.0 MB / 4.0 MB
+INFO  descargado     3 layers  total 4.0 MB
 ```
 
-Por defecto, Doki auto-resuelve el manifest para la arquitectura de tu host. Para pull de otra arquitectura:
+---
+
+## 4. Ejecutar un Contenedor
 
 ```bash
-$ doki pull --platform linux/amd64 alpine
+$ doki run --rm alpine echo "hola desde Doki"
+hola desde Doki
 ```
 
-## 4. Lista imágenes
+Shell interactiva:
 
 ```bash
-$ doki images
-REPOSITORY    TAG       IMAGE ID       CREATED        SIZE
-alpine        latest    sha256:abc...  2 minutes ago  4.0 MB
-```
-
-## 5. Corre un contenedor
-
-El clásico hello-world:
-
-```bash
-$ doki run --rm alpine echo "Hola desde Doki"
-Hola desde Doki
-```
-
-Corre una shell interactiva:
-
-```bash
-$ doki run -it --rm alpine sh
-/ # ls
-bin    dev    etc    home   lib    media  mnt    opt    proc   root   run    sbin   srv    sys    tmp    usr    var
+$ doki run -it --rm alpine /bin/sh
+/ # uname -a
+Linux localhost 5.15.180-android13-8 aarch64 Android
 / # exit
 ```
 
-Corre un contenedor de larga duración en segundo plano:
+---
+
+## 5. Compatibilidad con Docker CLI
+
+Apunta el Docker CLI estandar al socket de Doki. Sin modificaciones.
 
 ```bash
-$ doki run -d --name webserver -p 8080:80 nginx:alpine
-abc123def456
-$ doki ps
-CONTAINER ID    IMAGE           COMMAND                 CREATED         STATUS         PORTS                  NAMES
-abc123def456    nginx:alpine    "/docker-entrypoint..." 5 seconds ago   Up 4 seconds   0.0.0.0:8080->80/tcp   webserver
+$ export DOCKER_HOST=unix://$HOME/.doki/doki.sock
+$ docker ps
+$ docker run --rm alpine uname -a
+$ docker pull nginx:alpine
+$ docker images
 ```
 
-Pruébalo:
+---
 
-```bash
-$ curl -s http://localhost:8080 | head -5
-<!DOCTYPE html>
-<html>
-<head>
-<title>Welcome to nginx!</title>
-...
-```
-
-## 6. Ver logs
-
-```bash
-$ doki logs webserver
-/docker-entrypoint.sh: /docker-entrypoint.d/20-envsubst-on-templates.sh: No such file or directory
-/docker-entrypoint.sh: Launching /docker-entrypoint.d/30-tune-worker-processes.sh
-...
-```
-
-Sigue los logs (como `tail -f`):
-
-```bash
-$ doki logs -f webserver
-```
-
-## 7. Detener y eliminar
-
-```bash
-$ doki stop webserver
-webserver
-
-$ doki rm webserver
-webserver
-
-$ doki ps -a
-CONTAINER ID    IMAGE    COMMAND    CREATED    STATUS    PORTS    NAMES
-```
-
-## 8. Multi-contenedor con Compose
-
-Crea `doki-compose.yml` (o `docker-compose.yml` — el mismo formato):
+## 6. Stack Compose
 
 ```yaml
-name: quickstart
-
+# docker-compose.yml
 services:
   web:
     image: nginx:alpine
-    ports: ["8080:80"]
+    ports:
+      - "8080:80"
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: secret
     depends_on:
-      api:
-        condition: service_started
-
-  api:
-    image: python:3-alpine
-    command: python -m http.server 8000
-    expose: ["8000"]
+      - web
 ```
-
-Inícialo:
 
 ```bash
 $ doki-compose up -d
-[+] Running 2/2
- ✔ Container quickstart-api-1  Started
- ✔ Container quickstart-web-1  Started
-```
+INFO  pulling web    nginx:alpine
+INFO  pulling db     postgres:16-alpine
+INFO  starting web   container=web  port=8080:80
+INFO  starting db    container=db
+INFO  stack ready    services=2
 
-Verifica el estado:
-
-```bash
 $ doki-compose ps
-NAME                    COMMAND                  SERVICE    STATUS    PORTS
-quickstart-api-1        "python -m http.serv..."  api        running   8000/tcp
-quickstart-web-1        "/docker-entrypoint..."   web        running   0.0.0.0:8080->80/tcp
-```
+NAME   STATUS   PORTS
+web    running  0.0.0.0:8080->80/tcp
+db     running  5432/tcp
 
-Derríbalo:
-
-```bash
 $ doki-compose down
-[+] Running 2/2
- ✔ Container quickstart-web-1  Removed
- ✔ Container quickstart-api-1  Removed
- ✔ Network quickstart_default   Removed
+INFO  stopping web
+INFO  stopping db
+INFO  stack removed
 ```
 
-## 9. Inspecciona un contenedor
+---
+
+## 7. Limpieza
 
 ```bash
-$ doki inspect webserver | jq '.[0].State'
-{
-  "Status": "running",
-  "Running": true,
-  "Paused": false,
-  "Restarting": false,
-  "OOMKilled": false,
-  "Dead": false,
-  "Pid": 12345,
-  "ExitCode": 0,
-  "StartedAt": "2026-06-04T20:00:00Z",
-  "FinishedAt": "0001-01-01T00:00:00Z"
-}
+# Eliminar contenedores detenidos.
+$ doki container prune
+
+# Eliminar imagenes colgantes.
+$ doki image prune
+
+# Limpieza completa del sistema.
+$ doki system prune
 ```
 
-## 10. Limpieza
+---
 
-```bash
-$ doki system prune -a
-INFO  removing 3 stopped containers
-INFO  removing 2 unused images
-INFO  total reclaimed: 145.3 MB
-```
+## Siguientes Pasos
 
-## ¿Qué acaba de pasar?
-
-Pasaste por el ciclo de vida completo de Doki:
-
-| Paso | Subsistema | Código fuente |
-|:-----|:-----------|:--------------|
-| Pull | `pkg/registry` + `pkg/image` | Cliente OCI Distribution Spec v2 |
-| Run | `pkg/runtime` + `pkg/storage` | Ejecutor OCI Runtime Spec |
-| Port map | `pkg/network` | Bridge + iptables DNAT |
-| Logs | `pkg/runtime` | Stream multiplexado sobre HTTP |
-| Compose | `pkg/compose` | Motor de la spec de Compose |
-| Inspect | `pkg/api` | Docker Engine API v1.54 |
-
-Continúa a [Arquitectura](Architecture.es) para entender cada subsistema en profundidad.
-
-## Problemas comunes
-
-| Problema | Solución |
-|:---------|:---------|
-| `doki: command not found` | Añade `$PREFIX/bin` (Termux) o `/usr/local/bin` (Linux) al `$PATH` |
-| `dokid: cannot connect to socket` | Primero corre `dokid &` |
-| `permission denied` en `/var/run/doki.sock` | Añade tu usuario al grupo `docker`, o configura `DOKI_HOST` a un path propio |
-| El contenedor sale inmediatamente | Revisa `doki logs <nombre>`; usualmente falta `CMD` o entrypoint incorrecto |
-| Pull es lento | Añade un mirror de registry en `config.json` |
-| `port 53: permission denied` (Android) | Esperado — Doki usa 8053 en Android, no requiere acción |
-
-## Siguientes pasos
-
-- [Instalación](Installation.es) — instalación por plataforma
-- [Arquitectura](Architecture.es) — cómo funciona Doki por dentro
-- [Niveles de aislamiento](Isolation-Levels.es) — elige el runtime correcto para tu carga
-- [Referencia de CLI](CLI-Reference.es) — los 244 comandos
-- [Configuración](Configuration.es) — `config.json` y variables de entorno
+- [Referencia CLI](CLI-Reference.es) -- catalogo completo de comandos
+- [Configuracion](Configuration.es) -- variables de entorno y config.json
+- [Networking](Networking.es) -- bridge, DNS, DokiLink mesh
+- [Arquitectura](Architecture.es) -- internales del daemon

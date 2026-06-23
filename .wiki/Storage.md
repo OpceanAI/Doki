@@ -1,18 +1,35 @@
 # Storage
 
-Doki supports 5 storage drivers, auto-detected by `DetectBestDriver()`. The driver chosen depends on your kernel, filesystem, and whether you have root.
+<sub>[DRIVERS / LAYERS / VOLUMES / v0.11.0]</sub>
 
-## Driver Comparison
+> Five storage drivers, auto-detected by `DetectBestDriver()`. Selection
+> is a function of kernel, filesystem, and whether the caller holds
+> root. There is no "best" driver in the abstract; there is only the
+> driver the host can actually mount.
 
-| Driver | Use case | Root required | Performance | Status |
-|:-------|:---------|:--------------|:------------|:-------|
-| `overlay2` | Linux servers with kernel overlay | Yes (for mount) | Best (native kernel) | Tested |
-| `fuse-overlayfs` | Rootless, Termux, Android | No | ~90% of overlay2 | Tested |
-| `btrfs` | Systems with btrfs root | No (subvolumes) | Best (with snapshots) | Untested |
-| `zfs` | Systems with ZFS pools | No (datasets) | Best (with snapshots) | Untested |
-| `vfs` | Fallback, testing | No | Slowest (copy on read) | Tested |
+<hr>
 
-## Auto-detection
+## Driver Matrix
+
+<sub>[COMPARISON / ROOT / PERFORMANCE / PLATFORM]</sub>
+
+```text
+DRIVER          ROOT     PERFORMANCE              PLATFORM             STATUS
+----------      ----     -----------              --------             ------
+overlay2        yes      best (kernel native)     Linux                tested
+fuse-overlayfs  no       ~90% of overlay2         Linux/Android/Termux tested
+btrfs           no*      best (with snapshots)    Linux (btrfs root)   untested
+zfs             no*      best (with snapshots)    Linux (zfs pool)     untested
+vfs             no       slowest (copy on read)   any (macOS fallback) tested
+
+* subvolumes / datasets; mount itself does not need root
+```
+
+<hr>
+
+## Auto-Detection
+
+<sub>[DETECTBESTDRIVER / PKG/STORAGE/DRIVER.GO]</sub>
 
 ```go
 // pkg/storage/driver.go
@@ -30,168 +47,208 @@ func DetectBestDriver(root string) string {
 }
 ```
 
-On Linux with root: `overlay2`. On Termux: `fuse-overlayfs`. On macOS: `vfs`. On Btrfs root: `btrfs`. Override with `DOKI_STORAGE_DRIVER=<driver>` or `storage_driver` in `config.json`.
+```text
+HOST CONDITION              DRIVER
+-----------------------     ---------------
+Linux + root + overlay      overlay2
+Termux / Android            fuse-overlayfs
+macOS                       vfs
+Btrfs root                  btrfs
+ZFS pool present            zfs
+```
+
+Override the probe with `DOKI_STORAGE_DRIVER=<driver>` or
+`storage_driver` in `config.json`. The probe is advisory, not
+authoritative.
+
+<hr>
 
 ## Content-Addressable Store
 
-All layers are stored by SHA256 hash in a content-addressable store:
+<sub>[CAS / SHA256 / DEDUP]</sub>
 
-```mermaid
-%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
-flowchart TD
-    Root["~/.doki/"]
-    Data["data/"]
-    Layers["layers/<br/><i>one dir per layer SHA</i>"]
-    L1["sha256:abc..."]
-    L2["sha256:def..."]
-    L3["sha256:ghi..."]
-    Merged["merged/<br/><i>mount points (overlay2)</i>"]
-    Diff["diff/<br/><i>upper dirs (overlay2)</i>"]
-    Work["work/<br/><i>work dirs (overlay2)</i>"]
-    Images["images/<br/><i>image metadata</i>"]
-    Containers["containers/<br/><i>container state</i>"]
-    CID["&lt;id&gt;/"]
-    State["state.json"]
-    Rootfs["rootfs/<br/><i>extracted rootfs</i>"]
-    Logs["logs/"]
-    Volumes["volumes/<br/><i>named volumes</i>"]
+Every layer is stored by SHA256 digest. Two images that share a base
+layer store that layer exactly once. Deduplication is a side effect of
+addressing, not a separate pass.
 
-    Root --> Data
-    Data --> Layers
-    Layers --> L1
-    Layers --> L2
-    Layers --> L3
-    Data --> Merged
-    Data --> Diff
-    Data --> Work
-    Data --> Images
-    Data --> Containers
-    Containers --> CID
-    CID --> State
-    CID --> Rootfs
-    CID --> Logs
-    Data --> Volumes
+```text
+~/.doki/
+└── data/
+    ├── layers/                       one dir per layer SHA
+    │   ├── sha256:abc.../
+    │   ├── sha256:def.../
+    │   └── sha256:ghi.../
+    ├── merged/                       mount points  (overlay2)
+    ├── diff/                         upper dirs    (overlay2)
+    ├── work/                         work dirs     (overlay2)
+    ├── images/                       image metadata
+    ├── containers/                   container state
+    │   └── <id>/
+    │       ├── state.json
+    │       ├── rootfs/               extracted rootfs
+    │       └── logs/
+    └── volumes/                      named volumes
 ```
 
-Pulled layers are deduplicated automatically — if two images share a base layer, it's stored once.
+<hr>
 
 ## Layer Extraction
 
-When `doki pull alpine` runs:
+<sub>[PULL PIPELINE / PKG/REGISTRY + PKG/STORAGE/LAYER.GO]</sub>
 
-1. **Fetch manifest** — `pkg/registry` calls `GET /v2/alpine/manifests/latest`
-2. **Parse config** — extract the layer list and image config
-3. **Download layers in parallel** — 4 concurrent downloads, with Range support for resumption
-4. **Verify checksums** — SHA256 each blob after download
-5. **Store in CAS** — each layer goes to `data/layers/sha256:<digest>/`
-6. **Extract on demand** — when a container is started, layers are stacked into `data/containers/<id>/rootfs/`
+Sequence executed by `doki pull alpine`:
 
-Extraction is Go-native (no `tar` binary needed):
+```text
+1. FETCH MANIFEST    pkg/registry -> GET /v2/alpine/manifests/latest
+2. PARSE CONFIG      extract layer list + image config
+3. DOWNLOAD LAYERS   4 concurrent, Range support for resumption
+4. VERIFY CHECKSUMS  SHA256 each blob after download
+5. STORE IN CAS      data/layers/sha256:<digest>/
+6. EXTRACT ON DEMAND layers stacked into data/containers/<id>/rootfs/
+```
 
-- Detects compression: gzip, bzip2, xz, zstd (auto)
-- Path traversal protection: rejects `..`, absolute paths
-- Symlink validation: rejects symlinks pointing outside the rootfs
-- Hardlink restrictions: hardlinks only within the same layer
-- Whiteout handling: `.wh.` prefix removes files from lower layers
-- Parallel extraction with rollback on error
+Extraction is Go-native. The `tar` binary is not invoked.
 
-## Driver Details
+```text
+CHECK                       ENFORCEMENT
+-----------------------     --------------------------------
+compression                 gzip / bzip2 / xz / zstd (auto)
+path traversal              rejects ".." and absolute paths
+symlink validation          rejects targets outside rootfs
+hardlink restriction        hardlinks only within same layer
+whiteout                    ".wh." prefix removes lower files
+rollback                    parallel extract aborts on error
+```
 
-### overlay2
+<hr>
 
-The fastest driver. Uses the Linux kernel's `overlayfs` mount syscall.
+## overlay2
 
-**Requirements**:
-- Linux kernel 3.18+ (4.0+ recommended)
-- `CONFIG_OVERLAY_FS=y` in kernel
-- Root access (for the mount syscall)
+<sub>[KERNEL OVERLAYFS / FASTEST]</sub>
 
-**Mount**:
+Fastest driver. Uses the Linux kernel `overlayfs` mount syscall.
+
+```text
+REQUIREMENT              VALUE
+---------------------    ----------------------------
+kernel                   3.18+ (4.0+ recommended)
+kernel config            CONFIG_OVERLAY_FS=y
+privilege                root (for the mount syscall)
+backing fs               must support xattrs
+quota fs                 btrfs / XFS / ZFS / ext4 (proj)
+```
+
 ```go
 opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
 syscall.Mount("overlay", mergeDir, "overlay", 0, opts)
 ```
 
-**Backing filesystem**: must support extended attributes. Most filesystems do, but some FUSE filesystems don't.
+Some FUSE filesystems do not expose extended attributes and cannot back
+overlay2. Quotas are per-container and driver-specific.
 
-**Quota**: Btrfs, XFS (with project quotas), ZFS, and ext4 (with project quotas) support per-container disk quotas.
+<hr>
 
-### fuse-overlayfs
+## fuse-overlayfs
 
-The rootless alternative. Userspace overlay via FUSE.
+<sub>[ROOTLESS / USERSPACE OVERLAY]</sub>
 
-**Requirements**:
-- `fuse-overlayfs` binary in `$PATH` (or `apt install fuse-overlayfs` / `pkg install fuse-overlayfs` on Termux)
-- FUSE kernel module (or `fusermount`)
+Userspace overlay via FUSE. The rootless alternative when the mount
+syscall is unavailable.
 
-**Performance**: ~90% of kernel overlay2. The FUSE overhead is mostly in metadata operations; data reads/writes are near-native.
+```text
+REQUIREMENT              VALUE
+---------------------    ----------------------------
+binary                   fuse-overlayfs in $PATH
+module                   FUSE kernel module or fusermount
+overhead                 ~90% of overlay2 (metadata-bound)
+data path                near-native
+```
 
-**Usage on Termux** (default):
 ```bash
+# Termux default.
 $ pkg install fuse-overlayfs
 $ doki run --rm alpine echo hello
 ```
 
-### btrfs
+<hr>
+
+## btrfs
+
+<sub>[SUBVOLUMES / COW SNAPSHOTS]</sub>
 
 Uses Btrfs subvolumes and snapshots.
 
-**Requirements**:
-- Btrfs root filesystem (or a Btrfs subvolume at the data root)
-- `btrfs` CLI tools
+```text
+REQUIREMENT              VALUE
+---------------------    ----------------------------
+root fs                  btrfs (or a btrfs subvolume at data root)
+tools                    btrfs CLI
+snapshot                 instant (CoW)
+quota                    btrfs qgroup limit (native)
+backup                   btrfs send / receive
+```
 
-**Advantages**:
-- Snapshots are instant (CoW)
-- Quotas work natively (`btrfs qgroup limit`)
-- Send/receive for backups
-
-**Setup**:
 ```bash
-# Create a subvolume for Doki
+# Create a subvolume for Doki.
 btrfs subvolume create /var/lib/doki
-# Configure Doki
+# Configure Doki.
 echo '{"storage_driver": "btrfs"}' > /etc/doki/config.json
 ```
 
-### zfs
+<hr>
+
+## zfs
+
+<sub>[DATASETS / SNAPSHOTS / ENCRYPTION]</sub>
 
 Uses ZFS datasets and snapshots.
 
-**Requirements**:
-- ZFS pool mounted
-- `zfs` CLI tools
-- Linux: `zfs-dkms` or `zfsutils-linux`
+```text
+REQUIREMENT              VALUE
+---------------------    ----------------------------
+pool                     ZFS pool mounted
+tools                    zfs CLI
+linux package            zfs-dkms or zfsutils-linux
+snapshot                 datasets + clones
+encryption               native
+compression              lz4 / zstd
+backup                   zfs send / receive
+```
 
-**Advantages**:
-- Snapshots and clones
-- Native encryption
-- Compression (lz4, zstd)
-- Send/receive
-
-**Setup**:
 ```bash
-# Create a dataset for Doki
+# Create a dataset for Doki.
 zfs create -o mountpoint=/var/lib/doki tank/doki
-# Configure Doki
+# Configure Doki.
 echo '{"storage_driver": "zfs"}' > /etc/doki/config.json
 ```
 
-### vfs
+<hr>
 
-Simple directory copy. No overlay, no snapshots.
+## vfs
 
-**Use case**:
-- Testing
-- macOS (only option for now)
-- Systems without overlay support
+<sub>[FALLBACK / COPY ON READ]</sub>
 
-**Performance**: Worst of the bunch. Each `doki run` copies the entire image. Container start time is proportional to image size.
+Directory copy. No overlay. No snapshots. No CoW.
 
-**Storage cost**: Higher than overlay (no CoW). Each container has its own complete copy.
+```text
+PROPERTY              VALUE
+------------------    --------------------------------
+use case              testing / macOS / no-overlay host
+start time            proportional to image size
+storage cost          higher than overlay (full copy)
+per-container         own complete copy of image
+```
+
+Each `doki run` copies the entire image. This is the worst driver by
+every measurable axis. It exists so that Doki runs anywhere.
+
+<hr>
 
 ## Volumes
 
-Named volumes are stored separately from the container rootfs:
+<sub>[NAMED / ANONYMOUS / PERSISTENCE]</sub>
+
+Named volumes are stored separately from the container rootfs.
 
 ```bash
 $ doki volume create db-data
@@ -199,24 +256,32 @@ db-data
 $ doki run -d -v db-data:/var/lib/postgresql/data postgres:alpine
 ```
 
-Volume data survives container removal. Anonymous volumes (created by `VOLUME` in Dockerfile) are removed with the container unless `-v` is passed to `doki rm`.
+Volume data survives container removal. Anonymous volumes (declared via
+`VOLUME` in a Dockerfile) are removed with the container unless `-v` is
+passed to `doki rm`.
 
-### Volume Drivers
+<hr>
 
-| Driver | Backing |
-|:-------|:--------|
-| `local` | Local directory in `data/volumes/<name>/` |
-| `tmpfs` | RAM-backed (Linux only) |
-| `nfs` | NFS mount (requires `nfs-utils`) |
+## Volume Drivers
 
-### tmpfs Volumes
+<sub>[LOCAL / TMPFS / NFS]</sub>
+
+```text
+DRIVER    BACKING                             NOTES
+------    -------                             ----
+local     data/volumes/<name>/                default
+tmpfs     RAM-backed                          Linux only
+nfs       NFS mount                           requires nfs-utils
+```
+
+### tmpfs
 
 ```bash
 $ doki run -d --tmpfs /tmp:size=64m,mode=1777 my-image:latest
 $ doki run -d --mount type=tmpfs,destination=/tmp,tmpfs-size=67108864 my-image:latest
 ```
 
-### NFS Volumes
+### nfs
 
 ```bash
 $ doki volume create --driver local \
@@ -228,12 +293,17 @@ $ doki volume create --driver local \
 $ doki run -d -v nfs-vol:/data my-image:latest
 ```
 
+<hr>
+
 ## Image Cache
 
-Doki caches pulled images in the content-addressable store. To free space:
+<sub>[SYSTEM DF / PRUNE]</sub>
+
+Pulled images are cached in the content-addressable store. Reclaim
+space with the pruning commands.
 
 ```bash
-# Show disk usage
+# Show disk usage.
 $ doki system df
 TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
 Images          5         3         1.2 GB    800 MB (66%)
@@ -241,74 +311,99 @@ Containers      10        2         50 MB     40 MB (80%)
 Local Volumes   4         2         200 MB    100 MB (50%)
 Build Cache     0         0         0 B       0 B
 
-# Prune unused
+# Prune unused.
 $ doki image prune -a
 $ doki container prune
 $ doki volume prune
 $ doki system prune -a --volumes
 ```
 
+<hr>
+
 ## Build Cache
 
-`doki build` uses a layer cache keyed by Dokifile instructions. Each `RUN`, `COPY`, `ADD` instruction produces a layer that's cached.
+<sub>[LAYER CACHE / INVALIDATION]</sub>
 
-Cache invalidation:
-- `RUN` cache hits if the command string is identical
-- `COPY` cache hits if the source file checksums match
-- `ADD` cache hits if URL/checksum is identical (URLs are re-fetched)
-- `ENV`, `ARG`, `LABEL` invalidates dependent layers
+`doki build` keys a layer cache by Dokifile instruction. Each `RUN`,
+`COPY`, `ADD` instruction produces a cached layer.
 
-Override with `--no-cache`. Inspect cache with `doki build --progress=plain`.
+```text
+INSTRUCTION    CACHE HIT WHEN
+----------     -----------------------------------------------
+RUN            command string is byte-identical
+COPY           source file checksums match
+ADD            URL + checksum identical (URLs are re-fetched)
+ENV/ARG/LABEL  any change invalidates dependent downstream layers
+```
+
+Override with `--no-cache`. Inspect with `doki build --progress=plain`.
+
+<hr>
 
 ## Quotas
 
-Per-container disk quotas work with the right backing filesystem:
+<sub>[PER-CONTAINER / BACKING FS]</sub>
 
-| FS | Quota mechanism |
-|:---|:----------------|
-| btrfs | `btrfs qgroup limit` |
-| XFS | `xfs_quota` with project quotas |
-| ZFS | `zfs set quota` |
-| ext4 | `project quota` |
-
-Set the quota via the `--storage-opt size=10G` flag (driver-specific):
+```text
+FS       MECHANISM
+-----    -----------------------------
+btrfs    btrfs qgroup limit
+XFS      xfs_quota (project quotas)
+ZFS      zfs set quota
+ext4     project quota
+```
 
 ```bash
 doki run -d --storage-opt size=10G my-image:latest
 ```
 
+The flag is driver-specific. A backing filesystem without quota support
+silently ignores it.
+
+<hr>
+
 ## Backup & Migration
 
-### Export an image
+<sub>[SAVE / LOAD / EXPORT / IMPORT / COMMIT]</sub>
+
+### Image
 
 ```bash
 $ doki save -o myapp.tar myapp:1.0
 $ doki load -i myapp.tar
 ```
 
-### Export a container's filesystem
+### Container filesystem
 
 ```bash
 $ doki export web > web.tar
 $ doki import web.tar
 ```
 
-### Snapshot a container (btrfs/ZFS only)
+### Container snapshot (btrfs / ZFS only)
 
 ```bash
 $ doki commit web myapp:snapshot
 ```
 
-For full-state backups (including volumes), use `doki system backup` (planned).
+Full-state backup including volumes is planned (`doki system backup`).
+
+<hr>
 
 ## Source
 
-- `pkg/storage/driver.go` — main entry, driver detection
-- `pkg/storage/drivers.go` — btrfs, zfs, vfs implementations
-- `pkg/storage/overlay.go` — overlay2
-- `pkg/storage/fuse.go` — fuse-overlayfs
-- `pkg/storage/layer.go` — layer extraction, CAS
-- `pkg/storage/volume.go` — volume management
-- `pkg/storage/cache.go` — image cache, build cache
-- `pkg/storage/mount.go` — Linux mount helpers
-- `pkg/storage/mount_darwin.go` — macOS mount shim (v0.9.3)
+<sub>[PKG/STORAGE/*]</sub>
+
+```text
+FILE                              ROLE
+------------------------------    -----------------------------------
+pkg/storage/driver.go             entry point, driver detection
+pkg/storage/drivers.go            btrfs, zfs, vfs implementations
+pkg/storage/overlay.go            overlay2
+pkg/storage/fuse.go               fuse-overlayfs
+pkg/storage/layer.go              layer extraction, CAS
+pkg/storage/volume.go             volume management
+pkg/storage/cache.go              image cache, build cache
+pkg/storage/mount.go              Linux mount helpers
+pkg/storage/mount_darwin.go       macOS mount shim (v0.9.3)
+```

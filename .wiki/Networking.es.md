@@ -1,29 +1,48 @@
 # Networking
 
-El stack de networking de Doki proporciona redes bridge, soporte para plugins CNI, port mapping, un servidor DNS interno, y networking mesh peer-to-peer DokiLink-Lite (v0.10.0).
+<sub>[BRIDGE / DNS / PORTMAP / DOKILINK MESH / NAT TRAVERSAL / DHT / MDNS]</sub>
+
+> Stack de networking de Doki v0.11.0. Redes bridge, soporte de
+> plugins CNI, port mapping, servidor DNS interno, iptables
+> DNAT/SNAT, fallback rootless (pasta/slirp4netns/host), IPv6, y
+> mesh DokiLink con TLS 1.3, NaCl secretbox, firmas Ed25519, NAT
+> traversal (STUN/TURN/hole punching), DHT Kademlia, y
+> descubrimiento mDNS con expiracion de 90 segundos.
+
+---
 
 ## Tipos de red
 
-| Tipo | Descripción | Driver |
-|:-----|:------------|:-------|
-| **bridge** | Bridge `doki0` por defecto con NAT, DNS, port mapping | Linux bridge + iptables |
-| **host** | Comparte el namespace de red del host | (sin driver) |
-| **none** | Solo loopback | (sin driver) |
-| **overlay** | Multi-host (planeado) | vxlan |
-| **macvlan** | Acceso directo a la NIC del host | macvlan |
-| **ipvlan** | Aislamiento L3 | ipvlan |
+<sub>[DRIVERS / SELECCION]</sub>
 
-### Bridge por defecto: `doki0`
+```text
+TYPE       DESCRIPTION                                         DRIVER
+─────────────────────────────────────────────────────────────────────
+bridge     Bridge doki0 por defecto: NAT, DNS, port mapping     Linux bridge + iptables
+host       Comparte el namespace de red del host                (sin driver)
+none       Solo loopback                                        (sin driver)
+overlay    Multi-host (planeado)                                vxlan
+macvlan    Acceso directo a la NIC del host                     macvlan
+ipvlan     Aislamiento L3                                       ipvlan
+```
 
-Al primer arranque, el daemon crea un bridge Linux llamado `doki0` con esta config:
+---
 
-| Propiedad | Default |
-|:-----------|:--------|
-| Subnet | `10.0.0.0/24` |
-| Gateway | `10.0.0.1` |
-| MTU | 1500 |
-| Asignación de IP | Secuencial (`.2`, `.3`, ...) |
-| iptables | MASQUERADE en outbound, DNAT en port forward |
+## Bridge por defecto: `doki0`
+
+<sub>[PRIMER ARRANQUE / AUTO-CREACION]</sub>
+
+Al primer arranque, el daemon crea un bridge Linux llamado `doki0`.
+
+```text
+PROPERTY        DEFAULT
+────────────────────────────────────────────────────────
+Subnet          10.0.0.0/24
+Gateway         10.0.0.1
+MTU             1500
+IP allocation   Secuencial (.2, .3, ...)
+iptables        MASQUERADE en outbound, DNAT en port forward
+```
 
 Sobrescribe en `config.json`:
 
@@ -38,27 +57,61 @@ Sobrescribe en `config.json`:
 }
 ```
 
-### Attach de contenedor
+---
+
+## Attach del contenedor
+
+<sub>[PAR VETH / ASIGNACION IP / REGISTRO DNS]</sub>
 
 Cuando se inicia un contenedor con `--network bridge`, el daemon:
 
-1. Crea un par veth (`veth<random>` ↔ `eth0` dentro del contenedor)
-2. Attach el veth del lado host a `doki0`
-3. Asigna una IP de la subnet
-4. Configura reglas iptables
+```text
+1. Crea par veth  (veth<random>  <->  eth0 dentro del contenedor)
+2. Attach del veth del lado host a doki0
+3. Asigna IP de la subnet
+4. Instala reglas iptables (chain DOKI)
 5. Registra el nombre del contenedor en el DNS interno
+```
 
-### Red Host
+### Camino de paquetes del bridge
 
-`--network host` salta el bridge y le da al contenedor el namespace de red del host. El contenedor ve todas las interfaces e IPs del host. No se necesita port mapping (`-p` es no-op).
+```text
+[CONTAINER]            [HOST]                       [WIRE]
+                                                         |
+  eth0 10.0.0.2 ----+                                  |
+                    | veth peer                         |
+                    v                                   v
+                 vethABC123  ---(kernel bridge)--+   doki0 (10.0.0.1)
+                                                  |    |
+                                                  |    | POSTROUTING
+                                                  |    | MASQUERADE
+                                                  |    v
+                                                  |  host eth0 (192.168.1.5)
+                                                  |    |
+                                                  +----+-----> INTERNET
+                                                         |
+  Camino de retorno:  INTERNET -> host eth0 -> DNAT (DOKI) -> doki0 -> vethABC -> eth0
+```
 
-El rendimiento es el mejor de todos los modos. Seguridad: el menos aislado — el contenedor puede sniffear todo el tráfico del host.
+---
 
-### None
+## Red Host
 
-`--network none` le da al contenedor solo `lo`. Sin red externa. Útil para procesamiento batch, cargas sensibles a seguridad.
+`--network host` salta el bridge y le da al contenedor el namespace de red del host. El contenedor ve todas las interfaces e IPs del host. Port mapping es no-op (`-p` ignorado).
+
+El rendimiento es el mejor de todos los modos. Seguridad: el menos aislado; el contenedor puede sniffear todo el trafico del host.
+
+---
+
+## None
+
+`--network none` le da al contenedor solo `lo`. Sin red externa. Util para procesamiento batch y cargas sensibles a seguridad.
+
+---
 
 ## Port Mapping
+
+<sub>[DNAT / SNAT / PROXY ROOTLESS]</sub>
 
 ### Sintaxis
 
@@ -71,13 +124,13 @@ El rendimiento es el mejor de todos los modos. Seguridad: el menos aislado — e
 ### Ejemplos
 
 ```bash
-# Mapea host 8080 a container 80
+# Mapa host 8080 a container 80
 doki run -p 8080:80 nginx:alpine
 
-# Bind a IP específica del host
+# Bind a IP especifica del host
 doki run -p 127.0.0.1:8080:80 nginx:alpine
 
-# Múltiples protocolos
+# Multiples protocolos
 doki run -p 8080:80/tcp -p 8080:80/udp my-server:latest
 
 # Publica todos los puertos EXPOSE
@@ -87,15 +140,17 @@ doki run -P nginx:alpine
 doki run -p 8080-8090:80 my-server:latest
 ```
 
-### Cómo funciona (rootful)
+### Como funciona (rootful)
 
-1. `iptables -t nat -A DOKI -p tcp --dport 8080 -j DNAT --to-destination 10.0.0.2:80` (fix v0.9.3)
-2. `iptables -t nat -A POSTROUTING -s 10.0.0.2 -j MASQUERADE` (para el camino de retorno)
-3. `socat` para el proxy TCP real en modo rootless
+```text
+1. iptables -t nat -A DOKI -p tcp --dport 8080 -j DNAT --to-destination 10.0.0.2:80
+2. iptables -t nat -A POSTROUTING -s 10.0.0.2 -j MASQUERADE   (camino de retorno)
+3. socat / pkg/netlink proxy para el relevo TCP real en modo rootless
+```
 
 ### Fix iptables DNAT de v0.9.3
 
-La construcción de la regla DNAT en `pkg/network/manager.go` usaba `strings.Split` y le faltaba el flag `-A` (append) en v0.9.2:
+La construccion de la regla DNAT en `pkg/network/manager.go` usaba `strings.Split` y le faltaba el flag `-A` (append) en v0.9.2:
 
 ```diff
 - args := strings.Split("OUTPUT -p tcp --dport 8080 -j DNAT --to-destination 10.0.0.2:80", " ")
@@ -115,10 +170,15 @@ La construcción de la regla DNAT en `pkg/network/manager.go` usaba `strings.Spl
 
 Dos cosas arregladas:
 
-1. **Flag `-A`**: v0.9.2 tenía `OUTPUT` como primer arg, que iptables interpretaba como el nombre de la tabla. El fix usa `[]string` e incluye `-A` correctamente.
-2. **Chequeo de error**: v0.9.2 llamaba `.Run()` y descartaba el error. El fix usa `.CombinedOutput()` y envuelve el error.
+```text
+1. Flag -A: v0.9.2 tenia OUTPUT como primer arg, que iptables
+   interpretaba como el nombre de la tabla. El fix usa []string e
+   incluye -A correctamente.
+2. Chequeo de error: v0.9.2 llamaba .Run() y descartaba el error.
+   El fix usa .CombinedOutput() y envuelve el error.
+```
 
-La chain DOKI ahora también se auto-crea en `pkg/network/cni.go:ensureChains()` (idempotente — seguro llamarla en cada start de contenedor).
+La chain DOKI ahora tambien se auto-crea en `pkg/network/cni.go:ensureChains()` (idempotente -- seguro llamarla en cada start de contenedor).
 
 ### Fix de port-forwarding de v0.9.3
 
@@ -127,17 +187,17 @@ El proxy `socat` rootless se conectaba a `localhost:containerPort` en lugar de `
 ```diff
 - socatArgs := []string{
 -     "TCP-LISTEN:8080,reuseaddr,fork",
--     "TCP:localhost:80",   // ← mal: localhost desde host ≠ contenedor
+-     "TCP:localhost:80",   // mal: localhost desde host != contenedor
 - }
 + socatArgs := []string{
 +     "TCP-LISTEN:8080,reuseaddr,fork",
-+     "TCP:10.0.0.2:80",    // ← IP bridge del contenedor
++     "TCP:10.0.0.2:80",    // IP bridge del contenedor
 + }
 ```
 
 ### Soporte UDP (v0.9.3)
 
-Port forwarding UDP ahora está soportado vía `socat -u`:
+Port forwarding UDP ahora esta soportado via `socat -u`:
 
 ```go
 if port.Type == "udp" {
@@ -147,62 +207,77 @@ if port.Type == "udp" {
 }
 ```
 
+---
+
 ## DNS interno
+
+<sub>[A / AAAA / PTR / FORWARD UPSTREAM / CACHE LRU]</sub>
 
 Doki corre un servidor DNS interno que maneja:
 
-- Resolución de nombres entre contenedores (`db` → `10.0.0.2`)
-- Registros A (IPv4)
+```text
+- Resolucion de nombres entre contenedores  (db -> 10.0.0.2)
+- Registros A    (IPv4)
 - Registros AAAA (IPv6)
-- Registros PTR (DNS inverso)
+- Registros PTR  (DNS inverso)
 - Forwarding a resolvers upstream
+```
 
 ### Arquitectura
 
-```mermaid
-%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
-flowchart TD
-    Resolv["Container /etc/resolv.conf<br/>nameserver 127.0.0.11"]
-    Doki["DNS interno de Doki<br/>:53 Linux · :8053 Android"]
-    Local["Local<br/>container-name → bridge IP"]
-    Upstream["Upstream<br/>/etc/resolv.conf · getprop net.dns* · 8.8.8.8"]
-    Internet(("Internet"))
-
-    Resolv -->|"A · AAAA · PTR"| Doki
-    Doki --> Local
-    Doki --> Upstream
-    Upstream --> Internet
+```text
+  Container /etc/resolv.conf
+  nameserver 127.0.0.11
+            |
+            | A / AAAA / PTR
+            v
+  +-----------------------------+
+  | DNS interno de Doki         |
+  |   :53   Linux               |
+  |   :8053 Android (Termux)    |
+  +-----------------------------+
+        |              |
+        | local        | upstream
+        v              v
+  container-name   /etc/resolv.conf
+  -> bridge IP     getprop net.dns*
+                   8.8.8.8 fallback
+                         |
+                         v
+                     INTERNET
 ```
 
 ### Defaults (v0.9.3)
 
-| Plataforma | Listen por defecto | Por qué |
-|:-----------|:-------------------|:-------|
-| Linux | `127.0.0.11:53` | Puerto estándar sin privilegios |
-| Android (Termux) | `127.0.0.11:8053` | Puerto 53 bloqueado por SELinux |
-| macOS | no se usa (ModeNative) | Sin bridge |
+```text
+PLATFORM            DEFAULT LISTEN     REASON
+─────────────────────────────────────────────────────────
+Linux               127.0.0.11:53      Puerto estandar sin privilegios
+Android (Termux)    127.0.0.11:8053    Puerto 53 bloqueado por SELinux
+macOS               no se usa          ModeNative no tiene bridge
+```
 
 Sobrescribe con `DOKI_DNS_LISTEN=IP:PORT`.
 
-### Resolución de nombres
+### Resolucion de nombres
 
 ```bash
 $ doki network create backend
-$ doki run -d --name db --network backend postgres:alpine
+$ doki run -d --name db  --network backend postgres:alpine
 $ doki run -d --name api --network backend my-api:latest
 
 # Desde dentro del contenedor api:
 $ doki exec api sh -c 'getent hosts db'
 172.20.0.2      db.backend
 
-# Desde el host (vía el CLI doki):
+# Desde el host (via el CLI doki):
 $ doki network inspect backend
 [
   {
     "Name": "backend",
     "Id": "abc123",
     "Containers": {
-      "db": {"EndpointID": "...", "IPv4Address": "172.20.0.2"},
+      "db":  {"EndpointID": "...", "IPv4Address": "172.20.0.2"},
       "api": {"EndpointID": "...", "IPv4Address": "172.20.0.3"}
     }
   }
@@ -211,53 +286,77 @@ $ doki network inspect backend
 
 Los aliases se pueden setear con `doki network connect --alias db postgres backend`.
 
-### Caché LRU
+### Cache LRU
 
-El servidor DNS tiene una caché LRU integrada:
-
+```text
 - 1024 entradas
 - TTL de 5 minutos por entrada
 - Re-registrada al reiniciar el contenedor
+```
 
 ### Fixes clave de v0.9.3
 
-| Archivo | Bug | Fix |
-|:--------|:----|:----|
-| `pkg/network/dns.go` | Busy-wait en `SetReadDeadline` | `ReadFromUDP` bloquea naturalmente |
-| `pkg/common/resolv.go` | Almacenaba `:port` en nameservers | Stripped, appended `:53` para dialling |
-| `pkg/network/manager.go` | DNS no registrado al iniciar contenedor | `SetupNetwork` llama a `AddEntry` |
-| `cmd/dokid/main.go` | Usaba `:53` en Android (bloqueado) | Usa `:8053` en Android |
-| `pkg/network/dns.go` | Sin AAAA, sin PTR | Añadidos ambos |
-| `pkg/common/resolv.go` | ndots:5 causaba loops de retry | ndots:0 por defecto |
-| `pkg/network/dns.go` | Solo UDP | Reintento TCP en bit TC (RFC 5966) |
-| `pkg/network/manager.go` | DNS perdido al reiniciar daemon | `recoverContainers` llama a `ReRegisterDNS` |
+```text
+FILE                        BUG                                     FIX
+─────────────────────────────────────────────────────────────────────────
+pkg/network/dns.go          Busy-wait en SetReadDeadline            ReadFromUDP bloquea naturalmente
+pkg/common/resolv.go        Almacenaba :port en nameservers         Stripped, appended :53 para dialling
+pkg/network/manager.go      DNS no registrado al iniciar container  SetupNetwork llama a AddEntry
+cmd/dokid/main.go           Usaba :53 en Android (bloqueado)        Usa :8053 en Android
+pkg/network/dns.go          Sin AAAA, sin PTR                       Anadidos ambos
+pkg/common/resolv.go        ndots:5 causaba loops de retry          ndots:0 por defecto
+pkg/network/dns.go          Solo UDP                                Reintento TCP en bit TC (RFC 5966)
+pkg/network/manager.go      DNS perdido al reiniciar daemon         recoverContainers llama a ReRegisterDNS
+```
+
+---
 
 ## Plugins CNI
 
+<sub>[CONTAINER NETWORK INTERFACE / PLUGGABLE]</sub>
+
 CNI (Container Network Interface) es una spec para networking pluggable. Doki soporta estos plugins:
 
-| Plugin | Propósito |
-|:-------|:----------|
-| `bridge` | Bridge Linux (default) |
-| `host-local` | Asignación local de IP |
-| `portmap` | Port mapping |
-| `macvlan` | Acceso directo a NIC del host |
-| `ipvlan` | Aislamiento L3 |
-| `dhcp` | Asignación de IP basada en DHCP |
-| `vlan` | Tagging 802.1Q VLAN |
+```text
+PLUGIN       PURPOSE
+─────────────────────────────────────────
+bridge       Bridge Linux (default)
+host-local   Asignacion local de IP
+portmap      Port mapping
+macvlan      Acceso directo a NIC del host
+ipvlan       Aislamiento L3
+dhcp         Asignacion de IP basada en DHCP
+vlan         Tagging 802.1Q VLAN
+```
 
-CNI se habilita con `DOKI_CNI=/path/to/cni/conf`. El modo bridge por defecto no usa CNI directamente (más rápido, sin overhead de plugin).
+CNI se habilita con `DOKI_CNI=/path/to/cni/conf`. El modo bridge por defecto no usa CNI directamente (mas rapido, sin overhead de plugin).
 
-**Estado**: El gestor de plugins existe, no está completamente conectado al runtime. Ver [Limitaciones conocidas](../README.md#qu%C3%A9-no-funciona-todav%C3%ADa).
+Estado: el gestor de plugins existe, no esta completamente conectado al runtime. Ver Limitaciones conocidas en el README del proyecto.
 
-## Networking rootless (pasta)
+---
 
-Para usuarios sin root, Doki usa [pasta](https://passt.top/) (la herramienta "pasta", sucesora de slirp4netns). Pasta:
+## Networking rootless
 
+<sub>[PASTA / SLIRP4NETNS / FALLBACK HOST]</sub>
+
+Para usuarios sin root, Doki selecciona un fallback en este orden:
+
+```text
+PRIORITY   DRIVER          CONDITION
+─────────────────────────────────────────────────────────
+1          pasta           binario pasta en $PATH  (override DOKI_PASTA)
+2          slirp4netns     binario slirp4netns en $PATH
+3          host            ultimo recurso: compartir netns del host
+```
+
+[pasta](https://passt.top/) es el sucesor de slirp4netns. Provee:
+
+```text
 - Conectividad TCP/UDP sin root ni dispositivos TAP
 - Modo ICS (Internet Connection Sharing)
 - Servidor DHCP integrado para el contenedor
 - Los bind mounts funcionan normalmente
+```
 
 Uso:
 
@@ -267,9 +366,13 @@ Uso:
 doki run --rm --network bridge alpine ping -c 1 8.8.8.8
 ```
 
-Pasta escucha en la interfaz externa del host y hace NAT del tráfico para el contenedor. El rendimiento es ~95% del nativo (vs 70% para slirp4netns).
+Pasta escucha en la interfaz externa del host y hace NAT del trafico para el contenedor. El rendimiento es ~95% del nativo (vs 70% para slirp4netns).
+
+---
 
 ## IPv6
+
+<sub>[DUAL-STACK / RED EXPLICITA]</sub>
 
 Habilita en el bridge por defecto:
 
@@ -281,7 +384,7 @@ Habilita en el bridge por defecto:
 }
 ```
 
-O crea una red IPv6 explícitamente:
+O crea una red IPv6 explicitamente:
 
 ```bash
 doki network create --ipv6 --subnet fd00::/64 ipv6-net
@@ -289,9 +392,13 @@ doki network create --ipv6 --subnet fd00::/64 ipv6-net
 
 Doki asigna direcciones v4 y v6 cuando `ipv6: true`.
 
+---
+
 ## Teardown de veth (fix v0.9.3)
 
-Cuando se elimina un contenedor, su par veth debe ser eliminado para evitar filtrar interfaces en el host. v0.9.3 añadió tracking:
+<sub>[PREVENCION DE LEAKS]</sub>
+
+Cuando se elimina un contenedor, su par veth debe ser eliminado para evitar filtrar interfaces en el host. v0.9.3 anadio tracking:
 
 ```go
 // pkg/network/manager.go
@@ -307,115 +414,256 @@ type Endpoint struct {
 ```go
 // Elimina ambos extremos veth
 exec.Command("ip", "link", "del", endpoint.VethHost).Run()
-// (VethPeer se va automáticamente con el par)
+// (VethPeer se va automaticamente con el par)
 
 // Luego elimina el bridge
 exec.Command("ip", "link", "del", bridgeName).Run()
 ```
 
-Antes de v0.9.3: `ip link` mostraba decenas de interfaces `veth*` después de correr unos cuantos contenedores.
+Antes de v0.9.3: `ip link` mostraba decenas de interfaces `veth*` despues de correr unos cuantos contenedores.
+
+---
 
 ## Consideraciones de seguridad
 
-| Preocupación | Mitigación |
-|:-------------|:-----------|
-| Contenedor sniffeando tráfico del host | Usa `--network bridge` (default), no `host` |
-| Contenedor escapando vía manipulación de iptables | La chain DOKI está namespaced, separada de las reglas del sistema |
-| DNS spoofing | Las respuestas DNS están bound a la IP del contenedor |
-| Port hijacking | El primer contenedor en reclamar un puerto del host gana; el segundo falla con EADDRINUSE |
-| ARP spoofing | Doki habilita `arp_ignore`/`arp_announce` en las interfaces veth |
+<sub>[AMENAZA / MITIGACION]</sub>
+
+```text
+CONCERN                                  MITIGATION
+─────────────────────────────────────────────────────────────────────────────
+Container sniffeando trafico del host    Usa --network bridge (default), no host
+Container escapando via manip. iptables  La chain DOKI esta namespaced, separada de reglas del sistema
+DNS spoofing                             Las respuestas DNS estan bound a la IP del contenedor
+Port hijacking                           El primer contenedor en reclamar un puerto del host gana;
+                                         el segundo falla con EADDRINUSE
+ARP spoofing                             Doki habilita arp_ignore/arp_announce en los veth
+```
+
+---
 
 ## Rendimiento
 
-| Modo | Throughput | Overhead de latencia |
-|:-----|:-----------|:--------------------|
-| `bridge` (rootful) | 95% nativo | <0.1ms |
-| `bridge` (rootless, pasta) | 90% nativo | ~0.2ms |
-| `host` | 100% nativo | 0ms |
-| `none` | (sin red) | n/a |
+<sub>[THROUGHPUT / OVERHEAD DE LATENCIA]</sub>
+
+```text
+MODE                          THROUGHPUT      LATENCY OVERHEAD
+─────────────────────────────────────────────────────────────
+bridge (rootful)              95% nativo      <0.1ms
+bridge (rootless, pasta)      90% nativo      ~0.2ms
+host                          100% nativo     0ms
+none                          (sin red)       n/a
+```
+
+---
 
 ## Fuente
 
-- `pkg/network/manager.go` — bridge, port forwarding, veth, teardown
-- `pkg/network/cni.go` — gestor de plugins CNI, chain DOKI
-- `pkg/network/dns.go` — servidor DNS interno
-- `pkg/network/android_dns.go` — descubrimiento DNS en Android
-- `pkg/network/rootless.go` — integración con pasta
-- `pkg/common/resolv.go` — parsing de resolv.conf
-- `pkg/netlink/proxy.go` — reenviador TCP (reemplaza socat)
-- `pkg/netlink/udp.go` — reenviador UDP con mapa de sesiones
-- `pkg/netlink/keys.go` — identidad de instalación, Ed25519 + ECDSA P-256
-- `pkg/netlink/crypto.go` — envolturas TLS 1.3 y NaCl secretbox
-- `pkg/netlink/peer.go` — registro de pares y almacén de confianza
-- `pkg/netlink/mesh.go` — protocolo gossip, registro de pares, enrutador mesh
-- `pkg/netlink/discovery_static.go` — cargador de `peers.json`
-- `pkg/netlink/discovery_mdns_{on,off}.go` — servicio mDNS (opt-in)
+<sub>[PAQUETES / INDICE DE ARCHIVOS]</sub>
 
-## DokiLink-Lite (Mesh Multi-Host)
-
-Doki 0.9.3 introduce **DokiLink-Lite**: una capa de proxy TCP/UDP +
-descubrimiento mesh que permite reenviar un puerto publicado de un
-contenedor a otra instancia Doki en la misma LAN (o más allá, si
-configura pares estáticos manualmente). Es intencionalmente mínimo:
-sin gVisor, sin stack completo de WireGuard, sin NAT traversal, sin
-servidor de retransmisión.
-
-### Capas de Cifrado
-
-| Capa | Cuándo | Librería | Notas |
-|:-----|:-------|:---------|:------|
-| L0 (ninguna) | solo loopback | — | por defecto en Android/Termux |
-| L1 (TLS 1.3) | cualquier inter-host | `crypto/tls` stdlib | por defecto, firmado por CA por instalación |
-| L2 (secretbox) | solo payload | `golang.org/x/crypto/nacl/secretbox` | opt-in con `DOKI_LINK_PAYLOAD_ENC=1`, clave derivada de las pubkeys Ed25519 de ambos pares |
-
-### Arquitectura
-
-```mermaid
-sequenceDiagram
-    participant Cliente
-    participant DokiA as Doki (A)
-    participant TLS as TLS 1.3
-    participant Box as secretbox
-    participant DokiB as Doki (B)
-    participant Contenedor
-
-    Cliente->>DokiA: dial :9090
-    DokiA->>TLS: WrapServer (L1)
-    TLS->>Box: WrapServer (L2, opt-in)
-    Box->>DokiB: reenvío TCP
-    DokiB->>Contenedor: dial :8080
-    Contenedor-->>DokiB: respuesta
-    DokiB-->>Box: reenviar de vuelta
-    Box-->>TLS: reenviar de vuelta
-    TLS-->>DokiA: reenviar de vuelta
-    DokiA-->>Cliente: respuesta
+```text
+pkg/network/manager.go              bridge, port forwarding, veth, teardown
+pkg/network/cni.go                  gestor de plugins CNI, chain DOKI
+pkg/network/dns.go                  servidor DNS interno
+pkg/network/android_dns.go          descubrimiento DNS en Android
+pkg/network/rootless.go             integracion pasta / slirp4netns
+pkg/common/resolv.go                parsing de resolv.conf
+pkg/netlink/proxy.go                reenviador TCP (reemplaza socat)
+pkg/netlink/udp.go                  reenviador UDP con mapa de sesiones
+pkg/netlink/keys.go                 identidad de instalacion, Ed25519 + ECDSA P-256
+pkg/netlink/crypto.go               envolturas TLS 1.3 y NaCl secretbox
+pkg/netlink/peer.go                 registro de pares y almacén de confianza
+pkg/netlink/mesh.go                 protocolo gossip, registro de pares, router mesh
+pkg/netlink/discovery_static.go     cargador de peers.json
+pkg/netlink/discovery_mdns_*.go     servicio mDNS (opt-in, 90s expiry)
+pkg/netlink/stun.go                 STUN binding requests
+pkg/netlink/turn.go                 cliente de relevo TURN
+pkg/netlink/punch.go                coordinador de NAT hole punching
+pkg/netlink/dht.go                  nodo DHT Kademlia + tabla de routing
 ```
 
-### Descubrimiento de Pares
+---
 
-```mermaid
-flowchart LR
-    A[Identidad de instalación] --> B{Descubrimiento}
-    B -->|estático| P[peers.json]
-    B -->|mDNS| M[navegador mdns]
-    P --> T[TrustStore]
-    M --> T
-    T --> Mesh[Registro mesh]
-    Mesh --> G[Gossip cada 15s]
-    G --> Contenedores[Anuncios de contenedores]
+## DokiLink Mesh (Multi-Host)
+
+<sub>[v0.11.0 / TLS 1.3 / NACL SECRETBOX / ED25519 / NAT TRAVERSAL / DHT / MDNS]</sub>
+
+DokiLink es un proxy TCP/UDP mas una capa de descubrimiento mesh.
+Reenvia un puerto publicado de un contenedor a otra instancia Doki
+en la misma LAN, a traves de VLANs via pares estaticos, o a traves
+de NATs via el stack STUN/TURN introducido en v0.11.0.
+
+El protocolo de cable es intencionalmente minimalista: sin gVisor,
+sin stack completo de WireGuard. La alcanzabilidad cross-NAT la
+proveen STUN binding requests, fallback de relevo TURN, y hole
+punching sincronizado. La DHT Kademlia resuelve endpoints de pares
+mas alla de la LAN. mDNS anuncia pares en la LAN con expiracion de
+90 segundos.
+
+### Capas de cifrado
+
+```text
+LAYER          WHEN              LIBRARY                             NOTES
+─────────────────────────────────────────────────────────────────────────────────────
+L0 (none)      solo loopback     --                                  default en Android/Termux
+L1 (TLS 1.3)   cualquier inter   crypto/tls stdlib                   default, firmado por CA por instalacion
+L2 (secretbox) solo payload      golang.org/x/crypto/nacl/secretbox  opt-in via DOKI_LINK_PAYLOAD_ENC=1,
+                                                                     clave derivada de las pubkeys
+                                                                     Ed25519 de ambos pares
 ```
+
+Todos los registros de gossip llevan una firma Ed25519 sobre el
+cuerpo canonico del registro. La verificacion falla cerrado: los
+registros sin firma o con mismatch se descartan y el par se marca
+como no confiable.
+
+### Intercambio de gossip
+
+```text
+  Doki A                                  Doki B
+  :7432                                   :7432
+  ┌──────────────┐                        ┌──────────────┐
+  │ gossip tick  │  cada 15s              │              │
+  │ (mesh.go)    │──── dial TLS 1.3 ────> │ listener     │
+  │              │     ed25519 firmado    │              │
+  │              │<── peer records ──────│ │ TrustStore   │
+  │              │     ed25519 firmado    │              │
+  │ TrustStore   │                        │ TrustStore   │
+  │  updated     │                        │  updated     │
+  │  mesh router │                        │  mesh router │
+  │  recomputes  │                        │  recomputes  │
+  └──────────────┘                        └──────────────┘
+        |                                        |
+        | registro expirado (90s TTL mDNS)       | mismo
+        v                                        v
+  mDNS re-announce                         mDNS re-announce
+```
+
+### Descubrimiento de pares
+
+```text
+  identidad de instalacion (Ed25519 + CA)
+            |
+            +----------+----------+
+            |                     |
+       estatico              browser mDNS
+       peers.json            (90s expiry, solo LAN,
+            |                 -tags netlink_mdns)
+            |                     |
+            +----------+----------+
+                       |
+                  TrustStore
+                       |
+                  Registro mesh
+                       |
+                  Gossip cada 15s
+                       |
+                  Anuncios de contenedores
+                       |
+                  DHT lookup (Kademlia)
+                  para endpoints fuera de LAN
+```
+
+### NAT Traversal
+
+<sub>[STUN / TURN / HOLE PUNCHING / v0.11.0]</sub>
+
+```text
+LEYENDA
+  A, B    pares Doki detras de NAT
+  STUN    descubrimiento de endpoint reflexivo publico
+  TURN    relevo fallback para NAT simetrico
+  DHT     canal de intercambio de endpoints (Kademlia)
+
+  1. BIND
+     A --binding req--> STUN_A
+     A <--mapped addr-- STUN_A      (IP:port publico de A)
+     B --binding req--> STUN_B
+     B <--mapped addr-- STUN_B      (IP:port publico de B)
+
+  2. EXCHANGE
+     A --put(B, pubA:portA)--> DHT
+     B --get(A)---------------> DHT  --> pubA:portA
+     B --put(A, pubB:portB)--> DHT
+     A --get(B)---------------> DHT  --> pubB:portB
+
+  3. PUNCH  (ambos extremos envian primero para abrir estado NAT)
+     A === SYN/UDP a pubB:portB ===>  NAT de B  (puede drop, abre hole de A)
+     B === SYN/UDP a pubA:portA ===>  NAT de A  (puede drop, abre hole de B)
+
+  4. OUTCOME
+     cone + cone       --> camino directo establecido, TLS 1.3 lo envuelve
+     simetrico en uno --> fallback a relevo TURN (turn.go)
+     ambos fallan      --> par marcado inalcanzable, mesh poda en 90s
+```
+
+STUN binding esta implementado en `pkg/netlink/stun.go` (RFC 5389
+STUN clasico, sin ICE candidate trickle). El relevo TURN usa
+`pkg/netlink/turn.go` (RFC 5766 ALLOCATE/CHANNELBIND). La
+coordinacion de punch vive en `pkg/netlink/punch.go` y lanza un
+burst fijo de 8 paquetes por par con timeout de 500ms.
+
+### DHT (Kademlia)
+
+<sub>[TABLA DE ROUTING / k=20 / ALPHA=3]</sub>
+
+```text
+PARAMETER       VALUE
+────────────────────────────────────────
+Algoritmo       Kademlia (XOR estilo Bamford)
+k               20  (tamano de bucket)
+alpha           3   (lookups paralelos)
+Node ID         SHA-256 de la pubkey Ed25519 de instalacion
+Key             ID de instalacion (base32, 12 chars)
+Value           { endpoint publico, last seen, firma }
+Store TTL       24h, refrescado en gossip
+Routing table   256 buckets, solo pares vivos
+```
+
+La DHT se usa para un proposito: resolver un ID de instalacion a
+un endpoint `{IP, port}` alcanzable cuando ni mDNS ni `peers.json`
+cubren al par. No es un key-value store generico. El trafico de
+DHT viaja en el mismo listener TLS 1.3 en `:7432` y se firma con
+la clave Ed25519 del nodo.
+
+`pkg/netlink/dht.go` implementa FIND_NODE / FIND_VALUE / STORE /
+PING. El refresh de buckets corre cada 60 segundos.
+
+### Descubrimiento mDNS
+
+<sub>[90s EXPIRY / SOLO LAN / BUILD TAG]</sub>
+
+mDNS anuncia la instalacion local en `_dokilink._tcp` y busca pares
+en la misma LAN. Esta gateado por el build tag `netlink_mdns`; las
+builds por defecto incluyen un stub que no-op.
+
+```text
+PROPERTY              VALUE
+────────────────────────────────────────────
+Service type           _dokilink._tcp
+TTL                    90 segundos
+Refresh interval       30 segundos (re-announce antes de expirar TTL)
+Prune threshold        90s sin re-announce -> registro evicted
+Transport              multicast UDP 224.0.0.251:5353
+Scope                  solo link-local
+Build tag              -tags netlink_mdns
+Files                  pkg/netlink/discovery_mdns_on.go
+                       pkg/netlink/discovery_mdns_off.go  (stub)
+```
+
+Para escenarios cross-VLAN o cross-NAT, usa `peers.json` estatico o
+la DHT.
 
 ### CLI
 
 ```bash
-# Inspeccionar la identidad local de instalación.
+# Inspeccionar la identidad local de instalacion.
 doki mesh status
 # install id:    fndwnv3mn7dt
 # public key:    K0dm12xvxzUTBZ3lJkOcOyBrGPPNlCWpTJhcEv0BQys=
 # ca fingerprint: cc4165e0ef4c
 # ca expires:    2027-06-07
 
-# Agregar un par estático.
+# Agregar un par estatico.
 doki link add mybuddy 192.168.1.42:7432 --pub "$(doki mesh status | awk '/public key/ {print $3}')"
 
 # Listar pares.
@@ -425,30 +673,45 @@ doki mesh ls
 
 # Eliminar un par.
 doki link rm mybuddy
+
+# Disparar un intento explicito de NAT traversal para un par remoto.
+doki link punch mybuddy
+# probing STUN_A ... ok   reflexive 203.0.113.7:49152
+# probing STUN_B ... ok   reflexive 198.51.100.4:49153
+# exchanged endpoints via DHT
+# punch burst (8 packets) -> direct path established
 ```
 
 ### Limitaciones (lea antes de desplegar)
 
-1. **Sin NAT traversal, sin relay**: DokiLink solo funciona cuando
-   ambos pares pueden alcanzarse en el puerto de gossip (por defecto
-   `:7432`). Para escenarios cross-NAT, ejecute primero una
-   superposición Tailscale / Nebula.
-2. **mDNS solo en LAN**: construido con `-tags netlink_mdns`. Las
-   builds por defecto incluyen un stub. Use pares estáticos para
-   cross-VLAN.
-3. **El framing secretbox por datagrama** tiene 24 bytes de nonce
-   + 16 bytes de overhead — las cargas UDP pesadas pagan un costo
+```text
+1. mDNS es solo LAN y build-taggeado. Las builds por defecto
+   incluyen un stub. Use pares estaticos o la DHT para cross-VLAN.
+2. El framing secretbox por datagrama tiene 24 bytes de nonce
+   + 16 bytes de overhead. Las cargas UDP pesadas pagan un costo
    fijo por paquete.
-4. **Sin DHT, sin auto-descubrimiento más allá de mDNS / JSON
-   estático**: el `peers.json` es la única fuente de verdad para
-   pares entre redes.
-5. **El contenedor ve la red del host** en modo proot+Termux: el
-   reenvío DokiLink es un relevo TCP/UDP en el loopback del host,
+3. NAT traversal falla en double-symmetric NATs. El relevo TURN es
+   el fallback; configure DOKI_TURN_SERVER o los relays se saltan.
+4. El contenedor ve la red del host en modo proot+Termux. El
+   reenvio DokiLink es un relevo TCP/UDP en el loopback del host,
    no un puente de namespaces de red. Los contenedores en modo
-   `proot` ya pueden alcanzar cualquier servicio del host, así que
-   el proxy no añade una frontera de seguridad en ese modo.
-6. **El protocolo de cable es JSON, limitado a 4 KiB por mensaje**:
-   gRPC / protobuf es una característica futura de v0.11+.
-7. **Vida útil de la CA: 365 días, certificados de enlace 90
-   días**: re-emita con `doki mesh status` para confirmar expiración.
-   La herramienta de rotación está planificada para v0.10.
+   proot ya pueden alcanzar cualquier servicio del host, asi que
+   el proxy no anade una frontera de seguridad en ese modo.
+5. El protocolo de cable es JSON, limitado a 4 KiB por mensaje.
+   gRPC / protobuf es una feature futura de v0.12+.
+6. Vida util de la CA: 365 dias, certificados de enlace 90 dias.
+   Re-emita con `doki mesh status` para confirmar expiracion.
+   La herramienta de rotacion esta planificada para v0.12.
+7. El Store TTL de la DHT es 24h. Un par que se queda silencioso
+   >24h se evicta de las tablas de routing remotas; debe
+   re-anunciarse al reiniciar.
+```
+
+---
+
+## Vease tambien
+
+- [Arquitectura](Architecture.es) -- capas del daemon, pipeline, registro de runners
+- [Niveles de Aislamiento](Isolation-Levels.es) -- 12 modos de runner desde WASM a microVM
+- [Seguridad](Security.es) -- seccomp, AppArmor, capabilities, TLS
+- [Configuracion](Configuration.es) -- schema de config.json y env vars

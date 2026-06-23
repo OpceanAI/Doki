@@ -1,215 +1,146 @@
-# Instalación
+# Instalacion
 
-Doki distribuye 4 binarios (`doki`, `dokid`, `doki-compose`, `doki-init`) para 4 combinaciones de plataforma/arquitectura. Elige tu plataforma abajo.
+<sub>[SETUP POR PLATAFORMA / v0.11.0]</sub>
 
-## Instalación rápida (Linux/macOS/Android vía Termux)
+> Doki distribuye binarios estaticos sin dependencias de runtime.
+> Elige tu plataforma, descarga, verifica, instala.
 
-```bash
-curl -sL https://doki.opceanai.com | sh
-```
-
-Esto descarga el binario correcto para tu plataforma a `~/.local/bin/`. Añádelo a tu `$PATH` si no está ya.
+---
 
 ## Termux (Android)
 
-Termux es el entorno Android soportado principal. Doki corre rootless en Termux, sin necesidad de root.
-
-### Desde F-Droid (recomendado)
-
-1. Instala [Termux desde F-Droid](https://f-droid.org/packages/com.termux/) (NO desde Google Play — la versión de Play está desactualizada)
-2. Abre Termux y corre:
-
 ```bash
-pkg update && pkg upgrade
-pkg install proot curl
-curl -sL https://doki.opceanai.com | sh
+# Instalar dependencias.
+pkg install proot
+
+# Instalador de una linea.
+curl -fsSL https://raw.githubusercontent.com/OpceanAI/Doki/main/install.sh | bash
+
+# O instalacion manual.
+curl -fsSLO https://github.com/OpceanAI/Doki/releases/download/v0.11.0/doki-android-arm64
+curl -fsSLO https://github.com/OpceanAI/Doki/releases/download/v0.11.0/dokid-android-arm64
+chmod +x doki-android-arm64 dokid-android-arm64
+mv doki-android-arm64 $PREFIX/bin/doki
+mv dokid-android-arm64 $PREFIX/bin/dokid
+
+# Verificar.
+doki doctor
 ```
 
-### Desde GitHub Releases
+Para aislamiento de red, instala `passt` (provee el binario `pasta`):
 
 ```bash
-pkg install proot curl
-mkdir -p $PREFIX/bin
-curl -L -o $PREFIX/bin/doki https://github.com/OpceanAI/Doki/releases/latest/download/doki-android-arm64
-curl -L -o $PREFIX/bin/dokid https://github.com/OpceanAI/Doki/releases/latest/download/dokid-android-arm64
-curl -L -o $PREFIX/bin/doki-compose https://github.com/OpceanAI/Doki/releases/latest/download/doki-compose-android-arm64
-curl -L -o $PREFIX/bin/doki-init https://github.com/OpceanAI/Doki/releases/latest/download/doki-init-android-arm64
-chmod +x $PREFIX/bin/doki*
+pkg install passt
 ```
 
-### Verificando
+Sin `pasta`, los contenedores usan networking compartido del host.
 
-```bash
-$ doki version
-Client: Doki
- Version:    0.9.3
- API version: 1.48
- GitCommit:  faab400
- Built:      2026-06-08
-
-$ doki run --rm alpine echo "hola desde doki"
-hola desde doki
-```
-
-### Notas específicas de Termux
-
-- `LD_PRELOAD` y `LD_LIBRARY_PATH` se eliminan del entorno de proot automáticamente (v0.9.3+)
-- El DNS escucha en `127.0.0.11:8053` (el puerto 53 está bloqueado por SELinux sin root)
-- El runtime por defecto es proot; sobrescribe con `doki run --runtime native`
-- Driver de storage: `fuse-overlayfs` (no necesita root)
-- Dispositivos ARMv7 (32-bit): usa los binarios `android-armv7` (compilados con `GOOS=linux`, corre via proot)
+---
 
 ## Linux
 
-### Debian / Ubuntu
+<sub>[APT / DEBIAN + UBUNTU]</sub>
 
 ```bash
-sudo apt update
-sudo apt install -y curl fuse-overlayfs iptables
-curl -L -o /tmp/doki.tar.gz https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-arm64.tar.gz
-sudo tar -xzf /tmp/doki.tar.gz -C /usr/local/bin/
+curl -fsSLO https://github.com/OpceanAI/Doki/releases/download/v0.11.0/doki-linux-amd64
+curl -fsSLO https://github.com/OpceanAI/Doki/releases/download/v0.11.0/dokid-linux-amd64
+chmod +x doki-linux-amd64 dokid-linux-amd64
+sudo mv doki-linux-amd64 /usr/local/bin/doki
+sudo mv dokid-linux-amd64 /usr/local/bin/dokid
 ```
 
-### Fedora / RHEL / Rocky
+<sub>[PACMAN / ARCH]</sub>
 
 ```bash
-sudo dnf install -y curl fuse-overlayfs iptables
-curl -L -o /tmp/doki.tar.gz https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-arm64.tar.gz
-sudo tar -xzf /tmp/doki.tar.gz -C /usr/local/bin/
+# Desde AUR (mantenido por la comunidad).
+yay -S doki-bin
 ```
 
-### Arch / Manjaro
+<sub>[DNF / FEDORA]</sub>
 
 ```bash
-sudo pacman -Syu curl fuse-overlayfs iptables
-curl -L -o /tmp/doki.tar.gz https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-arm64.tar.gz
-sudo tar -xzf /tmp/doki.tar.gz -C /usr/local/bin/
+# RPM (mantenido por la comunidad, verificar disponibilidad).
+sudo dnf install https://github.com/OpceanAI/Doki/releases/download/v0.11.0/doki-0.11.0-1.x86_64.rpm
 ```
 
-### Alpine
-
-```bash
-sudo apk add curl fuse-overlayfs iptables
-curl -L -o /tmp/doki.tar.gz https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-arm64.tar.gz
-sudo tar -xzf /tmp/doki.tar.gz -C /usr/local/bin/
-```
-
-### Gentoo
-
-```bash
-sudo emerge -av sys-fs/fuse-overlayfs net-firewall/iptables net-misc/curl
-curl -L -o /tmp/doki.tar.gz https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-arm64.tar.gz
-sudo tar -xzf /tmp/doki.tar.gz -C /usr/local/bin/
-```
-
-### Notas específicas de Linux
-
-- El modo root requiere `iptables` y `kmod` (para `modprobe overlay`)
-- El modo rootless usa `fuse-overlayfs` (instala desde tu package manager) y `pasta` (descárgalo de [passt](https://passt.top/) o usa el binario distribuido con Doki)
-- El binario `doki-init` es el PID 1 para guests microVM; no lo necesitas para contenedores normales
-- Para dispositivos ARMv7 (ARM de 32 bits), usa los binarios `android-armv7` (Termux) o `linux-armv7` (Raspberry Pi, postmarketOS)
+---
 
 ## macOS
 
-Doki distribuye un binario `doki` solo-CLI para macOS Apple Silicon (arm64). El daemon y otros binarios son solo para Linux porque dependen de `internal/namespaces` y mounts de overlayfs que no existen en Darwin.
-
-### Homebrew (planeado)
-
-Una fórmula de Homebrew está en proceso. Por ahora, instala manualmente.
-
-### Instalación manual
+macOS es una plataforma cliente. `doki`, `doki-kube` y `doki-kubectl`
+funcionan nativamente. `dokid` requiere un backend Linux o daemon
+remoto.
 
 ```bash
-curl -L -o /usr/local/bin/doki https://github.com/OpceanAI/Doki/releases/latest/download/doki-darwin-arm64
-chmod +x /usr/local/bin/doki
+# via Homebrew (mantenido por la comunidad, verificar disponibilidad).
+brew install doki
+
+# O instalacion manual.
+curl -fsSLO https://github.com/OpceanAI/Doki/releases/download/v0.11.0/doki-darwin-arm64
+chmod +x doki-darwin-arm64
+sudo mv doki-darwin-arm64 /usr/local/bin/doki
 ```
 
-### Notas específicas de macOS
+---
 
-- El CLI corre solo en `ModeNative` — sin aislamiento, sin red bridge
-- Para usar el daemon, corre `dokid` en un servidor Linux y apunta tu `doki` local a él vía `DOKI_HOST=tcp://servidor:2375`
-- macOS no es un target de build para `dokid`/`doki-compose`/`doki-init` — esos fallarán al construir con GOOS=darwin
-
-## Windows / WSL2
-
-Windows nativo no está soportado. Usa WSL2 con las instrucciones de instalación de Ubuntu de arriba.
-
-```powershell
-wsl --install
-wsl --set-default-version 2
-# Luego sigue los pasos de instalación de Debian/Ubuntu dentro de WSL
-```
-
-## Chromebook (contenedor Linux de ChromeOS)
-
-El contenedor Linux (Beta) de ChromeOS es esencialmente una VM Debian. El CLI de Doki corre dentro de él; para escenarios de contenedor-en-contenedor usa el runtime `proot`.
+## SBCs ARM (Raspberry Pi, Orange pi, etc.)
 
 ```bash
-sudo apt update
-sudo apt install -y curl fuse-overlayfs proot
-curl -L -o /tmp/doki.tar.gz https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-arm64.tar.gz
-sudo tar -xzf /tmp/doki.tar.gz -C /usr/local/bin/
+curl -fsSLO https://github.com/OpceanAI/Doki/releases/download/v0.11.0/doki-linux-arm64
+curl -fsSLO https://github.com/OpceanAI/Doki/releases/download/v0.11.0/dokid-linux-arm64
+chmod +x doki-linux-arm64 dokid-linux-arm64
+sudo mv doki-linux-arm64 /usr/local/bin/doki
+sudo mv dokid-linux-arm64 /usr/local/bin/dokid
 ```
 
-Para aislamiento pKVM en Chromebooks con el firmware correcto, Doki lo auto-detectará y lo usará (nivel 11 en la página de [Niveles de aislamiento](Isolation-Levels.es)).
+---
 
-## Raspberry Pi / placas ARM
-
-Usa el binario `linux-armv7` (Raspbian 32-bit) o `linux-arm64` (Raspberry Pi OS 64-bit, Ubuntu ARM64).
+## Compilar desde Fuente
 
 ```bash
-# Detecta tu arquitectura
-uname -m
-# aarch64 -> arm64, armv7l -> armv7
-
-# Para Pi OS 64-bit
-curl -L -o /usr/local/bin/doki https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-arm64
-chmod +x /usr/local/bin/doki
-
-# Para Raspbian 32-bit
-curl -L -o /usr/local/bin/doki https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-armv7
-chmod +x /usr/local/bin/doki
+git clone https://github.com/OpceanAI/Doki.git
+cd Doki
+make build-release sha256
 ```
 
-Habilita cgroups v2 en `/boot/firmware/cmdline.txt` añadiendo:
+Requiere Go 1.26+. Para el backend VZ de macOS, compilar con
+`CGO_ENABLED=1` en darwin.
+
+---
+
+## Matriz de Binarios
 
 ```
-cgroup_memory=1 cgroup_enable=memory
+BINARIO         ANDROID-ARM64  LINUX-ARM64  LINUX-AMD64  DARWIN-ARM64
+─────────────────────────────────────────────────────────────────────
+doki            si             si           si           si
+dokid           si             si           si           ---
+doki-compose    si             si           si           ---
+doki-init       si             si           si           ---
+doki-kube       si             si           si           si
+doki-kubectl    si             si           si           si
 ```
 
-Luego reinicia.
+---
 
-## postmarketOS / PinePhone / Librem
-
-Distros de Linux móvil basadas en Alpine o Arch. Usa los pasos de instalación de Alpine o Arch. Proot es el runtime por defecto.
-
-## Compilando desde el código fuente
-
-Consulta [Compilando desde el código fuente](#compilando-desde-el-c%C3%B3digo-fuente) abajo o la sección [Building](../README.md#building) del README.
-
-## Verificando descargas
-
-Cada binario tiene un archivo `.sha256`:
+## Verificar Checksums
 
 ```bash
-$ curl -L -O https://github.com/OpceanAI/Doki/releases/latest/download/doki-linux-arm64.sha256
-$ sha256sum -c doki-linux-arm64.sha256
-doki-linux-arm64: OK
+curl -fsSLO https://github.com/OpceanAI/Doki/releases/download/v0.11.0/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing
 ```
 
-## Troubleshooting
+---
 
-| Síntoma | Solución |
-|:--------|:---------|
-| `command not found: doki` | Añade `$PREFIX/bin` (Termux) o `/usr/local/bin` (Linux) al `$PATH` |
-| `execve: Function not implemented` (Termux) | Arreglado en v0.9.3+; actualiza a la última release |
-| `port 53: permission denied` (Termux) | Esto es esperado; Doki usa el puerto 8053 por defecto en Android |
-| `requires external cgo linking` (armv7) | Arreglado en v0.10.0; los builds armv7 usan workaround `GOOS=linux` |
-| `iptables: Unknown option` | Actualiza a v0.9.3+; el bug del DNAT fue arreglado |
-| `cannot find proot` | `apt install proot` (Debian/Ubuntu) o `pkg install proot` (Termux) |
+## Post-Instalacion
 
-## Siguientes pasos
+```bash
+# Verificar dependencias.
+doki doctor
 
-- Continúa a [Inicio Rápido](Quick-Start.es) para un tutorial de 5 minutos
-- Lee [Arquitectura](Architecture.es) para entender el daemon
-- Elige el [Nivel de aislamiento](Isolation-Levels.es) correcto para tu carga
+# Arrancar daemon.
+dokid &
+
+# Ejecutar primer contenedor.
+doki run --rm alpine echo "ok"
+```
