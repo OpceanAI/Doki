@@ -800,11 +800,46 @@ func bridgeExists(name string) bool {
 	return err == nil
 }
 
+// setupRootlessNetworking sets up networking for a rootless container.
+// It tries pasta first (preferred), then slirp4netns (legacy), and
+// finally falls back to no-network mode (the container shares the
+// host netns via proot, which is the common Termux case). This
+// prevents the "pasta: executable file not found" error that blocks
+// container startup on systems where pasta is not installed.
 func setupRootlessNetworking(pid int) error {
-	cmd := exec.Command("pasta", "--pid", fmt.Sprintf("%d", pid))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// 1. Try pasta (preferred rootless networking).
+	if path, err := exec.LookPath("pasta"); err == nil {
+		cmd := exec.Command(path, "--pid", fmt.Sprintf("%d", pid))
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		slog.Debug("network setup: pasta failed, trying slirp4netns", "pid", pid, "err", err)
+	}
+
+	// 2. Try slirp4netns (legacy rootless networking).
+	if path, err := exec.LookPath("slirp4netns"); err == nil {
+		cmd := exec.Command(path, "--configure", "--mtu=65520",
+			fmt.Sprintf("--netns-type=path=/proc/%d/ns/net", pid),
+			"tap0")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		slog.Debug("network setup: slirp4netns failed, falling back to host netns", "pid", pid, "err", err)
+	}
+
+	// 3. Fallback: no isolated networking. The container shares the
+	// host network namespace via proot (the common Termux case). This
+	// is not ideal for isolation but allows the container to start
+	// and have network access without requiring pasta or slirp4netns.
+	slog.Info("network setup: no rootless networking tool available (pasta/slirp4netns not found); "+
+		"container will share host network namespace. "+
+		"Install 'passt' (pasta) or 'slirp4netns' for proper network isolation",
+		"pid", pid)
+	return nil
 }
 
 // IsPastaAvailable checks if pasta is available for rootless networking.

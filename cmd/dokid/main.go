@@ -1,12 +1,12 @@
 // Package main is the Doki daemon.
-// Doki daemon entry point. Doki v0.9.3.
+// Doki daemon entry point.
 //
 // Responsibilities:
 //   - parse flags and env
 //   - structured logging (slog JSON in prod, text in dev)
 //   - data dir bootstrap
 //   - storage / image / network / runtime init
-//   - HTTP API server (Docker-compatible v1.48)
+//   - HTTP API server (Docker-compatible API)
 //   - graceful shutdown
 //   - state recovery on restart
 package main
@@ -271,10 +271,15 @@ func main() {
 	}
 
 	mw := api.NewMiddleware()
-	server.SetMiddleware(mw.Logging, mw.CORS, mw.Recovery, mw.RequestID)
 	rateLimiter := api.NewRateLimit(rateLimitPerSec, rateLimitBurst)
 	defer rateLimiter.Stop()
-	server.SetMiddleware(rateLimiter.RateLimitMiddleware)
+	server.SetMiddleware(
+		mw.RequestID,
+		mw.Recovery,
+		mw.CORS,
+		rateLimiter.RateLimitMiddleware,
+		mw.Logging,
+	)
 	logger.Info("rate limiter", "req_per_sec", rateLimitPerSec, "burst", rateLimitBurst)
 
 	if debugMode {
@@ -404,10 +409,8 @@ func applyEnvOverrides() {
 			socketPath = s
 		} else if h := os.Getenv("DOCKER_HOST"); h != "" {
 			socketPath = strings.TrimPrefix(h, "unix://")
-		} else if _, err := os.Stat("/data/data/com.termux/files/usr"); err == nil {
-			socketPath = "/data/data/com.termux/files/usr/var/run/doki.sock"
 		} else {
-			socketPath = filepath.Join(os.TempDir(), "doki.sock")
+			socketPath = common.DefaultDaemonSocket()
 		}
 	}
 	if tcpAddr == "" {
@@ -448,19 +451,6 @@ func applyEnvOverrides() {
 
 func loadConfig() *common.DokiConfig {
 	cfg := common.DefaultConfig()
-	if s := socketPath; s != "" {
-		cfg.SocketPath = s
-	}
-	if logLevel != "" {
-		cfg.LogLevel = logLevel
-	}
-	if dataDir := os.Getenv("DOKI_DATA_DIR"); dataDir != "" {
-		cfg.DataDir = dataDir
-		cfg.ExecRoot = filepath.Join(dataDir, "runtimes")
-	}
-	if drv := os.Getenv("DOKI_STORAGE_DRIVER"); drv != "" {
-		cfg.StorageDriver = drv
-	}
 	if loaded, err := common.LoadConfig(); err == nil {
 		applyLoadedConfig(cfg, loaded)
 	}
@@ -469,7 +459,25 @@ func loadConfig() *common.DokiConfig {
 			applyLoadedConfig(cfg, loaded)
 		}
 	}
+	applyConfigOverrides(cfg)
 	return cfg
+}
+
+func applyConfigOverrides(cfg *common.DokiConfig) {
+	if s := socketPath; s != "" {
+		cfg.SocketPath = s
+	}
+	if logLevel != "" {
+		cfg.LogLevel = logLevel
+	}
+	if dataDir := os.Getenv("DOKI_DATA_DIR"); dataDir != "" {
+		cfg.DataDir = dataDir
+		cfg.Root = dataDir
+		cfg.ExecRoot = filepath.Join(dataDir, "runtimes")
+	}
+	if drv := os.Getenv("DOKI_STORAGE_DRIVER"); drv != "" {
+		cfg.StorageDriver = drv
+	}
 }
 
 func applyLoadedConfig(cfg, loaded *common.DokiConfig) {

@@ -27,7 +27,7 @@ import (
 
 // defaultCRISocket is the Unix socket the kubelet talks to when no
 // explicit CRI endpoint is configured.
-const defaultCRISocket = "/var/run/doki-cri.sock"
+func defaultCRISocket() string { return common.DefaultCRISocket() }
 
 type Kubelet struct {
 	nodeName string
@@ -62,7 +62,7 @@ func NewKubelet(nodeName string, s store.Store, logger *slog.Logger) *Kubelet {
 		running:   make(map[string]bool),
 		logger:    logger,
 		nodeIP:    detectNodeIP(),
-		criSocket: defaultCRISocket,
+		criSocket: defaultCRISocket(),
 	}
 }
 
@@ -73,7 +73,7 @@ func NewKubelet(nodeName string, s store.Store, logger *slog.Logger) *Kubelet {
 // calls instead of faking pod status.
 func NewKubeletWithCRI(ctx context.Context, nodeName string, s store.Store, logger *slog.Logger, criSocket string) (*Kubelet, error) {
 	if criSocket == "" {
-		criSocket = defaultCRISocket
+		criSocket = defaultCRISocket()
 	}
 	conn, err := grpc.NewClient("unix://"+criSocket,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -631,7 +631,7 @@ func criMounts(pod *k8s.Pod) []*v1.Mount {
 		case vol.HostPath != nil:
 			hostPaths[vol.Name] = vol.HostPath.Path
 		case vol.EmptyDir != nil:
-			hostPaths[vol.Name] = filepath.Join("/var/lib/doki/emptydir", pod.UID, vol.Name)
+			hostPaths[vol.Name] = filepath.Join(common.AppDataDir(), "emptydir", pod.UID, vol.Name)
 		}
 	}
 

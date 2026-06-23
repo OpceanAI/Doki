@@ -42,7 +42,7 @@ func main() {
 
 	// 2. Setup data directories.
 	fmt.Println("[2] Setting up data directories...")
-	dataDir := "/data/data/com.termux/files/tmp/doki-test"
+	dataDir := filepath.Join(os.TempDir(), "doki-test")
 	for _, dir := range []string{
 		filepath.Join(dataDir, "images", "manifests"),
 		filepath.Join(dataDir, "images", "layers"),

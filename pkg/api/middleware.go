@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,18 +33,22 @@ func NewMiddleware() *Middleware {
 func (m *Middleware) Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rid := w.Header().Get("X-Request-ID")
+		rid := requestIDFromContext(r.Context())
+		rw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		m.logger.Info("request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"remote", r.RemoteAddr,
 			"request_id", rid,
 		)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(rw, r)
 		m.logger.Info("response",
 			"method", r.Method,
 			"path", r.URL.Path,
+			"status", rw.status,
+			"bytes", rw.bytes,
 			"duration_ms", time.Since(start).Milliseconds(),
+			"request_id", rid,
 		)
 	})
 }
@@ -87,12 +93,59 @@ func (m *Middleware) RequestID(next http.Handler) http.Handler {
 			rid = commonGenID(16)
 		}
 		w.Header().Set("X-Request-ID", rid)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(WithRequestID(r.Context(), rid)))
 	})
 }
 
 func commonGenID(n int) string {
 	return common.GenerateID(n)
+}
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status      int
+	bytes       int
+	wroteHeader bool
+}
+
+func (w *statusResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusResponseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += n
+	return n, err
+}
+
+func (w *statusResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (w *statusResponseWriter) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
 }
 
 // RateLimit implements simple token bucket rate limiting.
@@ -206,10 +259,23 @@ func slogFromContext(ctx context.Context) *slog.Logger {
 }
 
 type slogKey struct{}
+type requestIDKey struct{}
 
 // WithLogger attaches a per-request logger.
 func WithLogger(ctx context.Context, l *slog.Logger) context.Context {
 	return context.WithValue(ctx, slogKey{}, l)
+}
+
+// WithRequestID attaches a request ID to the request context.
+func WithRequestID(ctx context.Context, rid string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, rid)
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	if rid, ok := ctx.Value(requestIDKey{}).(string); ok {
+		return rid
+	}
+	return ""
 }
 
 // WaitForSignal blocks until SIGINT, SIGTERM, or SIGHUP is received,

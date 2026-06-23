@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/OpceanAI/Doki/pkg/common"
 )
 
 // Profile represents a seccomp security profile.
@@ -206,7 +209,7 @@ func SaveProfile(path string, profile *Profile) error {
 
 // GenerateProfilePath returns the path for a container's seccomp profile.
 func GenerateProfilePath(containerID string) string {
-	return fmt.Sprintf("/var/lib/doki/containers/%s/seccomp.json", containerID)
+	return filepath.Join(common.AppDataDir(), "containers", containerID, "seccomp.json")
 }
 
 // FilterAllowed returns only the allowed syscalls from a profile.

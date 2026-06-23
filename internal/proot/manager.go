@@ -44,14 +44,7 @@ func FindProotBinary() string {
 
 // IsAvailable checks if proot (or doki-proot) is available on the system.
 func IsAvailable() bool {
-	if common.PathExists("doki-proot") {
-		return true
-	}
-	p, err := exec.LookPath("proot")
-	if err != nil {
-		return false
-	}
-	return p != ""
+	return FindProotBinary() != ""
 }
 
 // ShouldUseProot returns true when proot should be the preferred execution mode.

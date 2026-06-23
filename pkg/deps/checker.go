@@ -107,6 +107,37 @@ func systemDeps() []SystemDep {
 	}
 }
 
+// SystemDepsSummary is an aggregate view suitable for doctor-style checks.
+type SystemDepsSummary struct {
+	Total           int
+	Installed       int
+	MissingRequired []SystemDepResult
+	MissingOptional []SystemDepResult
+}
+
+// SummarizeSystemDeps aggregates dependency check results into counts and
+// missing dependency groups.
+func SummarizeSystemDeps(results []SystemDepResult) SystemDepsSummary {
+	summary := SystemDepsSummary{Total: len(results)}
+	for _, r := range results {
+		if r.Installed {
+			summary.Installed++
+			continue
+		}
+		if r.Required {
+			summary.MissingRequired = append(summary.MissingRequired, r)
+		} else if r.Optional {
+			summary.MissingOptional = append(summary.MissingOptional, r)
+		}
+	}
+	return summary
+}
+
+// Healthy reports whether all required dependencies are present.
+func (s SystemDepsSummary) Healthy() bool {
+	return len(s.MissingRequired) == 0
+}
+
 // CheckSystemDeps inspects the host for tools that Doki can use and returns a
 // result per dependency, in the canonical order.
 func CheckSystemDeps() []SystemDepResult {

@@ -218,7 +218,7 @@ func cmdLogs(server string, args []string) {
 func cmdVersion(server string) {
 	resp, err := http.Get(server + "/version")
 	if err != nil {
-		conn, err := net.Dial("unix", "/var/run/doki-cri.sock")
+		conn, err := net.Dial("unix", common.DefaultCRISocket())
 		if err != nil {
 			fmt.Printf("Client Version: v%s\n", common.DokiVersion)
 			fmt.Println("Server: not reachable")

@@ -6,7 +6,9 @@ releases/
 # Rust build artifacts
 cmd/doki-init-rust/target/
 # Doki binaries (built locally)
-doki
-dokid
-doki-compose
-doki-init
+/doki
+/dokid
+/doki-compose
+/doki-init
+/doki-kube
+/doki-kubectl
