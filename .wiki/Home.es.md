@@ -1,65 +1,61 @@
 # Wiki de Doki
 
-Bienvenido a la wiki de documentación de Doki (Motor de Contenedores Universal). Esta wiki es el complemento en profundidad del [README](../README.md) — empieza ahí para la propuesta de valor, luego ven aquí para los detalles.
+<sub>[INDICE DE DOCUMENTACION / v0.11.0]</sub>
 
-> **Idioma**: Esta wiki está disponible en inglés (`Pagina.md`) y español (`Pagina.es.md`). Si una versión en español no existe para una página, por favor abre un issue.
+> Documentacion complementaria para el runtime de contenedores sin
+> root Doki. Empieza en el [README](../README.md) para la definicion
+> del proyecto, luego usa esta wiki para detalle de subsistemas,
+> procedimientos de instalacion y referencia de CLI.
 
-## Última versión
+Esta wiki esta disponible en ingles (`Page.md`) y espanol (`Page.es.md`).
 
-**v0.10.0** (junio 2026) — DokiLink-Lite Mesh, 190+ fixes de bugs, soporte armv7
+---
 
-- [Release notes](../RELEASE_NOTES.md)
-- [Descargar binarios](https://github.com/OpceanAI/Doki/releases/tag/v0.10.0)
-- [Qué hay de nuevo en v0.10.0](../README.md#qu%C3%A9-hay-de-nuevo)
+## Primeros Pasos
 
-## Tabla de contenidos
+- [Instalacion](Installation.es) -- Setup por plataforma: Termux, Linux, macOS, Raspberry Pi, WSL2, Chromebook
+- [Inicio Rapido](Quick-Start.es) -- Recorrido de 5 minutos: instalar, daemon, pull, run, compose, cleanup
 
-### Empezando
+## Conceptos
 
-| Página | Qué cubre |
-|:-------|:----------|
-| [Instalación](Installation.es) | Instalación por plataforma: Termux, Linux (apt/dnf/pacman/portage), macOS, Android NDK, WSL2, Chromebook, Raspberry Pi, postmarketOS |
-| [Inicio Rápido](Quick-Start.es) | Tutorial de 5 minutos: instalar → daemon → pull → run → compose → logs → cleanup |
+- [Arquitectura](Architecture.es) -- Internales del daemon, pipeline, conformidad OCI, cache de capas
+- [Niveles de Aislamiento](Isolation-Levels.es) -- Los 12 modos de runner: proot, native, gVisor, microVM, wasm, pKVM, otros
+- [Seguridad](Security.es) -- Seccomp, AppArmor, capabilities, user namespaces, TLS, modelo de amenazas
 
-### Conceptos
+## Referencia
 
-| Página | Qué cubre |
-|:-------|:----------|
-| [Arquitectura](Architecture.es) | Internos del daemon, pipeline, compliance OCI, cliente de registry, caché de capas |
-| [Niveles de aislamiento](Isolation-Levels.es) | Cobertura detallada de los 12 modos: WASM, pKVM, microVM, sysbox, namespaces, gVisor, FEX, QEMU, proot, legacy32, chroot, native |
-| [Seguridad](Security.es) | Perfil seccomp, AppArmor, capabilities, user namespaces, TLS, modelo de amenaza |
+- [Referencia CLI](CLI-Reference.es) -- Catalogo completo de comandos: Docker, Podman, Compose, Kubernetes, Mesh, Deps
+- [Configuracion](Configuration.es) -- schema config.json, variables de entorno, sockets por OS
+- [Networking](Networking.es) -- Bridge, CNI, port mapping, DNS, iptables, fallback rootless, DokiLink mesh
+- [Storage](Storage.es) -- 5 drivers, VFS, overlay2, btrfs/zfs, FUSE rootless, almacenamiento content-addressable
 
-### Referencia
+---
 
-| Página | Qué cubre |
-|:-------|:----------|
-| [Referencia de CLI](CLI-Reference.es) | Los 244 comandos con tablas de flags, ejemplos, muestras de salida |
-| [Configuración](Configuration.es) | Esquema de `config.json`, variables de entorno, paths de socket por SO, DNS, registries, niveles de log |
-| [Networking](Networking.es) | Bridge, plugins CNI, port mapping, DNS, iptables (DNAT/SNAT), rootless (pasta), IPv6, DokiLink mesh |
-| [Storage](Storage.es) | 5 drivers, VFS, requisitos de kernel para overlay2, btrfs/zfs, FUSE rootless, store content-addressable |
+## Estructura del Repositorio
 
-## Layout del repositorio
+La wiki espeja el arbol de codigo en `pkg/`, `internal/`, y `cmd/`.
+Lee [Arquitectura](Architecture.es) primero, luego profundiza en
+paquetes especificos.
 
-La wiki refleja el árbol de fuentes en `pkg/`, `internal/` y `cmd/`. Si quieres entender el código, lee [Arquitectura](Architecture.es) primero, luego sumérgete en paquetes específicos.
+## Contribuir a la Wiki
 
-## Contribuir a la wiki
-
-La fuente de la wiki se almacena en `.wiki/` en la raíz del repo. Para añadir una página:
+El fuente de la wiki vive en `.wiki/` en la raiz del repo. Para anadir
+una pagina:
 
 1. Crea `Tu-Pagina.md` en `.wiki/`
-2. Opcionalmente añade `Tu-Pagina.es.md` para la versión en español
-3. Añade un link desde el ToC de [Home.md](Home)
-4. Commit + push a `main`
-5. El workflow de CI `.github/workflows/wiki-sync.yml` empuja la página a la Wiki de GitHub, la rama Wiki de GitLab y la Wiki de Codeberg
+2. Opcionalmente anade `Tu-Pagina.es.md` para la version en espanol
+3. Anade un link desde esta pagina
+4. Commit y push a `main`
+5. El workflow de CI sincroniza a GitHub Wiki, GitLab Wiki y Codeberg Wiki
 
-Las páginas de la wiki usan [GitHub Flavored Markdown](https://github.github.com/gfm/) con anchors en kebab-case (`#niveles-de-aislamiento`). Los bloques de código deben tener tag (` ```bash `, ` ```yaml `, ` ```dockerfile `). Tablas para contenido comparativo; bloques [Mermaid](https://mermaid.js.org/) para diagramas (renderizado nativo en GitHub, GitLab y Codeberg).
+Las paginas usan GitHub Flavored Markdown con bloques de codigo
+etiquetados.
 
 ## Mirrors
 
-Esta wiki está sincronizada en tres forges. Todas las ediciones deben ir a GitHub (`OpceanAI/Doki`), que es la fuente de verdad:
+Todas las ediciones van a GitHub (`OpceanAI/Doki`), la fuente de
+verdad:
 
-- **GitHub**: [OpceanAI/Doki/wiki](https://github.com/OpceanAI/Doki/wiki) (primario)
-- **GitLab**: [aguitauwu/doki/-/wikis](https://gitlab.com/aguitauwu/doki/-/wikis/home) (mirror, rama `wiki`)
-- **Codeberg**: [aguitauwu/Doki/wiki](https://codeberg.org/aguitauwu/Doki/wiki) (mirror, repo separado)
-
-Si encuentras una divergencia entre mirrors, abre un issue en GitHub.
+- GitHub: [OpceanAI/Doki/wiki](https://github.com/OpceanAI/Doki/wiki)
+- GitLab: [aguitauwu/doki/-/wikis](https://gitlab.com/aguitauwu/doki/-/wikis/home)
+- Codeberg: [aguitauwu/Doki/wiki](https://codeberg.org/aguitauwu/Doki/wiki)

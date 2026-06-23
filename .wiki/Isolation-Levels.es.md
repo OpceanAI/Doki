@@ -1,391 +1,200 @@
 # Niveles de aislamiento
 
-Doki v0.10.0 soporta **12 niveles de aislamiento** — desde un sandbox WASM sin syscalls hasta microVMs a nivel de hardware. El registro de runners en `pkg/runtime/registry.go` prueba el host y elige el modo más fuerte que funcione. También puedes forzar un modo específico con `doki run --runtime <mode>`.
+<sub>[DOC: NIVELES-AISLAMIENTO]</sub>
 
-## Árbol de decisión
+Doki v0.11.0. Doce modos de runner. Desde un sandbox WASM sin syscalls hasta microVMs a nivel de hardware. El registro de runners en <kbd>pkg/runtime/registry.go</kbd> prueba el host y selecciona el modo mas fuerte que funcione. Se puede forzar un modo especifico con <kbd>doki run --runtime &lt;mode&gt;</kbd>.
 
-```mermaid
-%%{init: {'theme':'base', 'themeVariables':{'primaryColor':'#1e1e2e','primaryTextColor':'#cdd6f4','primaryBorderColor':'#89b4fa','lineColor':'#89b4fa','fontFamily':'ui-monospace,SFMono-Regular,Menlo,Monaco,monospace'}}}%%
-flowchart TD
-    Host(("Host"))
-    Host --- HW
-    Host --- Kernel
-    Host --- Emu
-    Host --- Userspace
-    Host --- Compat
-    Host --- Sandbox
-    Host --- None
+<hr>
 
-    subgraph HW ["Hardware VM"]
-        PKVM["pKVM / Microdroid<br/>Android 15+ VM protegida"]
-        MicroVM["MicroVM<br/>KVM · Gunyah · GenieZone · Halla"]
-    end
+## Matriz de modos
 
-    subgraph Kernel ["Kernel"]
-        Sysbox["Sysbox<br/>DinD rootless"]
-        Namespaces["Namespaces<br/>default rootful"]
-        GVisor["gVisor<br/>defense-in-depth"]
-    end
+<sub>[MATRIX]</sub>
 
-    subgraph Emu ["Emulación"]
-        FEX["FEX-Emu<br/>x86 en ARM"]
-        QEMU["QEMU User<br/>cross-arch"]
-    end
+Columnas: modo, root requerido, nivel de aislamiento, plataformas, requisitos de kernel, overhead.
 
-    Userspace["Proot<br/>default en Android"]
-    subgraph Compat ["Compat"]
-        Legacy32["Legacy32<br/>ARMv7 en ARM64"]
-        Chroot["Chroot<br/>solo filesystem"]
-    end
-
-    Sandbox["WASM<br/>código no confiable"]
-    None["Native<br/>cero overhead"]
+```text
+MODO        ROOT  AISLAMIENTO           PLATAFORMAS            KERNEL REQ     OVERHEAD
+────────────────────────────────────────────────────────────────────────────────────────
+wasm        no    sandbox user-space    cualquier runtime wasm n/a            minimo
+pkvm        si    hardware vm           android 15+ (tensor/sd) pKVM cap      5-20 MB RAM
+microvm    si    hardware vm           kvm/gunyah/geniezone   4.18+          5-20 MB RAM
+sysbox      no    kernel DinD           linux 4.18+            user ns        moderado
+namespaces  si    kernel                linux 3.8+             cualquiera     insignificante
+gvisor      no    kernel user-space     linux 4.14+            cualquiera     ~20% CPU
+fex         no    emulacion x86 a ARM64 host arm64             n/a            ~30% CPU
+qemu-user   no    emulacion cross-arch  cualquiera con static  binfmt_misc    ~50% CPU
+proot       no    userspace ptrace      termux/android/linux   n/a            ~10% CPU
+legacy32   no    compat dual-arch      host arm64             binfmt_misc    insignificante
+chroot      si    filesystem            cualquier unix         n/a            minimo
+native      no    ninguno               cualquier              n/a            cero
 ```
 
-## Tabla resumen
-
-| Nivel | Modo | Aislamiento | Overhead | Caso de uso |
-|:-----:|:-----|:----------|:---------|:-----------|
-| 12 | WASM | Sandbox (user-space) | Mínimo | Código no confiable, serverless, plugins |
-| 11 | pKVM/Microdroid | Hardware (vm) | 5-20 MB RAM | Cómputo sensible en teléfonos/Chromebooks |
-| 10 | MicroVM | Hardware (vm) | 5-20 MB RAM | Seguridad de VM con velocidad de contenedor |
-| 9 | Sysbox | Kernel (DinD) | Moderado | Docker-in-Docker, runners CI |
-| 8 | Namespaces | Kernel | Insignificante | Multi-tenant confiable en servidores |
-| 7 | gVisor | Kernel en user-space | ~20% CPU | Defense-in-depth sin VM |
-| 6 | FEX-Emu | Emulación (x86→ARM) | ~30% CPU | x86 legacy en Apple Silicon |
-| 5 | QEMU User | Emulación (cross-arch) | ~50% CPU | Contenedores cross-arch |
-| 4 | Proot | Userspace (ptrace) | ~10% CPU | Default Android, sin root |
-| 3 | Legacy32 | Compatibilidad dual-arch | Insignificante | Contenedores ARMv7 en ARM64 |
-| 2 | Chroot | Filesystem | Mínimo | Testing rápido, etapas de build |
-| 1 | Native | Ninguno | Cero | Carga confiable, fallback |
-
-## Cobertura detallada
-
-Cada nivel se implementa en `pkg/runtime/runners/<mode>/runner.go` (donde aplique) o directamente en `pkg/runtime/runtime.go` para los modos legacy.
-
-### Nivel 12: WASM
-
-**Qué es**: Corre módulos WASI (WebAssembly System Interface) usando `wasmedge` o `iwasm` como runtime. El módulo nunca hace un syscall real — todo I/O es mediado por el host WASM.
-
-**Requisitos**:
-- `wasmedge` o `iwasm` en `$PATH`
-- Una imagen OCI con `mediatype: application/wasm` (o `doki run --runtime wasm` en cualquier imagen con un media type `wasm-oci`)
-
-**Casos de uso**:
-- Código de usuario no confiable (plugins, webhooks)
-- Funciones serverless
-- Microservicios políglotas
-- Cargas sensibles a cold-start
-
-**Rendimiento**: Overhead mínimo. Los módulos WASM compilan a código nativo al cargar. Cold start ~1-5ms.
-
-**Trade-offs**:
-- Superficie de syscall limitada (no hay `fork`, `execve` real, etc.)
-- Algunas librerías (Go `os/exec`, Node `child_process`) no funcionan
-- Networking requiere extensiones de socket WASI
-
-**Referencia de código**: `pkg/runtime/runners/wasm/runner.go` (planeado — aún no conectado a `startProcess()`)
-
-**Estado**: No testeado. La detección funciona (`which wasmedge`), runtime no validado en cargas de producción.
-
-### Nivel 11: pKVM / Microdroid
-
-**Qué es**: Protected Kernel-based Virtual Machine, el hipervisor de Google en Android 15+. El kernel host corre en EL1 (o Ring 0), los guests VM corren en un mundo protegido separado. La memoria está cifrada y aislada a nivel de hardware.
-
-**Requisitos**:
-- Dispositivo Android 15+ con kernel pKVM-capable (Tensor G3/G4, Snapdragon 8 Gen 3/4)
-- `/dev/kvm` legible
-- `microdroid` (el microVM init de Android) disponible — Doki lo incluye
-
-**Casos de uso**:
-- Cómputo sensible en móvil (datos de salud, financieros)
-- Multi-tenant en ChromeOS
-- Inferencia de IA aislada en dispositivos edge
-
-**Rendimiento**: Casi nativo. ~5-20 MB RAM de overhead por guest. Tiempo de boot ~50ms.
-
-**Trade-offs**:
-- Solo disponible en hardware específico
-- Requiere soporte del lado del kernel (algunos ROMs lo desactivan)
-- Sin passthrough de GPU (planeado para v1.0)
-
-**Referencia de código**: `pkg/runtime/runners/pkvm/runner.go` (planeado)
-
-**Estado**: No testeado. La detección funciona, no hay hardware compatible disponible en CI.
-
-### Nivel 10: MicroVM
-
-**Qué es**: VMs ligeras vía crosvm (Chromium OS VMM) o Firecracker (AWS). Bootea en microsegundos, expone un modelo de dispositivo mínimo.
-
-**Requisitos**:
-
-| Chip | Hipervisor | VMM | Generación |
-|:-----|:-----------|:----|:-----------|
-| Qualcomm Snapdragon 8 Gen 1/2/3/4 | Gunyah | crosvm | 2022+ |
-| MediaTek Dimensity 7200/8200/9200/9300 | GenieZone | crosvm | 2023+ |
-| Samsung Exynos 2200/2400 | Halla | crosvm | 2022+ |
-| Google Tensor G1/G2/G3/G4 | KVM | crosvm | 2021+ |
-| Intel Core/Xeon | KVM | Firecracker | Todos los KVM-capable |
-| AMD Ryzen/EPYC | KVM | Firecracker | Todos los KVM-capable |
-
-**Casos de uso**:
-- Serverless multi-tenant (Firecracker en AWS Lambda)
-- Cómputo edge con aislamiento fuerte
-- Entornos de desarrollo que necesitan un kernel Linux "real"
-
-**Rendimiento**: 5-20 MB RAM de overhead. Tiempo de boot ~5-50ms. Throughput de I/O dentro del 5% del nativo.
-
-**Trade-offs**:
-- Más memoria que contenedores (cada guest necesita su propio kernel)
-- El boot es más lento que contenedores (todavía <50ms con crosvm)
-- Passthrough de dispositivos limitado
-
-**Referencia de código**: `internal/dokivm/`
-
-**Estado**: No testeado. La detección funciona.
-
-### Nivel 9: Sysbox
-
-**Qué es**: [Sysbox](https://github.com/nestybox/sysbox) es un "runc runtime" que mejora los contenedores OCI con soporte de namespaces anidados. Permite correr un daemon Docker completo dentro de un contenedor, con aislamiento apropiado de UTS/PID/IPC/Mount.
-
-**Requisitos**:
-- `sysbox-runc` en `$PATH` (binario separado de `runc`)
-- Linux kernel 4.18+
-- User namespaces habilitados
-
-**Casos de uso**:
-- Docker-in-Docker (runners CI, granjas de build)
-- Kubernetes-in-Kubernetes
-- CI/CD multi-stage con operaciones privilegiadas
-
-**Rendimiento**: Casi nativo para la mayoría de cargas. ~5% overhead para operaciones de namespace anidadas.
-
-**Trade-offs**:
-- Añade un límite de seguridad que puede ser complicado de debuggear
-- Algunas operaciones `ptrace` no funcionan cruzando el límite anidado
-- Requiere sysbox-runc instalado por separado
-
-**Referencia de código**: `pkg/runtime/runners/sysbox/runner.go` (planeado)
-
-**Estado**: No testeado. La detección funciona.
-
-### Nivel 8: Namespaces
-
-**Qué es**: Namespaces estándar de Linux — UTS, PID, IPC, Mount, Net, User, Cgroup. Es lo que Docker/Podman usan por defecto en modo rootful.
-
-**Requisitos**:
-- Linux kernel 3.8+ (la mayoría de las distros modernas)
-- Acceso root (o user namespaces para rootless)
-- `/proc/self/ns/` accesible
-
-**Casos de uso**:
-- Cargas de servidores en producción
-- Despliegues multi-tenant confiables
-- Donde sea que tengas root y quieras aislamiento nativo de contenedores
-
-**Rendimiento**: Overhead insignificante. <1% CPU, <0.5% memoria. El mejor de todos los modos a nivel de kernel.
-
-**Trade-offs**:
-- Requiere root (o setup de user namespace)
-- Los exploits de kernel pueden escapar (CVE-2022-0185, CVE-2022-0492)
-- No aísla recursos del kernel como `/proc`, `/sys`
-
-**Referencia de código**: `pkg/runtime/runtime.go:startWithNamespaces()`
-
-**Estado**: Testeado.
-
-### Nivel 7: gVisor
-
-**Qué es**: [gVisor](https://gvisor.dev/) de Google es un kernel en user-space. El runtime `runsc` intercepta syscalls en el contenedor y los re-implementa en Go. ~70% de los syscalls nunca llega al kernel host.
-
-**Requisitos**:
-- `runsc` en `$PATH`
-- Linux kernel 4.14+
-- Sin acceso a raw sockets (gVisor no soporta todos los tipos de socket)
-
-**Casos de uso**:
-- Multi-tenant con código no confiable
-- Defense-in-depth (incluso si el kernel tiene una vulnerabilidad, gVisor la captura)
-- Sandboxing de servicios third-party
-
-**Rendimiento**: ~20% overhead de CPU. Overhead de memoria mínimo. Throughput de red ~70% del nativo.
-
-**Trade-offs**:
-- Algunos syscalls no implementados (raw sockets, ciertos ioctls)
-- Tamaño de imagen mayor (gVisor distribuye su propio kernel basado en Go)
-- No todas las aplicaciones funcionan (cualquier cosa que use `perf`, `eBPF` directamente)
-
-**Referencia de código**: `pkg/runtime/runners/gvisor/runner.go` (planeado)
-
-**Estado**: No testeado. La detección funciona.
-
-### Nivel 6: FEX-Emu
-
-**Qué es**: FEXInterpreter (o Box64) traduce binarios x86/x86_64 a ARM64 en runtime. El contenedor corre una imagen x86, FEX traduce cada instrucción al vuelo.
-
-**Requisitos**:
-- `FEXInterpreter` o `box64` en `$PATH`
-- Host ARM64
-- Imagen x86 o x86_64
-
-**Casos de uso**:
-- Correr contenedores x86 en Apple Silicon (Mac mini, MacBook)
-- Aplicaciones x86 legacy en servidores ARM (Graviton, Ampere)
-- Desarrollo cross-architecture
-
-**Rendimiento**: ~30% overhead de CPU para cargas compute-bound. I/O casi nativo. Overhead de memoria ~20%.
-
-**Trade-offs**:
-- No funciona para operaciones a nivel de kernel (KPTI, vDSO)
-- Algunas instrucciones AVX/AVX2 no se traducen
-- Mayor footprint de memoria (caché de traducción)
-
-**Referencia de código**: `pkg/runtime/runners/fex/runner.go` (planeado)
-
-**Estado**: No testeado. La detección funciona.
-
-### Nivel 5: QEMU User
-
-**Qué es**: Emulación user-mode de QEMU. Corre binarios de una arquitectura diferente vía `qemu-aarch64-static`, `qemu-x86_64-static`, etc.
-
-**Requisitos**:
-- `qemu-<arch>-static` en `$PATH` (o binfmt_misc registrado)
-- Cualquier arquitectura de host
-
-**Casos de uso**:
-- Desarrollo cross-architecture (build en x86, test en ARM)
-- Correr contenedores ARMv7 en ARM64 (el caso canónico de "legacy32")
-- Correr contenedores ARM en servidores x86 (raro pero soportado)
-
-**Rendimiento**: ~50% overhead de CPU. El más lento de los modos emulados.
-
-**Trade-offs**:
-- Más lento que FEX-Emu para x86→ARM
-- Sin aceleración KVM (user-mode, no system-mode)
-- Algunas features específicas de Linux (ej. `prctl(PR_SET_NAME)`) funcionan diferente
-
-**Referencia de código**: `pkg/runtime/runners/qemu/runner.go` (planeado)
-
-**Estado**: No testeado. La detección funciona.
-
-### Nivel 4: Proot
-
-**Qué es**: [PRoot](https://proot-me.github.io/) es una implementación userspace de `chroot`/`mount` que usa `ptrace` para interceptar syscalls. No requiere root.
-
-**Requisitos**:
-- `proot` en `$PATH` (o fallback al `doki-proot` distribuido con Doki en v0.9.2; v0.9.3+ usa `FindProotBinary()`)
-- Termux / Android / cualquier Linux sin root
-
-**Casos de uso**:
-- Runtime por defecto en Android/Termux
-- Servidores Linux rootless
-- Testing de contenedores sin acceso root
-
-**Rendimiento**: ~10% overhead de CPU por ptrace. Overhead de memoria mínimo.
-
-**Trade-offs**:
-- Más lento que namespaces nativos
-- No funciona para algunos syscalls (raw `mount`, `pivot_root`)
-- Específico de Termux: `LD_PRELOAD` debe ser eliminado (v0.9.3+ lo maneja)
-
-**Referencia de código**: `pkg/runtime/runtime.go:retryWithQemu()` (el fallback), `internal/proot/manager.go:FindProotBinary()`
-
-**Estado**: Testeado en Termux/Android.
-
-### Nivel 3: Legacy32
-
-**Qué es**: Correr contenedores ARMv7 en kernels ARM64 vía `binfmt_misc` y soporte multiarch. El contenedor cree que está en un sistema ARMv7; el kernel es ARM64 con compatibilidad ARMv7.
-
-**Requisitos**:
-- Kernel host ARM64
-- `binfmt_misc` registrado para ARMv7 (`update-binfmts --display qemu-arm`)
-- `qemu-arm-static` (para paths sin binfmt)
-
-**Casos de uso**:
-- Correr contenedores ARM de 32 bits en servidores ARM de 64 bits
-- Compatibilidad con imágenes viejas solo-32-bits
-- Dispositivos edge con firmware de 32 bits
-
-**Rendimiento**: Overhead insignificante cuando `binfmt_misc` está configurado. El kernel ARM64 maneja los syscalls ARMv7 nativamente.
-
-**Trade-offs**:
-- Sin addressing de memoria de 32 bits real (siempre 64-bit)
-- Algunas operaciones solo-32-bits (ej. syscalls `OABI`) no soportadas
-- Punteros de 32 bits en algunos casos edge
-
-**Referencia de código**: `pkg/runtime/runners/legacy32/runner.go` (planeado)
-
-**Estado**: No testeado. La detección funciona.
-
-### Nivel 2: Chroot
-
-**Qué es**: `chroot(2)` plano para aislamiento de filesystem. Sin namespace de PID, sin namespace de red, sin namespace de user. Solo cambia el directorio root.
-
-**Requisitos**:
-- Acceso root
-- Eso es todo
-
-**Casos de uso**:
-- Aislamiento rápido de filesystem para tests
-- Etapas de build en CI (ej. building de paquetes Debian)
-- Cuando ningún otro modo funciona
-
-**Rendimiento**: Overhead insignificante.
-
-**Trade-offs**:
-- Sin aislamiento real — el proceso puede escapar vía `/proc`
-- Requiere root
-- No apto para multi-tenant
-
-**Referencia de código**: `pkg/runtime/runtime.go:startWithChroot()`
-
-**Estado**: No testeado.
-
-### Nivel 1: Native
-
-**Qué es**: Sin aislamiento en absoluto. El contenedor es solo un directorio + variables de entorno. El proceso corre directamente en el host.
-
-**Requisitos**: Ninguno. Siempre disponible.
-
-**Casos de uso**:
-- Cargas confiables
-- Cuando quieres máximo rendimiento y no te importa el aislamiento
-- Fallback cuando nada más funciona
-- Modo CLI de macOS
-
-**Rendimiento**: Cero overhead.
-
-**Trade-offs**:
-- Sin aislamiento. El proceso puede hacer cualquier cosa que el usuario host pueda.
-- No usar para código no confiable.
-
-**Referencia de código**: `pkg/runtime/runtime.go:startWithNative()`
-
-**Estado**: Testeado.
-
-## Forzando un modo
+<hr>
+
+## Prioridad de seleccion automatica
+
+<sub>[PRIORITY]</sub>
+
+La deteccion corre en orden estricto. El primer modo cuyos requisitos se cumplen gana. El orden va de aislamiento mas fuerte a mas debil.
+
+```text
+PRIORIDAD  MODO        PROBE
+─────────────────────────────────────────────────────────────
+1          wasm        which wasmedge || which iwasm
+2          pkvm        /dev/kvm legible Y kernel android 15+
+3          microvm    /dev/kvm legible O nodo gunyah/geniezone
+4          sysbox      which sysbox-runc
+5          gvisor      which runsc
+6          namespaces  uid == 0 Y /proc/self/ns accesible
+7          fex         which FEXInterpreter OR which box64
+8          qemu-user   which qemu-<arch>-static
+9          proot       which proot OR fallback doki-proot
+10         legacy32   uname -m == aarch64 Y binfmt_misc registrado
+11         chroot      uid == 0
+12         native      siempre disponible, ultimo recurso
+```
+
+Override con <kbd>--runtime</kbd>. El override salta la probe y fuerza el modo. Fallo al inicializar aborta el run.
 
 ```bash
-# Fuerza proot incluso si hay namespaces disponibles
 doki run --runtime proot alpine echo hola
-
-# Fuerza microVM (fallará si no hay /dev/kvm)
 doki run --runtime microvm alpine echo hola
-
-# Lista modos disponibles
 doki info --format json | jq '.Isolations'
 ```
 
-## Niveles futuros (planeados para v0.10+)
+<hr>
 
-- **Landlock** (v0.10): sandboxing a nivel de kernel encima de cualquier otro modo, restringe acceso a filesystem
-- **Aislamiento de io_uring** (v0.10): ring de io_uring por contenedor con set de opcodes restringido
-- **GPU passthrough** (v0.10): para cargas de AI/ML en microVM
-- **Computación confidencial** (v1.0): SEV-SNP / TDX en AMD/Intel, TrustZone en ARM
+## WASM
+
+<sub>[MODO 12]</sub>
+
+Corre modulos WASI via <kbd>wasmedge</kbd> o <kbd>iwasm</kbd>. El modulo nunca hace un syscall real. Todo I/O es mediado por el host WASM. Cold start ~1-5ms. Requiere una imagen OCI con media type <kbd>application/wasm</kbd> o config <kbd>wasm-oci</kbd>. Superficie de syscall limitada. Sin <kbd>fork</kbd> o <kbd>execve</kbd> reales. Algunas librerias fallan. Networking requiere extensiones de socket WASI. Deteccion via <kbd>which wasmedge</kbd>. Runtime no validado en cargas de produccion. Codigo: <kbd>pkg/runtime/runners/wasm/runner.go</kbd> (planeado).
+
+<hr>
+
+## pKVM / Microdroid
+
+<sub>[MODO 11]</sub>
+
+Protected Kernel-based Virtual Machine. Hipervisor de Google en Android 15+. El kernel host corre en EL1. Los guests VM corren en un mundo protegido separado. Memoria cifrada y aislada a nivel de hardware. Requiere kernel pKVM-capable (Tensor G3/G4, Snapdragon 8 Gen 3/4), <kbd>/dev/kvm</kbd> legible, <kbd>microdroid</kbd> (Doki lo incluye). Boot time ~50ms. Overhead RAM 5-20 MB por guest. Sin passthrough de GPU (planeado v1.0). Deteccion funciona. Sin hardware compatible en CI. Codigo: <kbd>pkg/runtime/runners/pkvm/runner.go</kbd> (planeado).
+
+<hr>
+
+## MicroVM
+
+<sub>[MODO 10]</sub>
+
+VMs ligeras via crosvm (Chromium OS VMM) o Firecracker (AWS). Bootea en microsegundos. Modelo de dispositivo minimo. Requiere <kbd>/dev/kvm</kbd> legible o nodo vendor-specific (Gunyah/GenieZone/Halla). Overhead RAM 5-20 MB. Boot time 5-50ms. Throughput I/O dentro del 5% del nativo. Cada guest necesita su propio kernel. Passthrough de dispositivos limitado.
+
+```text
+CHIP                              HIPERVISOR  VMM         GEN
+──────────────────────────────────────────────────────────────────
+Qualcomm Snapdragon 8 Gen 1-4     Gunyah      crosvm      2022+
+MediaTek Dimensity 7200-9300      GenieZone   crosvm      2023+
+Samsung Exynos 2200/2400          Halla       crosvm      2022+
+Google Tensor G1-G4               KVM         crosvm      2021+
+Intel Core/Xeon                   KVM         Firecracker cualquiera kvm-capable
+AMD Ryzen/EPYC                    KVM         Firecracker cualquiera kvm-capable
+```
+
+Codigo: <kbd>internal/dokivm/</kbd>. Deteccion funciona. No testeado.
+
+<hr>
+
+## Sysbox
+
+<sub>[MODO 9]</sub>
+
+Sysbox es un runtime compatible con runc que anade soporte de namespaces anidados a contenedores OCI. Permite correr un daemon Docker completo dentro de un contenedor con aislamiento apropiado de UTS/PID/IPC/Mount. Requiere <kbd>sysbox-runc</kbd> en <kbd>$PATH</kbd>, Linux kernel 4.18+, user namespaces habilitados. Rendimiento casi nativo. ~5% overhead para operaciones de namespace anidadas. Algunas operaciones <kbd>ptrace</kbd> fallan cruzando el limite anidado. Requiere sysbox-runc instalado por separado. Codigo: <kbd>pkg/runtime/runners/sysbox/runner.go</kbd> (planeado). Deteccion funciona. No testeado.
+
+<hr>
+
+## Namespaces
+
+<sub>[MODO 8]</sub>
+
+Namespaces estandar de Linux: UTS, PID, IPC, Mount, Net, User, Cgroup. El modo rootful por defecto que usan Docker y Podman. Requiere Linux kernel 3.8+, root o user namespaces, <kbd>/proc/self/ns/</kbd> accesible. Overhead insignificante: menos de 1% CPU, menos de 0.5% memoria. El mejor de los modos a nivel de kernel. Exploits de kernel pueden escapar (CVE-2022-0185, CVE-2022-0492). No aisla recursos del kernel como <kbd>/proc</kbd> y <kbd>/sys</kbd>. Codigo: <kbd>pkg/runtime/runtime.go:startWithNamespaces()</kbd>. Testeado.
+
+<hr>
+
+## gVisor
+
+<sub>[MODO 7]</sub>
+
+Kernel user-space de Google. El runtime <kbd>runsc</kbd> intercepta syscalls y los re-implementa en Go. ~70% de los syscalls nunca llega al kernel host. Requiere <kbd>runsc</kbd> en <kbd>$PATH</kbd>, Linux kernel 4.14+, sin acceso a raw sockets. ~20% overhead de CPU. Throughput de red ~70% del nativo. Algunos syscalls no implementados (raw sockets, ciertos ioctls). Tamano de imagen mayor. No todas las aplicaciones funcionan (cualquier cosa que use <kbd>perf</kbd> o <kbd>eBPF</kbd> directamente). Codigo: <kbd>pkg/runtime/runners/gvisor/runner.go</kbd> (planeado). Deteccion funciona. No testeado.
+
+<hr>
+
+## FEX-Emu
+
+<sub>[MODO 6]</sub>
+
+FEXInterpreter o Box64 traduce binarios x86/x86_64 a ARM64 en runtime. El contenedor corre una imagen x86. FEX traduce cada instruccion al vuelo. Requiere <kbd>FEXInterpreter</kbd> o <kbd>box64</kbd> en <kbd>$PATH</kbd>, host ARM64, imagen x86 o x86_64. ~30% overhead de CPU para cargas compute-bound. I/O casi nativo. Overhead de memoria ~20% por la cache de traduccion. No maneja operaciones a nivel de kernel (KPTI, vDSO). Algunas instrucciones AVX/AVX2 no se traducen. Codigo: <kbd>pkg/runtime/runners/fex/runner.go</kbd> (planeado). Deteccion funciona. No testeado.
+
+<hr>
+
+## QEMU User
+
+<sub>[MODO 5]</sub>
+
+Emulacion user-mode de QEMU. Corre binarios de una arquitectura diferente via <kbd>qemu-aarch64-static</kbd>, <kbd>qemu-x86_64-static</kbd>, etc. Requiere <kbd>qemu-&lt;arch&gt;-static</kbd> en <kbd>$PATH</kbd> o binfmt_misc registrado. Cualquier arquitectura de host. ~50% overhead de CPU. El mas lento de los modos emulados. Sin aceleracion KVM (user-mode, no system-mode). Algunas features especificas de Linux (ej. <kbd>prctl(PR_SET_NAME)</kbd>) funcionan diferente. Codigo: <kbd>pkg/runtime/runners/qemu/runner.go</kbd> (planeado). Deteccion funciona. No testeado.
+
+<hr>
+
+## Proot
+
+<sub>[MODO 4]</sub>
+
+PRoot es una implementacion userspace de <kbd>chroot</kbd>/<kbd>mount</kbd> que usa <kbd>ptrace</kbd> para interceptar syscalls. No requiere root. Requiere <kbd>proot</kbd> en <kbd>$PATH</kbd> o fallback al <kbd>doki-proot</kbd> distribuido con Doki (v0.9.2); v0.9.3+ usa <kbd>FindProotBinary()</kbd>. Runtime por defecto en Android/Termux. ~10% overhead de CPU por ptrace. Mas lento que namespaces nativos. Algunos syscalls fallan (raw <kbd>mount</kbd>, <kbd>pivot_root</kbd>). En Termux, <kbd>LD_PRELOAD</kbd> debe eliminarse (v0.9.3+ lo maneja). Codigo: <kbd>pkg/runtime/runtime.go:retryWithQemu()</kbd>, <kbd>internal/proot/manager.go:FindProotBinary()</kbd>. Testeado en Termux/Android.
+
+<hr>
+
+## Legacy32
+
+<sub>[MODO 3]</sub>
+
+Corre contenedores ARMv7 en kernels ARM64 via <kbd>binfmt_misc</kbd> y soporte multiarch. El contenedor cree que corre en ARMv7. El kernel es ARM64 con compatibilidad ARMv7. Requiere kernel host ARM64, <kbd>binfmt_misc</kbd> registrado para ARMv7, <kbd>qemu-arm-static</kbd> para paths sin binfmt. Overhead insignificante cuando <kbd>binfmt_misc</kbd> esta configurado. El kernel ARM64 maneja syscalls ARMv7 nativamente. Sin addressing de memoria 32-bit real (siempre 64-bit). Algunas operaciones solo-32-bits (syscalls OABI) no soportadas. Codigo: <kbd>pkg/runtime/runners/legacy32/runner.go</kbd> (planeado). Deteccion funciona. No testeado.
+
+<hr>
+
+## Chroot
+
+<sub>[MODO 2]</sub>
+
+<kbd>chroot(2)</kbd> plano para aislamiento de filesystem. Sin namespace de PID, sin namespace de red, sin namespace de user. Cambia el directorio root unicamente. Requiere root. Overhead insignificante. Sin aislamiento real. El proceso puede escapar via <kbd>/proc</kbd>. Requiere root. No apto para multi-tenant. Codigo: <kbd>pkg/runtime/runtime.go:startWithChroot()</kbd>. No testeado.
+
+<hr>
+
+## Native
+
+<sub>[MODO 1]</sub>
+
+Sin aislamiento. El contenedor es un directorio mas variables de entorno. El proceso corre directamente en el host. Sin requisitos. Siempre disponible. Cero overhead. Sin aislamiento. El proceso puede hacer cualquier cosa que el usuario host pueda. No usar para codigo no confiable. Fallback cuando nada mas funciona. Tambien el modo CLI de macOS. Codigo: <kbd>pkg/runtime/runtime.go:startWithNative()</kbd>. Testeado.
+
+<hr>
+
+## Niveles futuros
+
+<sub>[FUTURE]</sub>
+
+Planeados para v0.11.0+ y siguientes.
+
+```text
+NIVEL                 VERSION  DESCRIPCION
+──────────────────────────────────────────────────────────────────────────
+landlock              v0.11   sandbox kernel sobre cualquier modo, restringe fs
+io_uring isolation    v0.11   ring por contenedor con set de opcodes restringido
+gpu passthrough       v0.11   para cargas AI/ML en microVM
+confidential compute  v1.0    SEV-SNP / TDX en AMD/Intel, TrustZone en ARM
+```
+
+<hr>
 
 ## Referencia
 
-- Fuente: `pkg/runtime/registry.go`, `pkg/runtime/runners/*/`
-- Lógica de decisión: `pkg/runtime/runtime.go:detectMode()`
-- Fallback de proot: `pkg/runtime/runtime.go:retryWithQemu()`
-- Auto-detección: `pkg/runtime/registry.go:hostPlatform()`
+<sub>[SOURCE]</sub>
+
+- Fuente: <kbd>pkg/runtime/registry.go</kbd>, <kbd>pkg/runtime/runners/*/</kbd>
+- Logica de decision: <kbd>pkg/runtime/runtime.go:detectMode()</kbd>
+- Fallback de proot: <kbd>pkg/runtime/runtime.go:retryWithQemu()</kbd>
+- Auto-deteccion: <kbd>pkg/runtime/registry.go:hostPlatform()</kbd>
