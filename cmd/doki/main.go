@@ -67,10 +67,7 @@ func dispatch(c *cli.DokiCLI, name string, args []string) {
 		if subCmd, ok := sub.SubCommands[args[0]]; ok {
 			handlerArgs := args[1:]
 			if subCmd.Handler != nil {
-				if err := subCmd.Handler(c, handlerArgs); err != nil {
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-					os.Exit(1)
-				}
+				handleError(subCmd.Handler(c, handlerArgs))
 			}
 			return
 		}
@@ -1160,6 +1157,18 @@ Examples:
   doki deps install proot`,
 		Handler: handleDeps,
 	},
+	"doctor": {
+		Name:    "doctor",
+		Aliases: []string{"diagnose"},
+		Help: `Usage: doki doctor
+
+Check whether the host has the tools Doki needs for the current platform.
+
+Examples:
+  doki doctor
+  doki deps ls`,
+		Handler: handleDoctor,
+	},
 }
 
 // groupCommands are top-level management command groups that proxy to existing commands.
@@ -1463,16 +1472,38 @@ func depsList() error {
 
 func depsCheck() error {
 	results := deps.CheckSystemDeps()
-	var missing []string
-	for _, r := range results {
-		if r.Required && !r.Installed {
+	summary := deps.SummarizeSystemDeps(results)
+	if !summary.Healthy() {
+		missing := make([]string, 0, len(summary.MissingRequired))
+		for _, r := range summary.MissingRequired {
 			missing = append(missing, r.Name)
 		}
-	}
-	if len(missing) > 0 {
 		return fmt.Errorf("required dependencies missing: %s", strings.Join(missing, ", "))
 	}
-	fmt.Println("All required dependencies are installed.")
+	fmt.Printf("All required dependencies are installed (%d/%d detected).\n", summary.Installed, summary.Total)
+	return nil
+}
+
+func handleDoctor(_ *cli.DokiCLI, _ []string) error {
+	results := deps.CheckSystemDeps()
+	summary := deps.SummarizeSystemDeps(results)
+	fmt.Printf("Doki doctor: %d/%d host tools detected.\n", summary.Installed, summary.Total)
+	if len(summary.MissingRequired) > 0 {
+		fmt.Println("\nMissing required dependencies:")
+		for _, r := range summary.MissingRequired {
+			fmt.Printf("  - %s: %s\n", r.Name, r.InstallHint)
+		}
+	}
+	if len(summary.MissingOptional) > 0 {
+		fmt.Println("\nOptional accelerators not found:")
+		for _, r := range summary.MissingOptional {
+			fmt.Printf("  - %s: %s\n", r.Name, r.InstallHint)
+		}
+	}
+	if !summary.Healthy() {
+		return fmt.Errorf("host is missing required dependencies")
+	}
+	fmt.Println("\nHost is ready for Doki's required runtime path.")
 	return nil
 }
 
@@ -1674,7 +1705,7 @@ func cleanIDs(args []string) []string {
 func runWithDistro(_ *cli.DokiCLI, distroName string, args []string) error {
 	home, _ := os.UserHomeDir()
 	if home == "" {
-		home = "/data/data/com.termux/files/home"
+		home = filepath.Dir(common.DataDir())
 	}
 
 	// Resolve version: alpine:3.19 -> alpine, 3.19

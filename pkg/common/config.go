@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -66,7 +67,7 @@ func SaveConfig(cfg *DokiConfig) error {
 	}
 
 	configDir := filepath.Join(home, DefaultConfigDir)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return err
 	}
 
@@ -75,8 +76,17 @@ func SaveConfig(cfg *DokiConfig) error {
 	if err != nil {
 		return err
 	}
+	data = append(data, '\n')
 
-	return os.WriteFile(configPath, data, 0644)
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Chmod(configPath, 0600)
 }
 
 // DataDir returns the Doki data directory.
@@ -119,8 +129,7 @@ func OSType() string {
 }
 
 func isAndroid() bool {
-	_, err := os.Stat("/system/build.prop")
-	return err == nil
+	return IsTermux() || PathExists("/system/build.prop")
 }
 
 func isMacOS() bool {
@@ -134,7 +143,7 @@ func AppDataDir() string {
 		return filepath.Join(home, "Library", "Application Support", "doki")
 	}
 	if isAndroid() {
-		return "/data/data/com.termux/files/usr/var/lib/doki"
+		return filepath.Join(TermuxPrefix(), "var", "lib", "doki")
 	}
 	return "/var/lib/doki"
 }
@@ -145,7 +154,27 @@ func LogDir() string {
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, "Library", "Logs", "doki")
 	}
+	if isAndroid() {
+		return filepath.Join(TermuxPrefix(), "var", "log", "doki")
+	}
 	return "/var/log/doki"
+}
+
+// DefaultCRISocket returns the default Unix socket path for the CRI service.
+func DefaultCRISocket() string {
+	if s := os.Getenv("DOKI_CRI_SOCKET"); s != "" {
+		return strings.TrimPrefix(s, "unix://")
+	}
+	if IsTermux() {
+		return filepath.Join(TermuxPrefix(), "var", "run", "doki-cri.sock")
+	}
+	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
+		return filepath.Join(xdg, "doki-cri.sock")
+	}
+	if isMacOS() {
+		return filepath.Join(AppDataDir(), "doki-cri.sock")
+	}
+	return "/var/run/doki-cri.sock"
 }
 
 // HasSystemd checks if the system uses systemd as init.

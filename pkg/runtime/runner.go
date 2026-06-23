@@ -25,6 +25,63 @@ const (
 	ModeLegacy32                        // 11: Dual-arch ARMv7/ARM64 containers
 )
 
+// ExecutionModeInfo describes a runtime mode in user-facing terms. Level is a
+// rough isolation strength score where higher means stronger isolation.
+type ExecutionModeInfo struct {
+	Mode        ExecutionMode
+	Name        string
+	Level       int
+	Isolation   string
+	Platforms   []string
+	Description string
+}
+
+// Info returns user-facing metadata for an execution mode.
+func (m ExecutionMode) Info() ExecutionModeInfo {
+	switch m {
+	case ModePkDroid:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 12, Isolation: "hardware-pkvm", Platforms: []string{"android/arm64"}, Description: "Android pKVM or Microdroid hardware isolation"}
+	case ModeMicroVM:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 11, Isolation: "hardware-vm", Platforms: []string{"linux/amd64", "linux/arm64", "android/arm64"}, Description: "MicroVM isolation through KVM, crosvm, Firecracker, or QEMU"}
+	case ModeGVisor:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 10, Isolation: "user-space-kernel", Platforms: []string{"linux/amd64", "linux/arm64"}, Description: "gVisor syscall interception with a user-space kernel"}
+	case ModeWASM:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 9, Isolation: "wasm-sandbox", Platforms: []string{"linux/*", "android/*", "darwin/*"}, Description: "WASI/WASM sandbox for WebAssembly workloads"}
+	case ModeSysbox:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 8, Isolation: "user-namespace", Platforms: []string{"linux/amd64", "linux/arm64"}, Description: "Sysbox rootless Docker-in-Docker style isolation"}
+	case ModeNamespaces:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 7, Isolation: "linux-kernel", Platforms: []string{"linux/*"}, Description: "Linux namespaces and cgroups"}
+	case ModeProot:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 6, Isolation: "ptrace-userspace", Platforms: []string{"android/*", "linux/*"}, Description: "proot ptrace-based rootfs and syscall translation"}
+	case ModeQEMUUser:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 5, Isolation: "user-mode-emulation", Platforms: []string{"linux/*", "android/*"}, Description: "QEMU user-mode cross-architecture execution"}
+	case ModeFEX:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 4, Isolation: "user-mode-emulation", Platforms: []string{"linux/arm64", "android/arm64"}, Description: "FEX or Box64 x86 emulation on ARM64"}
+	case ModeLegacy32:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 3, Isolation: "compat", Platforms: []string{"linux/arm64", "android/arm64"}, Description: "ARMv7 compatibility on ARM64 hosts"}
+	case ModeChroot:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 2, Isolation: "chroot", Platforms: []string{"linux/*", "android/*"}, Description: "chroot-style filesystem isolation"}
+	case ModeNative:
+		return ExecutionModeInfo{Mode: m, Name: m.String(), Level: 1, Isolation: "none", Platforms: []string{"linux/*", "android/*", "darwin/*"}, Description: "direct host execution without container isolation"}
+	default:
+		return ExecutionModeInfo{Mode: m, Name: "unknown", Level: 0, Isolation: "unknown"}
+	}
+}
+
+// ExecutionModeInfos returns metadata for every known execution mode sorted by
+// descending isolation level.
+func ExecutionModeInfos() []ExecutionModeInfo {
+	modes := []ExecutionMode{
+		ModePkDroid, ModeMicroVM, ModeGVisor, ModeWASM, ModeSysbox, ModeNamespaces,
+		ModeProot, ModeQEMUUser, ModeFEX, ModeLegacy32, ModeChroot, ModeNative,
+	}
+	infos := make([]ExecutionModeInfo, 0, len(modes))
+	for _, mode := range modes {
+		infos = append(infos, mode.Info())
+	}
+	return infos
+}
+
 // String returns the human-readable name of the execution mode.
 func (m ExecutionMode) String() string {
 	switch m {

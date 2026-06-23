@@ -2,7 +2,7 @@
         build-release sha256 version-info
 
 GO = go
-PREFIX ?= /data/data/com.termux/files/usr
+PREFIX ?= $(shell if [ -d /data/data/com.termux/files/usr ]; then echo /data/data/com.termux/files/usr; else echo /usr/local; fi)
 RELEASES = releases
 
 # Set GIT_TAG, GIT_COMMIT, BUILD_DATE, BUILD_USER at build time.

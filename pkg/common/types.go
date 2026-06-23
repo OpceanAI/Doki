@@ -3,6 +3,7 @@ package common
 import (
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"time"
 )
@@ -131,16 +132,17 @@ type Ulimit struct {
 
 // DefaultConfig returns the default Doki configuration.
 func DefaultConfig() *DokiConfig {
+	dataDir := AppDataDir()
 	return &DokiConfig{
-		Root:           "/data/data/com.termux/files/usr/var/lib/doki",
-		SocketPath:     "/data/data/com.termux/files/usr/var/run/doki.sock",
+		Root:           dataDir,
+		SocketPath:     defaultDaemonSocketPath(),
 		StorageDriver:  "fuse-overlayfs",
 		DefaultNetwork: "bridge",
 		Debug:          false,
 		LogLevel:       "info",
 		Rootless:       true,
-		DataDir:        "/data/data/com.termux/files/usr/var/lib/doki",
-		ExecRoot:       "/data/data/com.termux/files/usr/var/run/doki",
+		DataDir:        dataDir,
+		ExecRoot:       filepath.Join(dataDir, "runtimes"),
 		DNS:            []string{"8.8.8.8", "8.8.4.4"},
 		VMImage:        "",
 		VMCPUs:         2,
@@ -414,12 +416,21 @@ func DefaultDaemonSocket() string {
 	if s := os.Getenv("DOCKER_HOST"); s != "" {
 		return strings.TrimPrefix(s, "unix://")
 	}
-	socket := "/data/data/com.termux/files/usr/var/run/doki.sock"
-	if _, err := os.Stat(socket); err == nil {
-		return socket
+	return defaultDaemonSocketPath()
+}
+
+func defaultDaemonSocketPath() string {
+	if IsTermux() {
+		return filepath.Join(TermuxPrefix(), "var", "run", "doki.sock")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".doki", "doki.sock")
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(os.TempDir(), "doki.sock")
+	}
+	if goruntime.GOOS == "darwin" {
+		return filepath.Join(home, "Library", "Application Support", "doki", "doki.sock")
+	}
+	return filepath.Join(home, DefaultConfigDir, DefaultSocketName)
 }
 
 // ParseImageRef parses a Docker image reference string into its components.

@@ -156,7 +156,7 @@ func LoadProfile(profile *Profile) error {
 	if !IsEnabled() {
 		return fmt.Errorf("apparmor not available")
 	}
-	tmpDir := "/tmp/doki-apparmor"
+	tmpDir := filepath.Join(os.TempDir(), "doki-apparmor")
 	_ = os.MkdirAll(tmpDir, 0755)
 	profilePath := filepath.Join(tmpDir, profile.Name)
 	if err := os.WriteFile(profilePath, []byte(profile.Content), 0644); err != nil {

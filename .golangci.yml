@@ -3,10 +3,6 @@ run:
   build-tags:
     - android
     - linux
-  skip-dirs:
-    - vendor
-    - releases
-    - distros
 
 linters:
   enable:
@@ -20,7 +16,6 @@ linters:
     - durationcheck
     - errname
     - errorlint
-    - exportloopref
     - gofmt
     - goimports
     - gosec
@@ -31,9 +26,6 @@ linters:
     - unparam
     - whitespace
   disable:
-    - deadcode
-    - structcheck
-    - varcheck
     - depguard
     - gocognit
     - cyclop
@@ -65,6 +57,10 @@ linters-settings:
 issues:
   max-issues-per-linter: 50
   max-same-issues: 5
+  exclude-dirs:
+    - vendor
+    - releases
+    - distros
   exclude-rules:
     - path: _test\.go
       linters:

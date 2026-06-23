@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -141,7 +142,7 @@ func DetectBuildKit() string {
 		"unix:///run/buildkit/buildkitd.sock",
 		"unix:///run/user/" + fmt.Sprintf("%d", os.Getuid()) + "/buildkit/buildkitd.sock",
 		"unix:///var/run/buildkit/buildkitd.sock",
-		"unix:///tmp/buildkit/buildkitd.sock",
+		"unix://" + filepath.Join(os.TempDir(), "buildkit", "buildkitd.sock"),
 	}
 	for _, addr := range paths {
 		c := NewBuildKitClient(addr)
@@ -175,12 +176,15 @@ func StartBuildKitDaemon(ctx context.Context) (string, error) {
 	}
 
 	// Start buildkitd in the background.
-	sockPath := "/tmp/doki-buildkit/buildkitd.sock"
-	_ = os.MkdirAll("/tmp/doki-buildkit", 0755)
+	buildkitDir := filepath.Join(os.TempDir(), "doki-buildkit")
+	sockPath := filepath.Join(buildkitDir, "buildkitd.sock")
+	if err := os.MkdirAll(buildkitDir, 0755); err != nil {
+		return "", err
+	}
 
 	cmd := exec.CommandContext(ctx, buildkitdPath,
 		"--addr", "unix://"+sockPath,
-		"--root", "/tmp/doki-buildkit/data",
+		"--root", filepath.Join(buildkitDir, "data"),
 	)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

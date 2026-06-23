@@ -49,11 +49,9 @@ type DokiCLI struct {
 // New creates a new DokiCLI client connected to the given Unix socket.
 func New(socket string) *DokiCLI {
 	if socket == "" {
-		socket = os.Getenv("DOKI_HOST")
+		socket = common.DefaultDaemonSocket()
 	}
-	if socket == "" {
-		socket = "/data/data/com.termux/files/usr/var/run/doki.sock"
-	}
+	socket = strings.TrimPrefix(socket, "unix://")
 	return &DokiCLI{
 		socket: socket,
 		client: &http.Client{

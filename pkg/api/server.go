@@ -95,15 +95,18 @@ type VolumeManager struct {
 }
 
 // NewVolumeManager creates a new volume manager.
-func NewVolumeManager(root string) *VolumeManager {
-	_ = common.EnsureDir(root)
+func NewVolumeManager(root string) (*VolumeManager, error) {
+	if err := common.EnsureDir(root); err != nil {
+		return nil, fmt.Errorf("create volume root: %w", err)
+	}
 	vm := &VolumeManager{
 		root:    root,
 		volumes: make(map[string]*common.VolumeInfo),
 	}
-	// Load existing volumes on startup.
-	vm.loadFromDisk()
-	return vm
+	if err := vm.loadFromDisk(); err != nil {
+		return nil, err
+	}
+	return vm, nil
 }
 
 func validateVolumeName(name string) bool {
@@ -113,8 +116,11 @@ func validateVolumeName(name string) bool {
 	return true
 }
 
-func (vm *VolumeManager) loadFromDisk() {
-	entries, _ := os.ReadDir(vm.root)
+func (vm *VolumeManager) loadFromDisk() error {
+	entries, err := os.ReadDir(vm.root)
+	if err != nil {
+		return fmt.Errorf("read volume root: %w", err)
+	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -122,13 +128,21 @@ func (vm *VolumeManager) loadFromDisk() {
 		volPath := filepath.Join(vm.root, entry.Name(), "volume.json")
 		data, err := os.ReadFile(volPath)
 		if err != nil {
+			slog.Warn("skip unreadable volume metadata", "path", volPath, "err", err)
 			continue
 		}
 		var vol common.VolumeInfo
-		if json.Unmarshal(data, &vol) == nil {
-			vm.volumes[vol.Name] = &vol
+		if err := json.Unmarshal(data, &vol); err != nil {
+			slog.Warn("skip invalid volume metadata", "path", volPath, "err", err)
+			continue
 		}
+		if !validateVolumeName(vol.Name) {
+			slog.Warn("skip invalid volume name", "path", volPath, "name", vol.Name)
+			continue
+		}
+		vm.volumes[vol.Name] = &vol
 	}
+	return nil
 }
 
 func (vm *VolumeManager) Create(name string, driver string, opts map[string]string, labels map[string]string) (*common.VolumeInfo, error) {
@@ -144,7 +158,9 @@ func (vm *VolumeManager) Create(name string, driver string, opts map[string]stri
 	}
 
 	mountpoint := filepath.Join(vm.root, name)
-	_ = common.EnsureDir(mountpoint)
+	if err := common.EnsureDir(mountpoint); err != nil {
+		return nil, fmt.Errorf("create volume directory: %w", err)
+	}
 
 	if driver == "" {
 		driver = "local"
@@ -204,8 +220,10 @@ func (vm *VolumeManager) Remove(name string) error {
 		return common.NewErrNotFound("volume", name)
 	}
 
+	if err := os.RemoveAll(vol.Mountpoint); err != nil {
+		return fmt.Errorf("remove volume data: %w", err)
+	}
 	delete(vm.volumes, name)
-	_ = os.RemoveAll(vol.Mountpoint)
 	return nil
 }
 
@@ -218,8 +236,10 @@ func (vm *VolumeManager) Prune(referencedVolumes map[string]bool) ([]string, err
 		if referencedVolumes[name] {
 			continue
 		}
+		if err := os.RemoveAll(vol.Mountpoint); err != nil {
+			return pruned, fmt.Errorf("remove volume %s: %w", name, err)
+		}
 		delete(vm.volumes, name)
-		_ = os.RemoveAll(vol.Mountpoint)
 		pruned = append(pruned, name)
 	}
 	return pruned, nil
@@ -255,13 +275,17 @@ func (s *Server) handleVolumesPrune(w http.ResponseWriter, _ *http.Request) {
 
 // NewServer creates a new API server.
 func NewServer(config *common.DokiConfig, rt *dokiruntime.Runtime, img *image.Store, net *network.Manager) (*Server, error) {
+	volumes, err := NewVolumeManager(filepath.Join(config.DataDir, "volumes"))
+	if err != nil {
+		return nil, fmt.Errorf("volume manager: %w", err)
+	}
 	s := &Server{
 		config:    config,
 		router:    http.NewServeMux(),
 		runtime:   rt,
 		image:     img,
 		network:   net,
-		volumes:   NewVolumeManager(filepath.Join(config.DataDir, "volumes")),
+		volumes:   volumes,
 		events:    make(chan *common.SystemEventsResponse, 100),
 		execStore: make(map[string]*common.ExecConfig),
 	}

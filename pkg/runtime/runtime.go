@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,6 +33,42 @@ import (
 
 // ExecutionMode, ContainerRunner, RunnerCapabilities, and all Mode* constants
 // are defined in runner.go.
+
+// rootlessChownOnce ensures the "chown skipped in rootless mode" INFO
+// message is emitted only once per process, not once per file.
+var rootlessChownOnce sync.Once
+
+// logChownError logs a chown/lchown error appropriately. In rootless
+// mode (non-root UID or Termux/proot), chown returns EPERM because
+// CAP_CHOWN is unavailable. This is expected and not a real error —
+// the container will still work with the current user's ownership.
+// We emit a single INFO message the first time, then Debug for
+// subsequent occurrences. Non-EPERM errors are logged at WARN level
+// because they may indicate real problems.
+func logChownError(operation, target string, err error) {
+	if err == nil {
+		return
+	}
+	// Check if this is an EPERM (rootless mode — expected).
+	if errors.Is(err, syscall.EPERM) {
+		rootlessChownOnce.Do(func() {
+			slog.Info("chown skipped in rootless mode",
+				"reason", "CAP_CHOWN unavailable (non-root or Termux/proot)",
+				"note", "OCI image UIDs are preserved as-is; container will run with current user permissions",
+			)
+		})
+		slog.Debug("chown skipped (rootless EPERM)",
+			"op", operation, "target", target, "err", err)
+		return
+	}
+	// Non-EPERM error — could be a real problem (e.g., ENOENT for
+	// broken symlinks is common in busybox and is ignored; other
+	// errors are logged at WARN).
+	if errors.Is(err, syscall.ENOENT) {
+		return // Expected for broken symlinks (busybox).
+	}
+	slog.Warn(operation, "target", target, "err", err)
+}
 
 // Runtime implements the OCI Runtime Specification.
 type Runtime struct {
@@ -427,7 +464,7 @@ func extractTarGz(tarPath, dest string) error {
 				return err
 			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
-				slog.Warn("chown dir", "target", target, "err", err)
+				logChownError("chown dir", target, err)
 			}
 			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
@@ -457,13 +494,13 @@ func extractTarGz(tarPath, dest string) error {
 				return err
 			}
 			if err := out.Chown(hdr.Uid, hdr.Gid); err != nil && !os.IsNotExist(err) {
-				slog.Warn("chown file", "target", target, "err", err)
+				logChownError("chown file", target, err)
 			}
 			if err := out.Close(); err != nil {
 				slog.Warn("close failed", "error", err)
 			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil && !os.IsNotExist(err) {
-				slog.Warn("chown file", "target", target, "err", err)
+				logChownError("chown file", target, err)
 			}
 			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
@@ -491,7 +528,7 @@ func extractTarGz(tarPath, dest string) error {
 			if err := os.Lchown(target, hdr.Uid, hdr.Gid); err != nil {
 				// Broken symlinks (target doesn't exist) are common in busybox images.
 				if !os.IsNotExist(err) {
-					slog.Warn("lchown symlink", "target", target, "err", err)
+					logChownError("lchown symlink", target, err)
 				}
 			}
 			extractXattrs(hdr, target)
@@ -519,7 +556,7 @@ func extractTarGz(tarPath, dest string) error {
 				return fmt.Errorf("tar: chmod hardlink %s: %w", hdr.Name, err)
 			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
-				slog.Warn("chown hardlink", "target", target, "err", err)
+				logChownError("chown hardlink", target, err)
 			}
 			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
@@ -533,7 +570,7 @@ func extractTarGz(tarPath, dest string) error {
 				return fmt.Errorf("tar: mknod block device %s: %w", hdr.Name, err)
 			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
-				slog.Warn("chown block device", "target", target, "err", err)
+				logChownError("chown block device", target, err)
 			}
 			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeChar:
@@ -546,7 +583,7 @@ func extractTarGz(tarPath, dest string) error {
 				return fmt.Errorf("tar: mknod char device %s: %w", hdr.Name, err)
 			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
-				slog.Warn("chown char device", "target", target, "err", err)
+				logChownError("chown char device", target, err)
 			}
 			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeFifo:
@@ -558,7 +595,7 @@ func extractTarGz(tarPath, dest string) error {
 				return fmt.Errorf("tar: mkfifo %s: %w", hdr.Name, err)
 			}
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
-				slog.Warn("chown fifo", "target", target, "err", err)
+				logChownError("chown fifo", target, err)
 			}
 			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeGNUSparse:
@@ -585,7 +622,7 @@ func extractTarGz(tarPath, dest string) error {
 				return err
 			}
 			if err := out.Chown(hdr.Uid, hdr.Gid); err != nil {
-				slog.Warn("chown file", "target", target, "err", err)
+				logChownError("chown file", target, err)
 			}
 			if err := out.Close(); err != nil {
 				slog.Warn("close failed", "error", err)
@@ -1988,10 +2025,10 @@ func (rt *Runtime) startWithMicroVM(cfg *Config, rootfsDir string, logFile *os.F
 func qemuBinaryPaths(guestArch string) []string {
 	paths := []string{}
 	qemuBinaries := map[string][]string{
-		"aarch64": {"qemu-aarch64", "/data/data/com.termux/files/usr/bin/qemu-aarch64"},
-		"arm":     {"qemu-arm", "/data/data/com.termux/files/usr/bin/qemu-arm"},
-		"i686":    {"qemu-i386", "/data/data/com.termux/files/usr/bin/qemu-i386"},
-		"x86_64":  {"qemu-x86_64", "/data/data/com.termux/files/usr/bin/qemu-x86_64"},
+		"aarch64": {"qemu-aarch64"},
+		"arm":     {"qemu-arm"},
+		"i686":    {"qemu-i386"},
+		"x86_64":  {"qemu-x86_64"},
 	}
 	for _, name := range qemuBinaries[guestArch] {
 		if p, err := exec.LookPath(name); err == nil {

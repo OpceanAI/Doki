@@ -31,7 +31,7 @@ type Runner struct {
 }
 
 func New(root string) *Runner {
-	socketPath := "/tmp/doki-proot.sock"
+	socketPath := filepath.Join(os.TempDir(), "doki-proot.sock")
 	if s := os.Getenv("DOKI_PROOT_SOCKET"); s != "" {
 		socketPath = s
 	}

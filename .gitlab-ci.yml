@@ -5,99 +5,61 @@ stages:
   - release
 
 variables:
-  GO_VERSION: "1.26"
-  BINARY_NAME: "doki"
+  GO_VERSION: "1.26.3"
+  GOMODCACHE: "$CI_PROJECT_DIR/.go/pkg/mod"
 
-.build_template: &build_definition
+.go_template: &go_definition
   image: golang:${GO_VERSION}
   before_script:
     - go version
     - go env
     - go mod download
   cache:
-    key: ${CI_COMMIT_REF_SLUG}
+    key:
+      files:
+        - go.sum
     paths:
       - .go/pkg/mod/
+
+build:release:
+  <<: *go_definition
+  stage: build
+  script:
+    - make build-release sha256
   artifacts:
     paths:
-      - bin/
-    expire_in: 1 hour
-
-build:android-arm64:
-  <<: *build_definition
-  stage: build
-  script:
-    - mkdir -p bin/
-    - GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki ./cmd/doki
-    - GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/dokid ./cmd/dokid
-    - GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-compose ./cmd/doki-compose
-    - GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-init ./cmd/doki-init
-  tags:
-    - docker
-
-build:linux-amd64:
-  <<: *build_definition
-  stage: build
-  script:
-    - mkdir -p bin/
-    - GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/doki-linux-amd64 ./cmd/doki
-    - GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/dokid-linux-amd64 ./cmd/dokid
-    - GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/doki-compose-linux-amd64 ./cmd/doki-compose
-    - GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/doki-init-linux-amd64 ./cmd/doki-init
-  tags:
-    - docker
-
-build:linux-arm64:
-  <<: *build_definition
-  stage: build
-  script:
-    - mkdir -p bin/
-    - GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-linux-arm64 ./cmd/doki
-    - GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/dokid-linux-arm64 ./cmd/dokid
-    - GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-compose-linux-arm64 ./cmd/doki-compose
-    - GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-init-linux-arm64 ./cmd/doki-init
-  tags:
-    - docker
-
-build:darwin-arm64:
-  <<: *build_definition
-  stage: build
-  script:
-    - mkdir -p bin/
-    - GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-darwin-arm64 ./cmd/doki
-    - GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/dokid-darwin-arm64 ./cmd/dokid
-    - GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/doki-compose-darwin-arm64 ./cmd/doki-compose
+      - releases/
+    expire_in: 1 week
   tags:
     - docker
 
 test:
-  image: golang:${GO_VERSION}
+  <<: *go_definition
   stage: test
-  before_script:
-    - go version
-    - go env
-    - go mod download
-    - go install github.com/boumenot/gocover-cobertura@latest
   script:
     - go test ./... -v -race -coverprofile=coverage.out
     - go tool cover -func=coverage.out
-    - gocover-cobertura < coverage.out > coverage.xml
   artifacts:
     reports:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+    paths:
+      - coverage.out
+    when: always
+  after_script:
+    - go install github.com/boumenot/gocover-cobertura@v1.4.0
+    - gocover-cobertura < coverage.out > coverage.xml || true
   coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
 
 lint:
-  image: golangci/golangci-lint:latest
+  image: golangci/golangci-lint:v2.4.0
   stage: lint
   script:
     - golangci-lint run ./...
-  allow_failure: true
 
 vet:
-  image: golang:${GO_VERSION}
+  <<: *go_definition
   stage: lint
   script:
     - go vet ./...
@@ -105,6 +67,9 @@ vet:
 release:
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   stage: release
+  needs:
+    - job: build:release
+      artifacts: true
   rules:
     - if: $CI_COMMIT_TAG
   script:
@@ -115,34 +80,5 @@ release:
     description: "Doki $CI_COMMIT_TAG release"
     assets:
       links:
-        - name: "doki (Android ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki?job=build:android-arm64"
-        - name: "dokid (Android ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/dokid?job=build:android-arm64"
-        - name: "doki-compose (Android ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-compose?job=build:android-arm64"
-        - name: "doki-init (Android ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-init?job=build:android-arm64"
-        - name: "doki (Linux AMD64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-linux-amd64?job=build:linux-amd64"
-        - name: "dokid (Linux AMD64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/dokid-linux-amd64?job=build:linux-amd64"
-        - name: "doki-compose (Linux AMD64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-compose-linux-amd64?job=build:linux-amd64"
-        - name: "doki-init (Linux AMD64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-init-linux-amd64?job=build:linux-amd64"
-        - name: "doki (Linux ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-linux-arm64?job=build:linux-arm64"
-        - name: "dokid (Linux ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/dokid-linux-arm64?job=build:linux-arm64"
-        - name: "doki-compose (Linux ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-compose-linux-arm64?job=build:linux-arm64"
-        - name: "doki-init (Linux ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-init-linux-arm64?job=build:linux-arm64"
-        - name: "doki (macOS ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-darwin-arm64?job=build:darwin-arm64"
-        - name: "dokid (macOS ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/dokid-darwin-arm64?job=build:darwin-arm64"
-        - name: "doki-compose (macOS ARM64)"
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/doki-compose-darwin-arm64?job=build:darwin-arm64"
-
+        - name: "Release artifacts"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/browse/releases?job=build:release"
