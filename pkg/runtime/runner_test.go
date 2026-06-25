@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -135,6 +136,70 @@ func TestRegistryBestFor(t *testing.T) {
 	}
 }
 
+func TestRegistryBestForUsesEnvRuntime(t *testing.T) {
+	t.Setenv("DOKI_RUNTIME", "proot")
+	reg := NewRegistry()
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+
+	best := reg.BestFor(&Config{})
+	if best == nil || best.Name() != ModeProot {
+		t.Fatalf("BestFor(DOKI_RUNTIME=proot) = %v, want proot", best)
+	}
+}
+
+func TestRegistryBestForChoosesHighestUsableLevel(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeGVisor, detect: true, caps: RunnerCapabilities{Arch: []string{runtime.GOARCH}}})
+
+	best := reg.BestFor(&Config{})
+	if best == nil || best.Name() != ModeGVisor {
+		t.Fatalf("BestFor highest usable = %v, want gvisor", best)
+	}
+}
+
+func TestRegistryBestForSkipsUnavailableHostRequirements(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeGVisor, detect: true, caps: RunnerCapabilities{Arch: []string{"definitely-not-this-arch"}}})
+	reg.Register(&mockRunner{mode: ModeMicroVM, detect: true, caps: RunnerCapabilities{KVMRequired: true}})
+
+	best := reg.BestFor(&Config{})
+	if best == nil || best.Name() != ModeProot {
+		t.Fatalf("BestFor with unusable higher levels = %v, want proot", best)
+	}
+}
+
+func TestRegistryBestForCrossArchPrefersEmulation(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeQEMUUser, detect: true})
+
+	best := reg.BestFor(&Config{Platform: "linux/not-host"})
+	if best == nil || best.Name() != ModeQEMUUser {
+		t.Fatalf("BestFor cross-arch = %v, want qemu-user", best)
+	}
+}
+
+func TestRegistryBestForUsesQEMUPreference(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("DOKI_EMULATION_MODE", "qemu")
+	reg := NewRegistry()
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeQEMUUser, detect: true})
+	reg.Register(&mockRunner{mode: ModeLegacy32, detect: true})
+
+	best := reg.BestFor(&Config{Platform: "linux/not-host"})
+	if best == nil || best.Name() != ModeQEMUUser {
+		t.Fatalf("BestFor with qemu preference = %v, want qemu-user", best)
+	}
+}
+
 func TestRegistryAllRunners(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&mockRunner{mode: ModeNative, detect: true})
@@ -178,11 +243,12 @@ func TestIsWASMImage(t *testing.T) {
 type mockRunner struct {
 	mode   ExecutionMode
 	detect bool
+	caps   RunnerCapabilities
 }
 
 func (m *mockRunner) Name() ExecutionMode                                          { return m.mode }
 func (m *mockRunner) Detect() bool                                                 { return m.detect }
-func (m *mockRunner) Capabilities() RunnerCapabilities                             { return RunnerCapabilities{} }
+func (m *mockRunner) Capabilities() RunnerCapabilities                             { return m.caps }
 func (m *mockRunner) Create(_ context.Context, _ *Config) (string, error)          { return "", nil }
 func (m *mockRunner) Start(_ context.Context, _ string) (int, error)               { return 0, nil }
 func (m *mockRunner) Stop(_ context.Context, _ string, _ time.Duration) error      { return nil }

@@ -27,13 +27,12 @@ mv dokid-android-arm64 $PREFIX/bin/dokid
 doki doctor
 ```
 
-For networking isolation, install `passt` (provides the `pasta` binary):
-
-```bash
-pkg install passt
-```
-
-Without `pasta`, containers fall back to shared host networking.
+On Termux, network isolation tools (passt, slirp4netns) are not
+installable and would not work if manually placed in $PATH: they
+require /dev/net/tun and CAP_NET_ADMIN, which Termux does not
+provide. Containers use the host network namespace via proot, which
+is functional for normal use but provides no network isolation. This
+is expected behavior, not a degradation.
 
 ---
 

@@ -67,6 +67,29 @@ func TestApplyConfigOverrides(t *testing.T) {
 	}
 }
 
+func TestApplyDaemonHost(t *testing.T) {
+	oldSocketPath, oldTCPAddr := socketPath, tcpAddr
+	defer func() { socketPath, tcpAddr = oldSocketPath, oldTCPAddr }()
+
+	socketPath, tcpAddr = "", ""
+	applyDaemonHost("unix:///tmp/doki-test.sock")
+	if socketPath != "/tmp/doki-test.sock" || tcpAddr != "" {
+		t.Fatalf("unix host parsed as socket=%q tcp=%q", socketPath, tcpAddr)
+	}
+
+	socketPath, tcpAddr = "", ""
+	applyDaemonHost("tcp://127.0.0.1:2375")
+	if tcpAddr != "127.0.0.1:2375" || socketPath != "" {
+		t.Fatalf("tcp host parsed as socket=%q tcp=%q", socketPath, tcpAddr)
+	}
+
+	socketPath, tcpAddr = "", ""
+	applyDaemonHost("/tmp/doki-test.sock")
+	if socketPath != "/tmp/doki-test.sock" || tcpAddr != "" {
+		t.Fatalf("path host parsed as socket=%q tcp=%q", socketPath, tcpAddr)
+	}
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }

@@ -1,7 +1,10 @@
 package network
 
 import (
+	"bytes"
+	"log/slog"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -445,4 +448,27 @@ func TestIsPastaAvailable(t *testing.T) {
 
 func TestIsSlirp4netnsAvailable(t *testing.T) {
 	_ = IsSlirp4netnsAvailable()
+}
+
+// TestSetupRootlessNetworking_Fallback ensures that when neither pasta
+// nor slirp4netns is available on $PATH, setupRootlessNetworking
+// returns nil (does not panic, does not return an error), and logs
+// the fallback path. This guards against regression where a future
+// code change could panic or return an error in the fallback branch.
+func TestSetupRootlessNetworking_Fallback(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PATH", tmp)
+
+	var buf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+
+	if err := setupRootlessNetworking(12345); err != nil {
+		t.Errorf("setupRootlessNetworking returned error on fallback: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "network setup") {
+		t.Errorf("expected log to mention 'network setup', got: %s", out)
+	}
 }

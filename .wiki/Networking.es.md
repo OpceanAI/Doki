@@ -4,7 +4,8 @@
 
 > Stack de networking de Doki v0.11.0. Redes bridge, soporte de
 > plugins CNI, port mapping, servidor DNS interno, iptables
-> DNAT/SNAT, fallback rootless (pasta/slirp4netns/host), IPv6, y
+> DNAT/SNAT, fallback rootless (pasta/slirp4netns en Linux, host
+> netns via proot en Termux), IPv6, y
 > mesh DokiLink con TLS 1.3, NaCl secretbox, firmas Ed25519, NAT
 > traversal (STUN/TURN/hole punching), DHT Kademlia, y
 > descubrimiento mDNS con expiracion de 90 segundos.

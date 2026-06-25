@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/OpceanAI/Doki/pkg/common"
 )
 
 // SystemDep describes a system-level dependency that Doki can use.
@@ -84,6 +86,21 @@ func makeCheck(bin string) func() (bool, string) {
 	}
 }
 
+// termuxNetworkHint returns the install hint for networking tools on
+// Termux, where passt and slirp4netns are incompatible because they
+// require /dev/net/tun and CAP_NET_ADMIN. On other platforms the
+// standard hint is returned unchanged.
+func termuxNetworkHint(dep string, stdHint string) string {
+	if !common.IsTermux() {
+		return stdHint
+	}
+	switch dep {
+	case "pasta", "slirp4netns":
+		return "not available on Termux (requires root + /dev/net/tun); container uses host network via proot"
+	}
+	return stdHint
+}
+
 // systemDeps builds the canonical list of system dependencies Doki cares about.
 func systemDeps() []SystemDep {
 	android := isAndroid()
@@ -102,8 +119,8 @@ func systemDeps() []SystemDep {
 		{Name: "socat", Optional: true, Check: makeCheck("socat"), InstallHint: "pkg install socat  |  apt install socat"},
 		{Name: "fuse-overlayfs", Optional: true, Check: makeCheck("fuse-overlayfs"), InstallHint: "pkg install fuse-overlayfs  |  apt install fuse-overlayfs"},
 		{Name: "sqlite3", Optional: true, Check: makeCheck("sqlite3"), InstallHint: "pkg install sqlite  |  apt install sqlite3"},
-		{Name: "slirp4netns", Optional: true, Check: makeCheck("slirp4netns"), InstallHint: "pkg install slirp4netns  |  apt install slirp4netns"},
-		{Name: "pasta", Optional: true, Check: makeCheck("pasta"), InstallHint: "pkg install passt  |  apt install passt"},
+		{Name: "slirp4netns", Optional: true, Check: makeCheck("slirp4netns"), InstallHint: termuxNetworkHint("slirp4netns", "pkg install slirp4netns  |  apt install slirp4netns")},
+		{Name: "pasta", Optional: true, Check: makeCheck("pasta"), InstallHint: termuxNetworkHint("pasta", "pkg install passt  |  apt install passt")},
 	}
 }
 
@@ -283,9 +300,9 @@ var pkgNameMap = map[string]map[string]string{
 		"qemu-system-aarch64": "qemu-system-arm", "qemu-system-x86_64": "qemu-system-x86",
 	},
 	"pkg": {
-		"nft": "nftables", "sqlite3": "sqlite", "pasta": "passt",
-		"slirp4netns": "slirp4netns", "fuse-overlayfs": "fuse-overlayfs",
-		"proot": "proot", "socat": "socat", "iptables": "iptables",
+		"nft": "nftables", "sqlite3": "sqlite",
+		"fuse-overlayfs": "fuse-overlayfs",
+		"proot":          "proot", "socat": "socat", "iptables": "iptables",
 		"qemu-system-aarch64": "qemu-system-aarch64", "qemu-system-x86_64": "qemu-system-x86_64",
 	},
 	"pacman": {
