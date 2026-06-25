@@ -801,11 +801,17 @@ func bridgeExists(name string) bool {
 }
 
 // setupRootlessNetworking sets up networking for a rootless container.
-// It tries pasta first (preferred), then slirp4netns (legacy), and
-// finally falls back to no-network mode (the container shares the
-// host netns via proot, which is the common Termux case). This
-// prevents the "pasta: executable file not found" error that blocks
-// container startup on systems where pasta is not installed.
+// Priority: pasta (preferred on standard Linux) -> slirp4netns (legacy)
+// -> shared host netns (fallback on all platforms).
+//
+// On standard Linux, installing either pasta or slirp4netns gives the
+// container isolated networking with proper NAT. On Termux neither
+// tool is functional: /dev/net/tun is unavailable without root and the
+// kernel does not support unprivileged TUN/TAP creation. The expected
+// behavior in Termux is the third branch: the container shares the host
+// network namespace via proot (proot does not unshare netns in user-mode
+// emulation on Android), so network setup is a no-op and the guest
+// inherits the host's network.
 func setupRootlessNetworking(pid int) error {
 	// 1. Try pasta (preferred rootless networking).
 	if path, err := exec.LookPath("pasta"); err == nil {
@@ -832,9 +838,18 @@ func setupRootlessNetworking(pid int) error {
 	}
 
 	// 3. Fallback: no isolated networking. The container shares the
-	// host network namespace via proot (the common Termux case). This
-	// is not ideal for isolation but allows the container to start
-	// and have network access without requiring pasta or slirp4netns.
+	// host network namespace via proot (the common and expected
+	// Termux case). On standard Linux, installing either tool gives
+	// proper isolation; on Termux neither works and host-ns sharing
+	// is the intended behavior.
+	if common.IsTermux() {
+		slog.Info("network setup: rootless networking tools unavailable on Termux; "+
+			"passt and slirp4netns are not installable here and would not work if installed "+
+			"(require root + /dev/net/tun which Termux does not provide); "+
+			"the container shares the host network namespace via proot, which is functional but not isolated",
+			"pid", pid)
+		return nil
+	}
 	slog.Info("network setup: no rootless networking tool available (pasta/slirp4netns not found); "+
 		"container will share host network namespace. "+
 		"Install 'passt' (pasta) or 'slirp4netns' for proper network isolation",

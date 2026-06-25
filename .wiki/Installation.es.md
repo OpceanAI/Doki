@@ -27,13 +27,12 @@ mv dokid-android-arm64 $PREFIX/bin/dokid
 doki doctor
 ```
 
-Para aislamiento de red, instala `passt` (provee el binario `pasta`):
-
-```bash
-pkg install passt
-```
-
-Sin `pasta`, los contenedores usan networking compartido del host.
+En Termux, las herramientas de aislamiento de red (passt, slirp4netns)
+no son instalables y no funcionarian si se colocaran manualmente en
+$PATH: requieren /dev/net/tun y CAP_NET_ADMIN, que Termux no provee.
+Los contenedores usan el network namespace del host via proot, lo cual
+es funcional para uso normal pero no provee aislamiento de red. Este
+es el comportamiento esperado, no una degradacion.
 
 ---
 

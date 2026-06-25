@@ -2,6 +2,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"github.com/OpceanAI/Doki/pkg/cli"
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/deps"
+	"github.com/OpceanAI/Doki/pkg/emulation"
 )
 
 // Command represents a CLI command with optional sub-commands.
@@ -1138,6 +1141,22 @@ Scan an image for known vulnerabilities (stub).`,
 			return c.Scout(target)
 		},
 	},
+	"emu": {
+		Name: "emu",
+		Help: `Usage: doki emu COMMAND [OPTIONS]
+
+Configure QEMU/FEX/Box64 cross-architecture emulation.
+
+Commands:
+  show             Show saved emulator preference
+  detect           Detect available emulator backends
+  test             Run a small backend probe and ask before saving recommendation
+  set MODE         Set preference manually: auto, qemu, fex, box64
+
+Environment:
+  DOKI_EMULATION_MODE=qemu|fex|box64|auto overrides the saved config`,
+		Handler: handleEmu,
+	},
 	"deps": {
 		Name: "deps",
 		Help: `Usage: doki deps COMMAND
@@ -1429,6 +1448,89 @@ func handleKube(c *cli.DokiCLI, args []string) error {
 		return c.KubeGenerate(args[1])
 	}
 	return nil
+}
+
+func handleEmu(_ *cli.DokiCLI, args []string) error {
+	if len(args) == 0 {
+		args = []string{"show"}
+	}
+	switch args[0] {
+	case "show", "config":
+		cfg, err := emulation.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Preference: %s\n", cfg.Preferred)
+		if cfg.Selected != "" {
+			fmt.Printf("Last selected: %s\n", cfg.Selected)
+		}
+		fmt.Printf("Config: %s\n", emulation.ConfigPath())
+		return nil
+	case "detect", "ls", "list":
+		return printEmuResults(emulation.Detect(context.Background()))
+	case "set":
+		if len(args) < 2 {
+			return fmt.Errorf("doki emu set: requires mode (auto, qemu, fex, box64)")
+		}
+		mode, ok := emulation.NormalizeMode(args[1])
+		if !ok {
+			return fmt.Errorf("unknown emulation mode %q", args[1])
+		}
+		if err := emulation.Save(&emulation.Config{Preferred: mode, Selected: mode}); err != nil {
+			return err
+		}
+		fmt.Printf("Emulation preference saved: %s\n", mode)
+		return nil
+	case "test", "probe":
+		results := emulation.Detect(context.Background())
+		if err := printEmuResults(results); err != nil {
+			return err
+		}
+		best := emulation.SelectBest(results)
+		if best == emulation.ModeAuto {
+			fmt.Println("No emulator backend found; existing preference was not changed.")
+			return nil
+		}
+		fmt.Printf("\nRecommended mode: %s\n", best)
+		if !confirm("Save this emulation preference? [y/N]: ") {
+			fmt.Println("Not saved. Use 'doki emu set MODE' to configure manually.")
+			return nil
+		}
+		if err := emulation.Save(&emulation.Config{Preferred: best, Selected: best, Results: results}); err != nil {
+			return err
+		}
+		fmt.Printf("Emulation preference saved: %s\n", best)
+		return nil
+	default:
+		return fmt.Errorf("doki emu: '%s' is not a valid subcommand", args[0])
+	}
+}
+
+func printEmuResults(results []emulation.Result) error {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tSTATUS\tPATH\tVERSION\tERROR")
+	for _, r := range results {
+		status := "missing"
+		if r.Available {
+			status = "ok"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, status, r.Path, r.Version, r.Error)
+	}
+	return w.Flush()
+}
+
+func confirm(prompt string) bool {
+	fmt.Fprint(os.Stderr, prompt)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes", "s", "si", "sí":
+		return true
+	default:
+		return false
+	}
 }
 
 func handleDeps(_ *cli.DokiCLI, args []string) error {

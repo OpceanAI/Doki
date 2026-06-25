@@ -5,7 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
+
+	"github.com/OpceanAI/Doki/pkg/emulation"
 )
 
 // RunnerInfo holds information about a detected runner.
@@ -66,95 +69,142 @@ func (r *Registry) Get(mode ExecutionMode) ContainerRunner {
 }
 
 // BestFor selects the optimal runner for the given configuration.
-// Priority chain:
-//  1. Explicit --runtime flag (cfg.Runtime)
-//  2. WASM images → ModeWASM
-//  3. Cross-arch platform → ModeQEMUUser or ModeFEX
-//  4. Root available → ModeNamespaces or ModeChroot
-//  5. KVM available → ModeMicroVM
-//  6. gVisor available → ModeGVisor
-//  7. pKVM available → ModePkDroid
-//  8. proot available → ModeProot
-//  9. Fallback → ModeNative
+// Selection order:
+//  1. Explicit cfg.Runtime or DOKI_RUNTIME override.
+//  2. Workload-specific modes (WASM, foreign architecture).
+//  3. Highest available isolation level compatible with the host.
+//  4. Native fallback.
 func (r *Registry) BestFor(cfg *Config) ContainerRunner {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// 1. Explicit runtime selection.
-	if cfg != nil && cfg.Runtime != "" {
-		if mode, ok := ParseExecutionMode(cfg.Runtime); ok {
+	if requested := requestedRuntime(cfg); requested != "" {
+		if mode, ok := ParseExecutionMode(requested); ok {
 			if runner, exists := r.runners[mode]; exists {
 				return runner
 			}
-			r.log.Warn("requested runtime not available, falling back", "requested", cfg.Runtime)
+			r.log.Warn("requested runtime not available, falling back", "requested", requested)
+		} else {
+			r.log.Warn("requested runtime is unknown, falling back", "requested", requested)
 		}
 	}
 
-	// 2. WASM images.
 	if cfg != nil && isWASMImage(cfg) {
 		if runner, ok := r.runners[ModeWASM]; ok {
 			return runner
 		}
 	}
 
-	// 3. Cross-arch platform.
 	if cfg != nil && cfg.Platform != "" && cfg.Platform != hostPlatform() {
-		// Try QEMU user-mode first (more universal).
-		if runner, ok := r.runners[ModeQEMUUser]; ok {
+		if runner := r.preferredEmulationRunner(cfg.Platform); runner != nil {
 			return runner
 		}
-		// FEX is faster for x86 on ARM64.
 		if isX86OnARM64(cfg.Platform) {
 			if runner, ok := r.runners[ModeFEX]; ok {
 				return runner
 			}
 		}
-	}
-
-	// 4. Root available.
-	if os.Geteuid() == 0 {
-		if runner, ok := r.runners[ModeNamespaces]; ok {
-			return runner
-		}
-		if runner, ok := r.runners[ModeChroot]; ok {
-			return runner
+		for _, mode := range []ExecutionMode{ModeQEMUUser, ModeLegacy32} {
+			if runner, ok := r.runners[mode]; ok {
+				return runner
+			}
 		}
 	}
 
-	// 5. KVM available.
-	if hasKVM() {
-		if runner, ok := r.runners[ModeMicroVM]; ok {
-			return runner
+	for _, info := range ExecutionModeInfos() {
+		if info.Mode == ModeWASM || info.Mode == ModeQEMUUser || info.Mode == ModeFEX || info.Mode == ModeLegacy32 {
+			continue
+		}
+		runner, ok := r.runners[info.Mode]
+		if !ok {
+			continue
+		}
+		if !runnerUsableOnHost(runner.Capabilities()) {
+			continue
+		}
+		if cfg != nil && cfg.Platform != "" && !modeSupportsPlatform(info, cfg.Platform) {
+			continue
+		}
+		return runner
+	}
+
+	if cfg != nil && cfg.Platform != "" {
+		for _, info := range ExecutionModeInfos() {
+			runner, ok := r.runners[info.Mode]
+			if !ok || !runnerUsableOnHost(runner.Capabilities()) {
+				continue
+			}
+			if modeSupportsPlatform(info, cfg.Platform) {
+				return runner
+			}
 		}
 	}
 
-	// 6. gVisor.
-	if runner, ok := r.runners[ModeGVisor]; ok {
-		return runner
-	}
-
-	// 7. pKVM (Android hardware isolation).
-	if runner, ok := r.runners[ModePkDroid]; ok {
-		return runner
-	}
-
-	// 8. Sysbox.
-	if runner, ok := r.runners[ModeSysbox]; ok {
-		return runner
-	}
-
-	// 9. proot.
-	if runner, ok := r.runners[ModeProot]; ok {
-		return runner
-	}
-
-	// 10. Fallback.
 	if runner, ok := r.runners[ModeNative]; ok {
 		return runner
 	}
-
-	// Should never happen (native always detects).
+	for _, info := range ExecutionModeInfos() {
+		if runner, ok := r.runners[info.Mode]; ok {
+			return runner
+		}
+	}
 	return nil
+}
+
+func (r *Registry) preferredEmulationRunner(platform string) ContainerRunner {
+	switch emulation.PreferredMode() {
+	case emulation.ModeFEX, emulation.ModeBox64:
+		if isX86OnARM64(platform) {
+			if runner, ok := r.runners[ModeFEX]; ok {
+				return runner
+			}
+		}
+	case emulation.ModeQEMU:
+		if runner, ok := r.runners[ModeQEMUUser]; ok {
+			return runner
+		}
+	}
+	return nil
+}
+
+func requestedRuntime(cfg *Config) string {
+	if cfg != nil && strings.TrimSpace(cfg.Runtime) != "" {
+		return strings.TrimSpace(cfg.Runtime)
+	}
+	return strings.TrimSpace(os.Getenv("DOKI_RUNTIME"))
+}
+
+func runnerUsableOnHost(caps RunnerCapabilities) bool {
+	if caps.RootRequired && os.Geteuid() != 0 {
+		return false
+	}
+	if caps.KVMRequired && !hasKVM() {
+		return false
+	}
+	if len(caps.Arch) == 0 {
+		return true
+	}
+	for _, arch := range caps.Arch {
+		if arch == runtime.GOARCH {
+			return true
+		}
+	}
+	return false
+}
+
+func modeSupportsPlatform(info ExecutionModeInfo, platform string) bool {
+	if platform == "" {
+		return true
+	}
+	for _, supported := range info.Platforms {
+		if supported == platform {
+			return true
+		}
+		if strings.HasSuffix(supported, "/*") && strings.HasPrefix(platform, strings.TrimSuffix(supported, "*")) {
+			return true
+		}
+	}
+	return false
 }
 
 // Available returns all detected runners with their info.

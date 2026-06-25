@@ -4,7 +4,8 @@
 
 > Doki v0.11.0 networking stack. Bridge networks, CNI plugin
 > support, port mapping, an internal DNS server, iptables
-> DNAT/SNAT, rootless fallback (pasta/slirp4netns/host), IPv6, and
+> DNAT/SNAT, rootless fallback (pasta/slirp4netns on Linux, host
+> netns via proot on Termux), IPv6, and
 > the DokiLink mesh with TLS 1.3, NaCl secretbox, Ed25519
 > signatures, NAT traversal (STUN/TURN/hole punching), Kademlia
 > DHT, and mDNS discovery with 90-second expiry.

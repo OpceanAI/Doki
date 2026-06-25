@@ -58,6 +58,7 @@ var (
 	tlsVerify       bool
 	tlsAutoCert     bool
 	socketPath      string
+	daemonHost      string
 	tcpAddr         string
 	configPath      string
 	logLevel        string
@@ -82,6 +83,7 @@ var rootCtx, rootCancel = context.WithCancel(context.Background())
 
 func main() {
 	flag.StringVar(&socketPath, "socket", "", "Unix socket path")
+	flag.StringVar(&daemonHost, "host", "", "Daemon host (unix://PATH, PATH, or tcp://ADDR)")
 	flag.StringVar(&tcpAddr, "tcp", "", "TCP listen address")
 	flag.StringVar(&configPath, "config", "", "Config file path")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug/info/warn/error)")
@@ -403,12 +405,49 @@ func isTerminal(f *os.File) bool {
 	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func applyDaemonHost(host string) {
+	host = strings.TrimSpace(host)
+	switch {
+	case strings.HasPrefix(host, "unix://"):
+		if socketPath == "" {
+			socketPath = strings.TrimPrefix(host, "unix://")
+		}
+	case strings.HasPrefix(host, "tcp://"):
+		if tcpAddr == "" {
+			tcpAddr = strings.TrimPrefix(host, "tcp://")
+		}
+	case strings.Contains(host, "://"):
+		// Unknown schemes are left untouched so flag.Parse errors remain obvious in logs.
+	case strings.Contains(host, ":") && !strings.HasPrefix(host, "/"):
+		if tcpAddr == "" {
+			tcpAddr = host
+		}
+	case host != "":
+		if socketPath == "" {
+			socketPath = host
+		}
+	}
+}
+
 func applyEnvOverrides() {
+	if daemonHost == "" {
+		daemonHost = firstNonEmpty(os.Getenv("DOKI_HOST"), os.Getenv("DOCKER_HOST"))
+	}
+	if daemonHost != "" {
+		applyDaemonHost(daemonHost)
+	}
 	if socketPath == "" {
 		if s := os.Getenv("DOKI_SOCKET"); s != "" {
 			socketPath = s
-		} else if h := os.Getenv("DOCKER_HOST"); h != "" {
-			socketPath = strings.TrimPrefix(h, "unix://")
 		} else {
 			socketPath = common.DefaultDaemonSocket()
 		}
