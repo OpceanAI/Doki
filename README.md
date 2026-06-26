@@ -145,8 +145,14 @@ curl -sL https://dok1.xyz | sh
 ### First Run
 
 ```bash
-# Start the daemon
+# Start the daemon on the default Unix socket
 dokid &
+
+# Start the daemon with explicit socket path
+dokid --host unix:///var/run/doki.sock &
+
+# Start the daemon with TCP listener (for remote access)
+dokid --host tcp://0.0.0.0:2375 &
 
 # Pull and run
 doki pull alpine
@@ -376,6 +382,17 @@ Doki provides **108 commands** across 8 categories.
 | `doki deps check` | CI gate: exit non-zero if required deps missing |
 | `doki deps go` | Audit Go module dependencies |
 | `doki deps install <name>` | Best-effort install via detected package manager |
+
+### Cross-Architecture Emulation
+
+| Command | Description |
+|:--------|:------------|
+| `doki emu show` | Show saved emulator preference and config path |
+| `doki emu detect` | Scan PATH for QEMU/FEX/Box64 backends with versions |
+| `doki emu test` | Run detection and ask before saving recommendation |
+| `doki emu set <mode>` | Set preference: `auto`, `qemu`, `fex`, `box64` |
+
+The emulation system persists preferences in `~/.doki/emulation.json` with atomic writes (tmp+rename, 0600 permissions). Two environment variables override the disk config: `DOKI_EMULATION_MODE` and `DOKI_EMULATOR` (alias). Auto-detection prefers FEX-Emu on ARM64 hosts, then Box64, then QEMU user-mode as a universal fallback. Container images with foreign architectures (e.g., `linux/amd64` on an ARM64 host) are automatically routed through the selected emulator by the runner registry.
 
 ---
 
@@ -801,6 +818,9 @@ landlock_create_ruleset, landlock_add_rule         # Landlock sandboxing
 | `DOKI_LINK_RELAY` | Relay peer for TURN fallback | unset |
 | `DOKI_LINK_PAYLOAD_ENC` | Enable NaCl secretbox (L2 encryption) | unset |
 | `DOKI_USE_SOCAT` | Force socat for port forwarding | unset |
+| `DOKI_RUNTIME` | Force specific runner (`proot`, `gVisor`, `native`, etc.) | auto-detect |
+| `DOKI_EMULATION_MODE` | Cross-arch emulator preference (`qemu`, `fex`, `box64`, `auto`) | `auto` |
+| `DOKI_EMULATOR` | Alias for `DOKI_EMULATION_MODE` | unset |
 
 ---
 
@@ -901,6 +921,7 @@ Doki/
     cli/                  CLI library (3200+ lines)
     common/               Shared types, config, utilities
     netlink/              DokiLink Mesh (gossip, proxy, NAT traversal, DHT, mDNS)
+    emulation/            Cross-arch emulation (QEMU/FEX/Box64 detection + config)
     landlock/             Landlock LSM sandbox (Linux 5.13+)
     macos/                macOS native VM (VZ + QEMU + Sandbox backends)
     security/             Seccomp and AppArmor profiles
@@ -1026,6 +1047,15 @@ Doki 0.11 is the networking and maturity release: full DokiLink Mesh with NAT tr
 #### Diagnostics
 
 - `doki deps` tool with `ls` (list system deps), `check` (CI gate), `go` (list Go deps), `install <name>` (best-effort install via detected package manager).
+
+#### v0.11.1 Patch
+
+- **Termux networking UX**: Corrected misleading "install passt/slirp4netns" messages for Termux users (neither tool works without `/dev/net/tun` + `CAP_NET_ADMIN`). The fallback log now explains the platform limitation explicitly. `doki deps` no longer suggests `pkg install passt` on Termux.
+- **Cross-architecture emulation** (`pkg/emulation`): Persistent emulator config via `doki emu {show,detect,set,test}` and `~/.doki/emulation.json`. Three backends: QEMU user-mode, FEX-Emu (x86-on-ARM), Box64. Env vars `DOKI_EMULATION_MODE` / `DOKI_EMULATOR`.
+- **Runner registry refactor** (`pkg/runtime/registry.go`): Dynamic runner selection with `DOKI_RUNTIME` env override, emulation preference routing, and platform-aware runner filtering. New `BestFor()` algorithm with proper fallback chain.
+- **Daemon host addressing** (`--host` flag): Supports `unix://`, `tcp://`, and bare path/socket formats (Docker-style).
+- **Documentation**: README expanded to 1200+ lines with v0.10.0-level feature detail. 22 wiki pages rewritten. `dok1.xyz` domain replaced throughout.
+- **Release**: 42 binaries for 7 platforms with SHA256 checksums.
 
 #### Security Fixes
 
