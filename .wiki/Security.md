@@ -684,7 +684,7 @@ INFO  signature valid (key: <fingerprint>)
 
 <sub>[DISCLOSURE / 90 DAYS]</sub>
 
-Security issues should be reported to security@doki.opceanai.com (PGP
+Security issues should be reported to security@dok1.xyz (PGP
 key on the website). A 90-day disclosure timeline is followed.
 
 <hr>

@@ -67,7 +67,7 @@ jobs:
       - name: Set up git
         run: |
           git config --global user.name 'OpceanAI Bot'
-          git config --global user.email 'bot@opceanai.com'
+          git config --global user.email 'bot@dok1.xyz'
           git config --global advice.detachedHead false
 
       - name: Sync to GitHub
