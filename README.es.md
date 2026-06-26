@@ -8,7 +8,7 @@
 
 [![Go](https://img.shields.io/badge/go-1.26.3+-00ADD8?style=flat-square&color=24292e)](https://go.dev)
 [![Licencia](https://img.shields.io/badge/licencia-Apache_2.0-555?style=flat-square&color=24292e)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.11.0-0F766E?style=flat-square&color=24292e)](https://github.com/OpceanAI/Doki/releases)
+[![Release](https://img.shields.io/badge/release-v0.11.1-0F766E?style=flat-square&color=24292e)](https://github.com/OpceanAI/Doki/releases)
 [![Descargas](https://img.shields.io/github/downloads/OpceanAI/Doki/total?style=flat-square&color=24292e)](https://github.com/OpceanAI/Doki/releases)
 
 ---
