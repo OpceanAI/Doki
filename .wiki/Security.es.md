@@ -689,7 +689,7 @@ INFO  signature valid (key: <fingerprint>)
 
 <sub>[DIVULGACION / 90 DIAS]</sub>
 
-Los issues de seguridad deben reportarse a security@doki.opceanai.com
+Los issues de seguridad deben reportarse a security@dok1.xyz
 (PGP key en el sitio web). Se sigue un timeline de divulgacion de 90
 dias.
 

@@ -128,6 +128,10 @@ VZ backend via cgo bridge to Virtualization.framework for macOS 11+. QEMU backen
 
 `doki deps` tool for host dependency verification with `ls`, `check` (CI gate), `go` (Go module deps), and `install` (best-effort via detected package manager). `doki doctor` for environment health checks.
 
+### Cross-Architecture Emulation
+
+Run x86 containers on ARM and vice versa without kernel support. Three backends: QEMU user-mode (`qemu-x86_64-static`, `qemu-aarch64-static`), FEX-Emu (x86-on-ARM, optimized for Termux/Android), and Box64 (lightweight x86_64 emulator). Configurable via `doki emulator ls|set|detect` or `DOKI_EMULATION_MODE=qemu|fex|box64|auto`. Persistent preferences stored in `~/.doki/emulation.json` with atomic writes and env-var override. Auto-detection selects the best available backend for your host architecture.
+
 ---
 
 ## Quick Start
@@ -135,7 +139,7 @@ VZ backend via cgo bridge to Virtualization.framework for macOS 11+. QEMU backen
 ### Install
 
 ```bash
-curl -sL https://doki.opceanai.com | sh
+curl -sL https://dok1.xyz | sh
 ```
 
 ### First Run
@@ -1189,7 +1193,7 @@ limitations under the License.
 | GitHub | [OpceanAI/Doki](https://github.com/OpceanAI/Doki) | Yes (primary) |
 | GitLab | [aguitauwu/doki](https://gitlab.com/aguitauwu/doki) | mirror |
 | Codeberg | [aguitauwu/Doki](https://codeberg.org/aguitauwu/Doki) | mirror |
-| Website | [doki.opceanai.com](https://doki.opceanai.com) | docs / install script |
+| Website | [dok1.xyz](https://dok1.xyz) | docs / install script |
 | Spanish README | [README.es.md](README.es.md) | translation |
 
 > Main is the only source of truth. Mirrors are force-synced from `main` after each release. If you find a divergence, open an issue on GitHub.
