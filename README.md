@@ -1001,7 +1001,7 @@ Doki/
 
 ## What's New
 
-### v0.11.0 / v0.11.1 (Current)
+### v0.11.0 (June 2026)
 
 Doki 0.11 is the networking and maturity release: full DokiLink Mesh with NAT traversal and DHT, macOS VZ cgo backend, Kubernetes 100% with real CRI, and production-ready Podman API.
 
@@ -1012,6 +1012,7 @@ Doki 0.11 is the networking and maturity release: full DokiLink Mesh with NAT tr
 - **mDNS 90-second expiry**: entries expire after 90 seconds if not refreshed, cleanup loop every 30s.
 - **Crypto fixes**: Order-independent key derivation (both peers derive the same shared key). Per-connection nonces from `crypto/rand`. Replay protection with 5-minute timestamp window and LRU nonce cache. `secretboxStreamConn.Close()` uses `atomic.Bool` to prevent double-close race.
 - **Mesh hardening**: `Stop()` closes `stopCh` to signal all loops. Gossip decoder wrapped in `io.LimitReader` (OOM DoS prevention). mDNS TXT records advertise `common.DokiVersion`.
+- **Security**: Path traversal validation in TrustStore, SecretManager, and ManifestManager. Constant-time comparison via `crypto/subtle.ConstantTimeCompare` for TOFU pubkey verification. mTLS enforcement with `RequireAndVerifyClientCert`.
 
 #### macOS Native Virtualization
 
@@ -1022,12 +1023,12 @@ Doki 0.11 is the networking and maturity release: full DokiLink Mesh with NAT tr
 
 #### Kubernetes 100%
 
-- **CRI gRPC server**: Real gRPC CRI implementing all 35 RuntimeServiceServer + 6 ImageServiceServer RPCs on Unix socket.
+- **CRI gRPC server** (`pkg/cri/server.go`): Real gRPC CRI implementing all 35 RuntimeServiceServer + 6 ImageServiceServer RPCs on Unix socket.
 - **Kubelet with real CRI**: `NewKubeletWithCRI` dials CRI socket, calls `RunPodSandbox` / `CreateContainer` / `StartContainer`, gets real PodIP, container states, and image digests.
 - **Kube-proxy real**: iptables chains with DNAT/MASQUERADE, nftables ruleset generation, userspace TCP/UDP round-robin proxy (works without root).
-- **Controllers functional**: DeploymentController, ReplicaSetController, JobController (parallelism/completions/backoff), EndpointController, ServiceController (ClusterIP allocation), NamespaceController (cascading deletion), GarbageCollector (OwnerReferences).
+- **Controllers functional** (`pkg/controllers/manager.go`): DeploymentController, ReplicaSetController, JobController (parallelism/completions/backoff), EndpointController, ServiceController (ClusterIP allocation), NamespaceController (cascading deletion), GarbageCollector (OwnerReferences).
 - **API server complete**: API group paths (`networking.k8s.io/v1`, `rbac.authorization.k8s.io/v1`), PATCH (merge-patch + strategic-merge), Watch (K8s event format).
-- **SQLiteStore**: Persistent store with crash-safe persistence via SQLite.
+- **SQLiteStore** (`pkg/store/sqlite.go`): Persistent store with crash-safe persistence via SQLite.
 - **Scheduler real**: Busy-wait replaced with blocking sleep, image locality scoring, least-requested scoring.
 - **CoreDNS real**: UDP buffer race fixed, SRV record support, NXDOMAIN for unresolvable queries.
 
@@ -1040,7 +1041,7 @@ Doki 0.11 is the networking and maturity release: full DokiLink Mesh with NAT tr
 
 #### Compose Healthcheck Execution
 
-- `HealthChecker` runs periodic probes (CMD/CMD-SHELL/NONE), respects Interval/Timeout/Retries/StartPeriod/StartInterval.
+- `HealthChecker` (`pkg/runtime/healthcheck.go`) runs periodic probes (CMD/CMD-SHELL/NONE), respects Interval/Timeout/Retries/StartPeriod/StartInterval.
 - Updates `state.HealthStatus.Status` (`starting` -> `healthy`/`unhealthy`).
 - Compose `service_healthy` condition works end-to-end.
 
@@ -1048,22 +1049,46 @@ Doki 0.11 is the networking and maturity release: full DokiLink Mesh with NAT tr
 
 - `doki deps` tool with `ls` (list system deps), `check` (CI gate), `go` (list Go deps), `install <name>` (best-effort install via detected package manager).
 
-#### v0.11.1 Patch
+### v0.11.1 (June 2026)
 
-- **Termux networking UX**: Corrected misleading "install passt/slirp4netns" messages for Termux users (neither tool works without `/dev/net/tun` + `CAP_NET_ADMIN`). The fallback log now explains the platform limitation explicitly. `doki deps` no longer suggests `pkg install passt` on Termux.
-- **Cross-architecture emulation** (`pkg/emulation`): Persistent emulator config via `doki emu {show,detect,set,test}` and `~/.doki/emulation.json`. Three backends: QEMU user-mode, FEX-Emu (x86-on-ARM), Box64. Env vars `DOKI_EMULATION_MODE` / `DOKI_EMULATOR`.
-- **Runner registry refactor** (`pkg/runtime/registry.go`): Dynamic runner selection with `DOKI_RUNTIME` env override, emulation preference routing, and platform-aware runner filtering. New `BestFor()` algorithm with proper fallback chain.
-- **Daemon host addressing** (`--host` flag): Supports `unix://`, `tcp://`, and bare path/socket formats (Docker-style).
-- **Documentation**: README expanded to 1200+ lines with v0.10.0-level feature detail. 22 wiki pages rewritten. `dok1.xyz` domain replaced throughout.
-- **Release**: 42 binaries for 7 platforms with SHA256 checksums.
+Bug fix and incremental feature release.
+
+#### Cross-Architecture Emulation (new)
+
+- **`pkg/emulation/config.go`** (198 lines): QEMU user-mode, FEX-Emu, and Box64 detection with persistent config at `~/.doki/emulation.json` (atomic writes, 0600 permissions).
+- **`doki emu {show,detect,set,test}`** -- 4 new CLI subcommands for emulator management.
+- **`DOKI_EMULATION_MODE`** / **`DOKI_EMULATOR`** environment variables override the saved preference.
+- `emulation.PreferredMode()`, `NormalizeMode()`, `Detect()`, `SelectBest()` public API. Foreign-arch images are automatically routed through the selected emulator by the runner registry.
+- 4 unit tests (`TestNormalizeMode`, `TestSaveLoadPreferredMode`, `TestPreferredModeEnvWins`, `TestSelectBest`).
+
+#### Runner Registry Refactor
+
+- **`pkg/runtime/registry.go`**: `BestFor()` algorithm rewritten with `DOKI_RUNTIME` environment variable support, `requestedRuntime()`, `runnerUsableOnHost()`, and `preferredEmulationRunner()` for cross-arch routing.
+- 5 new tests (`TestRegistryBestForUsesEnvRuntime`, `TestRegistryBestForChoosesHighestUsableLevel`, `TestRegistryBestForSkipsUnavailableHostRequirements`, `TestRegistryBestForCrossArchPrefersEmulation`, `TestRegistryBestForUsesQEMUPreference`).
+
+#### Daemon
+
+- **`--host` flag** with Docker-style addressing: `unix:///path`, `tcp://addr:port`, bare path. `applyDaemonHost()` parsing. Supports `DOKI_HOST` and `DOCKER_HOST` environment variables.
+- **`cmd/dokid/main_test.go`**: `TestApplyDaemonHost` covers three parsing paths.
+
+#### Bug Fix -- Issue #5: Rootless Networking on Termux
+
+- **chown warnings** (`pkg/runtime/runtime.go`): `logChownError()` emits a single INFO message in rootless mode instead of hundreds of WARN lines.
+- **pasta fallback** (`pkg/network/manager.go`): `setupRootlessNetworking()` now tries `pasta` -> `slirp4netns` -> host netns via proot (previously crashed when pasta was not found).
+- **client exit code** (`cmd/doki/main.go`): `dispatch()` subcommand error handling uses `handleError()`. `ExitError{Code: 0}` no longer prints "Error:".
+- **Termux-specific UX**: `termuxNetworkHint()` prevents misleading "pkg install passt" suggestions. Fallback INFO message explains `/dev/net/tun` + `CAP_NET_ADMIN` limitation.
+- **1 regression test**: `TestSetupRootlessNetworking_Fallback`.
+
+#### Documentation
+
+- README restored to v0.10.0 detail level (1243 lines).
+- 22 wiki pages rewritten in clean style (zero emojis, zero SVGs, zero ASCII box diagrams).
+- Domain: `doki.opceanai.com` -> `dok1.xyz`.
 
 #### Security Fixes
 
-- Path traversal validation in TrustStore, SecretManager, and ManifestManager.
-- Constant-time comparison via `crypto/subtle.ConstantTimeCompare` for TOFU pubkey verification.
-- mTLS enforcement with `RequireAndVerifyClientCert`.
-- Replay protection with random nonce + timestamp freshness check.
-- OOM DoS prevention via `io.LimitReader`.
+- `emulation.json` stored with 0600 permissions and atomic writes.
+- `logChownError()` prevents log injection from OCI file paths.
 
 ### v0.10.0
 
