@@ -1,4 +1,4 @@
-FROM golang:1.26.3-alpine3.20 AS builder
+FROM golang:1.26.3-alpine AS builder
 
 RUN apk add --no-cache git
 
@@ -31,7 +31,7 @@ RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -o /build/doki-kube    ./cmd/doki-kube && \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -o /build/doki-kubectl ./cmd/doki-kubectl
 
-FROM alpine:3.20
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates tzdata
 
