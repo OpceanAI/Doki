@@ -170,7 +170,7 @@ func TestRunnerUsableOnHost(t *testing.T) {
 		{"empty caps", RunnerCapabilities{}, true},
 		{"non-matching arch", RunnerCapabilities{Arch: []string{"definitely-not-this-arch"}}, false},
 		{"matching arch", RunnerCapabilities{Arch: []string{runtime.GOARCH}}, true},
-		{"kvm required without kvm", RunnerCapabilities{KVMRequired: true}, false},
+		{"kvm required without kvm", RunnerCapabilities{KVMRequired: true}, hasKVM()},
 		{"root required without root", RunnerCapabilities{RootRequired: true}, os.Geteuid() == 0},
 	}
 	for _, tt := range tests {
