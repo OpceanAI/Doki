@@ -1,5 +1,7 @@
 # The Universal Container Engine
 
+![Doki Banner](doki.gif)
+
 Rootless containers for everywhere Docker can't reach.
 
 <p>

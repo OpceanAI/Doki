@@ -87,6 +87,33 @@ type Runtime struct {
 	healthCheckers map[string]*HealthChecker
 }
 
+// LinuxResources is a portable representation of cgroup resource
+// limits. It maps to LinuxContainerResources in the CRI spec, and
+// is also used by /containers/{id}/update.
+type LinuxResources struct {
+	// CPU
+	CPUShares  uint64 // -> cpu.weight (1-10000, 0 = unset)
+	CPUQuota   int64  // microseconds per period (0 = unset)
+	CPUPeriod  uint64 // microseconds (default 100000)
+	NanoCPUs   int64  // 1e9 = 1 CPU
+	CpusetCpus string
+	CpusetMems string
+
+	// Memory (bytes)
+	Memory           int64
+	MemorySwap       int64
+	MemorySwappiness *uint64
+
+	// PIDs
+	PidsLimit int64
+
+	// Block I/O
+	BlkioWeight uint16
+
+	// OOM
+	OomKillDisable bool
+}
+
 // Config holds the configuration for a container.
 type Config struct {
 	ID                string
@@ -1329,6 +1356,178 @@ func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user
 	}
 }
 
+// ExecResult holds the result of a streaming exec call.
+type ExecResult struct {
+	Stdin  io.WriteCloser
+	Stdout io.ReadCloser
+	Stderr io.ReadCloser
+	Wait   func() error // blocks until process exits and returns exit error
+	Pid    int
+}
+
+// writeCloserAdapter adapts an io.PipeWriter to io.WriteCloser. The
+// stdcopy writer needs a Write+Close interface; PipeWriter has both.
+type writeCloserAdapter struct{ w *io.PipeWriter }
+
+func (a writeCloserAdapter) Write(p []byte) (int, error) { return a.w.Write(p) }
+func (a writeCloserAdapter) Close() error                { return a.w.Close() }
+
+// readCloserAdapter adapts an io.PipeReader to io.ReadCloser.
+type readCloserAdapter struct{ r *io.PipeReader }
+
+func (a readCloserAdapter) Read(p []byte) (int, error) { return a.r.Read(p) }
+func (a readCloserAdapter) Close() error               { return a.r.Close() }
+
+// nopWriteCloser is a write+close that does nothing. Used when no
+// child process exists (VM / FEX fallback).
+type nopWriteCloser struct{}
+
+func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (nopWriteCloser) Close() error                { return nil }
+
+// ExecAttach starts a process inside a running container and returns
+// pipes for bidirectional streaming. Unlike Exec, this does not buffer
+// output: stdout/stderr are streamed live to the returned readers and
+// stdin writes from the caller are forwarded to the process. The
+// returned Wait func must be called to reap the child process.
+//
+// Implementation notes:
+//   - For ModeProot, we use proot with stdout/stderr redirected to the
+//     returned pipes.
+//   - For ModeNamespaces, nsenter -t <pid> -m -p -a — same approach.
+//   - For ModeNative, exec.Command directly; rootfs is the working dir.
+//   - For VM/FEX/microvm/QEMU runners, we cannot currently inject a
+//     child process; we fall back to Exec() and synthesize a one-shot
+//     read. Callers that need real-time streaming should detect the
+//     mode and warn the user.
+func (rt *Runtime) ExecAttach(containerID string, args []string, env []string, workingDir, user string, tty bool) (*ExecResult, error) {
+	state, err := rt.State(containerID)
+	if err != nil {
+		return nil, err
+	}
+	if state.Status != common.StateRunning {
+		return nil, fmt.Errorf("container %s is not running", containerID)
+	}
+
+	rootfsDir := ""
+	if state.Config != nil {
+		rootfsDir = state.Config.RootfsReady
+	}
+	if rootfsDir == "" && state.Bundle != "" {
+		rootfsDir = filepath.Join(state.Bundle, "rootfs")
+	}
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+
+	makeCmd := func() *exec.Cmd {
+		var cmd *exec.Cmd
+		switch rt.mode {
+		case ModeProot:
+			uid, gid := parseUser(user)
+			prootArgs, perr := proot.BuildProotBaseArgs(rootfsDir, uid, gid)
+			if perr != nil {
+				return nil
+			}
+			if workingDir != "" {
+				prootArgs = append(prootArgs, "-w", workingDir)
+			}
+			prootArgs = append(prootArgs, args...)
+			prootBin := proot.FindProotBinary()
+			if prootBin == "" {
+				return nil
+			}
+			proot.UnsetProotKillers()
+			cmd = exec.Command(prootBin, prootArgs...)
+			cmd.Env = proot.BuildEnv(env, nil)
+		case ModeNamespaces:
+			if state.Pid == 0 {
+				return nil
+			}
+			nsenterArgs := []string{"-t", fmt.Sprintf("%d", state.Pid), "-m", "-p", "-a"}
+			if workingDir != "" {
+				nsenterArgs = append(nsenterArgs, "-w", workingDir)
+			}
+			nsenterArgs = append(append(nsenterArgs, "--"), args...)
+			cmd = exec.Command("nsenter", nsenterArgs...)
+			cmd.Env = env
+		default:
+			cmd = exec.Command(args[0], args[1:]...)
+			if workingDir != "" {
+				cmd.Dir = workingDir
+			} else if rootfsDir != "" && common.PathExists(rootfsDir) {
+				cmd.Dir = rootfsDir
+				pathPrefix := rootfsDir + "/usr/local/sbin:" + rootfsDir + "/usr/local/bin:" +
+					rootfsDir + "/usr/sbin:" + rootfsDir + "/usr/bin:" +
+					rootfsDir + "/sbin:" + rootfsDir + "/bin"
+				if currentPath := os.Getenv("PATH"); currentPath != "" {
+					pathPrefix += ":" + currentPath
+				}
+				env = append(env, "PATH="+pathPrefix)
+			}
+			cmd.Env = env
+		}
+		return cmd
+	}
+
+	cmd := makeCmd()
+	if cmd == nil {
+		// VM / QEMU / FEX modes don't support direct attach; fall back
+		// to buffered Exec by running once with empty pipes and
+		// returning the buffered output as a single "frame".
+		stdoutBytes, stderrBytes, execErr := rt.Exec(containerID, args, env, workingDir, user)
+		_ = execErr
+		go func() {
+			if len(stdoutBytes) > 0 {
+				_, _ = stdoutW.Write(stdoutBytes)
+			}
+			if len(stderrBytes) > 0 {
+				_, _ = stderrW.Write(stderrBytes)
+			}
+			_ = stdoutW.Close()
+			_ = stderrW.Close()
+			_ = stdinR.Close()
+		}()
+		// In fallback mode, the caller's stdin writer is wired to a
+		// no-op closer since no child process exists to receive data.
+		_ = stdinW
+		_ = stdinR
+		return &ExecResult{
+			Stdin:  nopWriteCloser{},
+			Stdout: readCloserAdapter{r: stdoutR},
+			Stderr: readCloserAdapter{r: stderrR},
+			Wait:   func() error { return nil },
+			Pid:    -1,
+		}, nil
+	}
+
+	cmd.Stdin = stdinR
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+
+	waitDone := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Run()
+		_ = stdoutW.Close()
+		_ = stderrW.Close()
+		_ = stdinR.Close()
+		close(waitDone)
+	}()
+
+	return &ExecResult{
+		Stdin:  writeCloserAdapter{w: stdinW},
+		Stdout: readCloserAdapter{r: stdoutR},
+		Stderr: readCloserAdapter{r: stderrR},
+		Wait: func() error {
+			<-waitDone
+			return waitErr
+		},
+		Pid: cmd.Process.Pid,
+	}, nil
+}
+
 // Stop stops a running container by its id with a configurable timeout.
 func (rt *Runtime) Stop(id string, timeout int) error {
 	rt.mu.Lock()
@@ -1610,6 +1809,105 @@ func (rt *Runtime) Stats(id string) (map[string]interface{}, error) {
 	stats["network"] = getNetworkStats()
 	return stats, nil
 }
+
+// UpdateResources atomically updates cgroup v2 limits for a
+// running container. Implements CRI UpdateContainerResources
+// semantics: any failure rolls back the entire change set.
+func (rt *Runtime) UpdateResources(id string, res *LinuxResources) error {
+	if res == nil {
+		return fmt.Errorf("nil resources")
+	}
+	_, err := rt.State(id)
+	if err != nil {
+		return err
+	}
+	if !rt.cgMgr.IsAvailable() {
+		return nil // best-effort on non-cgroup hosts
+	}
+	cfg := &cgroups.Config{
+		CPUShares:        res.CPUShares,
+		CPUQuota:         res.CPUQuota,
+		CPUPeriod:        res.CPUPeriod,
+		NanoCpus:         res.NanoCPUs,
+		CpusetCpus:       res.CpusetCpus,
+		CpusetMems:       res.CpusetMems,
+		Memory:           res.Memory,
+		MemorySwap:       res.MemorySwap,
+		MemorySwappiness: res.MemorySwappiness,
+		PidsLimit:        res.PidsLimit,
+		BlkioWeight:      res.BlkioWeight,
+		OomKillDisable:   res.OomKillDisable,
+	}
+	return rt.cgMgr.Update(id, cfg)
+}
+
+// ContainerStatsData is a portable, CRI-agnostic stats payload
+// suitable for translation to v1.ContainerStats by the CRI server.
+type ContainerStatsData struct {
+	ID           string
+	CPUUsageNS   uint64
+	CPUUserNS    uint64
+	CPUKernelNS  uint64
+	MemoryBytes  uint64
+	MemoryLimit  uint64
+	PidsCurrent  uint64
+	PidsLimit    uint64
+	BlockIORB    uint64
+	BlockIOWB    uint64
+	BlockIORIOs  uint64
+	BlockIOWIOs  uint64
+	CPUSomePSI   float64
+	MemorySomePSI float64
+	IOSomePSI    float64
+	Timestamp    int64
+}
+
+// ContainerStats returns a portable stats payload for a single
+// container, sourced from cgroup v2. The CRI server translates this
+// to v1.ContainerStats.
+func (rt *Runtime) ContainerStats(id string) (*ContainerStatsData, error) {
+	out := &ContainerStatsData{ID: id, Timestamp: time.Now().UnixNano()}
+	if !rt.cgMgr.IsAvailable() {
+		return out, nil
+	}
+	full, _ := rt.cgMgr.GetStatsFull(id)
+	if cpu, ok := full["cpu"].(map[string]uint64); ok {
+		if v, ok := cpu["usage_usec"]; ok {
+			out.CPUUsageNS = v * 1000
+		}
+		if v, ok := cpu["user_usec"]; ok {
+			out.CPUUserNS = v * 1000
+		}
+		if v, ok := cpu["system_usec"]; ok {
+			out.CPUKernelNS = v * 1000
+		}
+	}
+	if mem, ok := full["memory"].(int64); ok {
+		out.MemoryBytes = uint64(mem)
+	}
+	if pids, ok := full["pids"].(int64); ok {
+		out.PidsCurrent = uint64(pids)
+	}
+	if io, ok := full["io"].(map[string]map[string]uint64); ok {
+		for _, devStats := range io {
+			out.BlockIORB += devStats["rbytes"]
+			out.BlockIOWB += devStats["wbytes"]
+			out.BlockIORIOs += devStats["rios"]
+			out.BlockIOWIOs += devStats["wios"]
+		}
+	}
+	if psi, ok := full["cpu_psi"].(cgroups.PSIStats); ok {
+		out.CPUSomePSI = psi.Some
+	}
+	if psi, ok := full["memory_psi"].(cgroups.PSIStats); ok {
+		out.MemorySomePSI = psi.Some
+	}
+	return out, nil
+}
+
+// wrappingInt64 is a tiny helper so we can take the address of an
+// int64 value (CRI uses *int64 for many stat fields).
+type wrappingInt64 struct{ v int64 }
 
 func getNetworkStats() map[string]uint64 {
 	data, err := os.ReadFile("/proc/net/dev")

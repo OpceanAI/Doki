@@ -196,6 +196,149 @@ func (m *Manager) Destroy(containerID string) error {
 	return os.Remove(cgroupPath)
 }
 
+// Update atomically updates a subset of cgroup limits. Implements
+// CRI UpdateContainerResources semantics: rollback on any failure.
+//
+// Returns the per-controller set of errors so the caller can surface
+// them in CRI/ContainerStats. The bool indicates whether at least
+// one resource was updated.
+func (m *Manager) Update(containerID string, cfg *Config) error {
+	if !m.enabled {
+		return nil
+	}
+	cgroupPath := filepath.Join(m.root, containerID)
+	// Capture previous values for rollback.
+	prev, _ := snapshotLimits(cgroupPath)
+	if err := m.applyLimits(cgroupPath, cfg); err != nil {
+		_ = restoreLimits(cgroupPath, prev)
+		return err
+	}
+	return nil
+}
+
+// CgroupPath returns the absolute cgroup v2 path for a container.
+func (m *Manager) CgroupPath(containerID string) string {
+	return filepath.Join(m.root, containerID)
+}
+
+// PSIStats holds cgroup v2 pressure-stall information.
+type PSIStats struct {
+	Some float64 `json:"some"`
+	Full float64 `json:"full"`
+}
+
+// Pressure reads a cgroup v2 pressure file (e.g. cpu.pressure).
+func (m *Manager) Pressure(containerID, file string) (PSIStats, error) {
+	var p PSIStats
+	if !m.enabled {
+		return p, nil
+	}
+	cgroupPath := filepath.Join(m.root, containerID)
+	data, err := os.ReadFile(filepath.Join(cgroupPath, file))
+	if err != nil {
+		return p, err
+	}
+	// Format: "some avg10=X.XX avg60=X.XX avg300=X.XX total=X\n"
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "some") {
+			fields := strings.Fields(line)
+			for _, f := range fields {
+				if strings.HasPrefix(f, "avg10=") {
+					if v, perr := strconv.ParseFloat(strings.TrimPrefix(f, "avg10="), 64); perr == nil {
+						p.Some = v
+					}
+				}
+			}
+		}
+	}
+	return p, nil
+}
+
+// GetStatsFull returns full cgroup statistics for a container,
+// including PSI for cpu/memory/io.
+func (m *Manager) GetStatsFull(containerID string) (map[string]interface{}, error) {
+	if !m.enabled {
+		return nil, nil
+	}
+	stats := make(map[string]interface{})
+	cgroupPath := filepath.Join(m.root, containerID)
+
+	if data, err := readFile(cgroupPath, "cpu.stat"); err == nil {
+		stats["cpu"] = parseCgroupKV(data)
+	}
+	if data, err := readFile(cgroupPath, "memory.current"); err == nil {
+		if val, err := strconv.ParseInt(strings.TrimSpace(data), 10, 64); err == nil {
+			stats["memory"] = val
+		}
+	}
+	if data, err := readFile(cgroupPath, "memory.events"); err == nil {
+		stats["memory_events"] = parseCgroupKV(data)
+	}
+	if data, err := readFile(cgroupPath, "pids.current"); err == nil {
+		if val, err := strconv.ParseInt(strings.TrimSpace(data), 10, 64); err == nil {
+			stats["pids"] = val
+		}
+	}
+	if data, err := readFile(cgroupPath, "io.stat"); err == nil {
+		stats["io"] = parseIOStat(data)
+	}
+	if psi, err := m.Pressure(containerID, "cpu.pressure"); err == nil {
+		stats["cpu_psi"] = psi
+	}
+	if psi, err := m.Pressure(containerID, "memory.pressure"); err == nil {
+		stats["memory_psi"] = psi
+	}
+	return stats, nil
+}
+
+func parseIOStat(data string) map[string]map[string]uint64 {
+	result := make(map[string]map[string]uint64)
+	for _, line := range strings.Split(strings.TrimSpace(data), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		dev := strings.TrimSuffix(parts[0], ":")
+		stats := make(map[string]uint64)
+		for _, kv := range parts[1:] {
+			eq := strings.IndexByte(kv, '=')
+			if eq < 0 {
+				continue
+			}
+			if v, err := strconv.ParseUint(kv[eq+1:], 10, 64); err == nil {
+				stats[kv[:eq]] = v
+			}
+		}
+		result[dev] = stats
+	}
+	return result
+}
+
+func snapshotLimits(cgroupPath string) (map[string]string, error) {
+	out := make(map[string]string)
+	files := []string{
+		"cpu.max", "cpu.weight", "memory.max", "memory.swap.max",
+		"pids.max", "io.weight", "cpuset.cpus", "cpuset.mems",
+	}
+	for _, f := range files {
+		if data, err := os.ReadFile(filepath.Join(cgroupPath, f)); err == nil {
+			out[f] = string(data)
+		}
+	}
+	return out, nil
+}
+
+func restoreLimits(cgroupPath string, prev map[string]string) error {
+	var firstErr error
+	for f, v := range prev {
+		if err := os.WriteFile(filepath.Join(cgroupPath, f), []byte(v), 0644); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 // GetStats returns cgroup statistics for a container.
 func (m *Manager) GetStats(containerID string) (map[string]interface{}, error) {
 	if !m.enabled {

@@ -3,6 +3,7 @@ package cri
 
 import (
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/OpceanAI/Doki/pkg/common"
@@ -20,6 +21,7 @@ type CRIPlugin struct {
 	network      *network.Manager
 	podSandboxes map[string]*PodSandbox
 	containers   map[string]*CRIContainer
+	podCIDR      string
 }
 
 // CRIContainer holds CRI-specific container metadata that is not stored in
@@ -359,4 +361,30 @@ func (c *CRIPlugin) Version() map[string]string {
 		"runtime_name":    "doki",
 		"runtime_version": common.Version,
 	}
+}
+
+// cgroupV2Available returns true when /sys/fs/cgroup/cgroup.controllers
+// (a cgroup v2-only file) exists. Used by Status to advertise support.
+func (c *CRIPlugin) cgroupV2Available() bool {
+	_, err := os.Stat("/sys/fs/cgroup/cgroup.controllers")
+	return err == nil
+}
+
+// dnsMode reports which DNS backend is in use. The CRI Status.Info
+// field exposes this to the kubelet for diagnostics.
+func (c *CRIPlugin) dnsMode() string {
+	if c.network == nil {
+		return "none"
+	}
+	return "internal"
+}
+
+// UpdateResources updates cgroup limits for a running container.
+// Implements CRI UpdateContainerResources semantics: best-effort
+// atomic with rollback on any controller failure.
+func (c *CRIPlugin) UpdateResources(containerID string, resources *runtime.LinuxResources) error {
+	if c.runtime == nil {
+		return common.NewErrNotFound("container", containerID)
+	}
+	return c.runtime.UpdateResources(containerID, resources)
 }
