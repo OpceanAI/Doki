@@ -30,6 +30,14 @@ import (
 	v1 "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
+// Streamer manages ephemeral HTTP streaming endpoints for exec, attach,
+// and portforward operations. Each call to Reserve picks an available port,
+// starts a one-shot HTTP server, and returns the allocated port number.
+type Streamer interface {
+	Reserve(ctx context.Context, op, resourceID string, params map[string]string) (int, error)
+	Addr() (host string, port int)
+}
+
 // CRIServer is a gRPC server implementing the Kubernetes Container Runtime
 // Interface (CRI) v1 RuntimeService and ImageService.
 //
@@ -41,8 +49,9 @@ type CRIServer struct {
 	v1.UnimplementedRuntimeServiceServer
 	v1.UnimplementedImageServiceServer
 
-	plugin *CRIPlugin
-	server *grpc.Server
+	plugin   *CRIPlugin
+	server   *grpc.Server
+	streamer Streamer
 }
 
 // NewCRIServer creates a new CRIServer backed by the given CRIPlugin.
@@ -649,13 +658,17 @@ func (s *CRIServer) Exec(ctx context.Context, req *v1.ExecRequest) (*v1.ExecResp
 	if _, err := s.plugin.GetContainer(containerID); err != nil {
 		return nil, notFoundErr("container", containerID, err)
 	}
-	return s.streamingURL(ctx, "exec", containerID, map[string]string{
+	url, err := s.streamingURL(ctx, "exec", containerID, map[string]string{
 		"cmd":     strings.Join(req.GetCmd(), " "),
 		"tty":     boolStr(req.GetTty()),
 		"stdin":   boolStr(req.GetStdin()),
 		"stdout":  boolStr(req.GetStdout()),
 		"stderr":  boolStr(req.GetStderr()),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &v1.ExecResponse{Url: url}, nil
 }
 
 // Attach prepares a streaming endpoint to attach to a container.
@@ -670,12 +683,16 @@ func (s *CRIServer) Attach(ctx context.Context, req *v1.AttachRequest) (*v1.Atta
 	if _, err := s.plugin.GetContainer(containerID); err != nil {
 		return nil, notFoundErr("container", containerID, err)
 	}
-	return s.streamingURL(ctx, "attach", containerID, map[string]string{
+	url, err := s.streamingURL(ctx, "attach", containerID, map[string]string{
 		"tty":    boolStr(req.GetTty()),
 		"stdin":  boolStr(req.GetStdin()),
 		"stdout": boolStr(req.GetStdout()),
 		"stderr": boolStr(req.GetStderr()),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &v1.AttachResponse{Url: url}, nil
 }
 
 // PortForward prepares a streaming endpoint to forward ports from a PodSandbox.
@@ -692,11 +709,15 @@ func (s *CRIServer) PortForward(ctx context.Context, req *v1.PortForwardRequest)
 	}
 	ports := make([]string, 0, len(req.GetPort()))
 	for _, p := range req.GetPort() {
-		ports = append(ports, strconv.FormatInt(p, 10))
+		ports = append(ports, strconv.FormatInt(int64(p), 10))
 	}
-	return s.streamingURL(ctx, "portforward", podID, map[string]string{
+	url, err := s.streamingURL(ctx, "portforward", podID, map[string]string{
 		"ports": strings.Join(ports, ","),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &v1.PortForwardResponse{Url: url}, nil
 }
 
 // streamingURL starts a small ephemeral HTTP server that handles a
@@ -706,23 +727,16 @@ func (s *CRIServer) PortForward(ctx context.Context, req *v1.PortForwardRequest)
 // The URL format matches the upstream CRI contract:
 //   http://<host>:<port>/<token>
 // with the operation encoded in the path of the listening server.
-func (s *CRIServer) streamingURL(ctx context.Context, op, resourceID string, params map[string]string) (*v1.ExecResponse, error) {
+func (s *CRIServer) streamingURL(ctx context.Context, op, resourceID string, params map[string]string) (string, error) {
+	if s.streamer == nil {
+		return "", status.Errorf(codes.Unimplemented, "streaming not configured")
+	}
 	port, err := s.streamer.Reserve(ctx, op, resourceID, params)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "reserve stream port: %v", err)
+		return "", status.Errorf(codes.Internal, "reserve stream port: %v", err)
 	}
 	host, _ := s.streamer.Addr()
-	return &v1.ExecResponse{Url: fmt.Sprintf("http://%s:%d/%s", host, port, op)}, nil
-}
-
-// Attach prepares a streaming endpoint to attach to a running container.
-func (s *CRIServer) Attach(ctx context.Context, req *v1.AttachRequest) (*v1.AttachResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Attach not implemented")
-}
-
-// PortForward prepares a streaming endpoint to forward ports from a PodSandbox.
-func (s *CRIServer) PortForward(ctx context.Context, req *v1.PortForwardRequest) (*v1.PortForwardResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PortForward not implemented")
+	return fmt.Sprintf("http://%s:%d/%s", host, port, op), nil
 }
 
 // ContainerStats returns stats of the container.
