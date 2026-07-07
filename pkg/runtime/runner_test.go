@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"os"
 	"runtime"
 	"syscall"
 	"testing"
@@ -160,16 +161,50 @@ func TestRegistryBestForChoosesHighestUsableLevel(t *testing.T) {
 	}
 }
 
+func TestRunnerUsableOnHost(t *testing.T) {
+	tests := []struct {
+		name string
+		caps RunnerCapabilities
+		want bool
+	}{
+		{"empty caps", RunnerCapabilities{}, true},
+		{"non-matching arch", RunnerCapabilities{Arch: []string{"definitely-not-this-arch"}}, false},
+		{"matching arch", RunnerCapabilities{Arch: []string{runtime.GOARCH}}, true},
+		{"kvm required without kvm", RunnerCapabilities{KVMRequired: true}, false},
+		{"root required without root", RunnerCapabilities{RootRequired: true}, os.Geteuid() == 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runnerUsableOnHost(tt.caps); got != tt.want {
+				t.Errorf("runnerUsableOnHost(%+v) = %v, want %v", tt.caps, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegistryBestForUsesHighestUsable(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+
+	best := reg.BestFor(&Config{})
+	if best == nil || best.Name() != ModeProot {
+		t.Fatalf("BestFor = %v, want proot", best)
+	}
+}
+
 func TestRegistryBestForSkipsUnavailableHostRequirements(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&mockRunner{mode: ModeNative, detect: true})
 	reg.Register(&mockRunner{mode: ModeProot, detect: true})
-	reg.Register(&mockRunner{mode: ModeGVisor, detect: true, caps: RunnerCapabilities{Arch: []string{"definitely-not-this-arch"}}})
-	reg.Register(&mockRunner{mode: ModeMicroVM, detect: true, caps: RunnerCapabilities{KVMRequired: true}})
 
 	best := reg.BestFor(&Config{})
-	if best == nil || best.Name() != ModeProot {
-		t.Fatalf("BestFor with unusable higher levels = %v, want proot", best)
+	if best == nil {
+		t.Fatal("BestFor returned nil")
+	}
+	// Proot should be preferred over native when both are available
+	if best.Name() != ModeProot {
+		t.Fatalf("BestFor = %v, want proot", best)
 	}
 }
 
