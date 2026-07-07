@@ -1223,7 +1223,9 @@ go test ./...
 
 ## License
 
-Apache License 2.0
+Doki itself is Apache 2.0. DokiOS bundles third-party components under their respective licenses.
+
+### Doki
 
 ```
 Copyright 2024-2026 OpceanAI
@@ -1240,6 +1242,17 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
+
+### Bundled Components
+
+| Component | License | SPDX | Notes |
+|:----------|:--------|:-----|:------|
+| **Doki** | Apache 2.0 | `Apache-2.0` | Licensed under Apache 2.0. A highly commercial and permissive license with explicit patent protection for the user |
+| **cloudflared** | Apache 2.0 | `Apache-2.0` | Cloudflare tunnel. Grants commercial freedoms with patent protection, same as Doki |
+| **fastfetch** | MIT | `MIT` | Extremely short, simple, and open license -- do almost anything you want with the code |
+| **OpenSSH** | BSD-style | `SSH-OpenSSH` | OpenSSH license. Highly permissive, historically optimized for security and free redistribution |
+| **zsh** | MIT / BSD | `MIT` or `BSD-2-Clause` | Permissive MIT/BSD-style license, keeping the shell environment free of strict copyleft |
+| **bash** | GPL-3.0 | `GPL-3.0-only` | GNU GPLv3. The most legally restrictive tool in the set: any derivative must share source code, with strong anti-tivoization clauses |
 
 ---
 
