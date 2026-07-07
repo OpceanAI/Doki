@@ -289,10 +289,9 @@ func TestIPCClientConnectTimeout(t *testing.T) {
 }
 
 func TestFindProotBinary(t *testing.T) {
-	// This test just verifies FindProotBinary doesn't panic.
 	bin := FindProotBinary()
 	if bin == "" {
-		t.Error("FindProotBinary returned empty")
+		t.Skip("proot binary not found in this environment")
 	}
 }
 

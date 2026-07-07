@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"sync"
 )
 
 // Backend identifies which underlying firewall tool is in use.
@@ -139,9 +138,4 @@ func ruleKey(r Rule) string {
 		r.Protocol, r.HostIP, r.HostPort, r.ContainerIP, r.ContainerPort, r.ContainerID)
 }
 
-// onceInit ensures initialization happens once.
-type onceInit struct {
-	sync.Once
-	err error
-	mgr Manager
-}
+

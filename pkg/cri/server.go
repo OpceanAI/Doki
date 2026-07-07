@@ -784,9 +784,6 @@ func (s *CRIServer) toV1ContainerStats(data *dokiruntime.ContainerStatsData) *v1
 	return cs
 }
 
-type wrappingUint64 struct{ v uint64 }
-type wrappingFloat64 struct{ v float64 }
-
 // ListContainerStats returns stats for all running containers matching the filter.
 func (s *CRIServer) ListContainerStats(ctx context.Context, req *v1.ListContainerStatsRequest) (*v1.ListContainerStatsResponse, error) {
 	filter := req.GetFilter()
@@ -1166,8 +1163,6 @@ func (s *CRIServer) ImageFsInfo(ctx context.Context, req *v1.ImageFsInfoRequest)
 		ContainerFilesystems: []*v1.FilesystemUsage{containerFS},
 	}, nil
 }
-
-func int64ptr(v int64) *int64 { return &v }
 
 // statFS returns used/total bytes and inodes for a path's filesystem.
 func statFS(path string) (used, total, inodesUsed, inodesTotal uint64, err error) {

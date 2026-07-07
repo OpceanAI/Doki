@@ -1905,9 +1905,6 @@ func (rt *Runtime) ContainerStats(id string) (*ContainerStatsData, error) {
 	return out, nil
 }
 
-// wrappingInt64 is a tiny helper so we can take the address of an
-// int64 value (CRI uses *int64 for many stat fields).
-type wrappingInt64 struct{ v int64 }
 
 func getNetworkStats() map[string]uint64 {
 	data, err := os.ReadFile("/proc/net/dev")

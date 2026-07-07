@@ -103,29 +103,29 @@ sync_gitlab() {
 }
 
 sync_codeberg() {
-    echo "==> Syncing to Codeberg Wiki (aguitauwu/Doki.wiki)"
+    echo "==> Syncing to Codeberg Wiki (aguitauwu/Doki wiki branch)"
 
     local tmpdir
     tmpdir=$(mktemp -d)
     trap "rm -rf '$tmpdir'" EXIT
 
-    # If CODEBERG_TOKEN is set, inject it into the URL
-    local remote_url="https://codeberg.org/aguitauwu/Doki.wiki.git"
+    # Codeberg uses a 'wiki' branch in the main repo (Gitea-style)
+    local remote_url="https://codeberg.org/aguitauwu/Doki.git"
     if [ -n "${CODEBERG_TOKEN:-}" ]; then
-        remote_url="https://oauth2:${CODEBERG_TOKEN}@codeberg.org/aguitauwu/Doki.wiki.git"
+        remote_url="https://oauth2:${CODEBERG_TOKEN}@codeberg.org/aguitauwu/Doki.git"
     fi
 
-    if git ls-remote "$remote_url" >/dev/null 2>&1; then
-        git clone "$remote_url" "$tmpdir/wiki"
+    git clone "$remote_url" "$tmpdir/repo"
+    cd "$tmpdir/repo"
+
+    # Create or checkout the wiki branch
+    if git ls-remote --heads origin wiki | grep -q wiki; then
+        git checkout wiki
     else
-        echo "    Wiki repo does not exist on Codeberg. Create it manually:"
-        echo "      1. Go to https://codeberg.org/aguitauwu/Doki.wiki"
-        echo "      2. Click '+' -> 'New Repository' -> name 'Doki.wiki'"
-        echo "      3. Re-run this script"
-        return 1
+        git checkout --orphan wiki
+        git rm -rf . 2>/dev/null || true
     fi
 
-    cd "$tmpdir/wiki"
     find . -mindepth 1 -not -path './.git*' -delete
     cp -r "$WIKI_DIR"/* .
     git add -A
@@ -134,7 +134,7 @@ sync_codeberg() {
         echo "    No changes"
     else
         git commit -m "wiki: sync from main ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
-        git push origin main --force
+        git push origin wiki --force
         echo "    Pushed"
     fi
 }
