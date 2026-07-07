@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"runtime"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -83,13 +84,13 @@ func TestAllExecutionModes(t *testing.T) {
 func TestRegistryRegister(t *testing.T) {
 	reg := NewRegistry()
 	// Native always detects.
-	nr := mockRunner{mode: ModeNative, detect: true}
+	nr := &mockRunner{mode: ModeNative, detect: true}
 	reg.Register(nr)
 	if reg.Get(ModeNative) == nil {
 		t.Error("Register: native runner not found")
 	}
 	// Undetectable runner should not be registered.
-	ur := mockRunner{mode: ModeGVisor, detect: false}
+	ur := &mockRunner{mode: ModeGVisor, detect: false}
 	reg.Register(ur)
 	if reg.Get(ModeGVisor) != nil {
 		t.Error("Register: undetectable runner should not be registered")
@@ -98,8 +99,8 @@ func TestRegistryRegister(t *testing.T) {
 
 func TestRegistryAvailable(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(mockRunner{mode: ModeNative, detect: true})
-	reg.Register(mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
 	avail := reg.Available()
 	if len(avail) != 2 {
 		t.Errorf("Available() returned %d, want 2", len(avail))
@@ -108,8 +109,8 @@ func TestRegistryAvailable(t *testing.T) {
 
 func TestRegistryBestFor(t *testing.T) {
 	reg := NewRegistry()
-	nr := mockRunner{mode: ModeNative, detect: true}
-	pr := mockRunner{mode: ModeProot, detect: true}
+	nr := &mockRunner{mode: ModeNative, detect: true}
+	pr := &mockRunner{mode: ModeProot, detect: true}
 	reg.Register(nr)
 	reg.Register(pr)
 
@@ -139,8 +140,8 @@ func TestRegistryBestFor(t *testing.T) {
 func TestRegistryBestForUsesEnvRuntime(t *testing.T) {
 	t.Setenv("DOKI_RUNTIME", "proot")
 	reg := NewRegistry()
-	reg.Register(mockRunner{mode: ModeNative, detect: true})
-	reg.Register(mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
 
 	best := reg.BestFor(&Config{})
 	if best == nil || best.Name() != ModeProot {
@@ -150,9 +151,9 @@ func TestRegistryBestForUsesEnvRuntime(t *testing.T) {
 
 func TestRegistryBestForChoosesHighestUsableLevel(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(mockRunner{mode: ModeNative, detect: true})
-	reg.Register(mockRunner{mode: ModeProot, detect: true})
-	reg.Register(mockRunner{mode: ModeGVisor, detect: true, caps: RunnerCapabilities{Arch: []string{runtime.GOARCH}}})
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeGVisor, detect: true, caps: RunnerCapabilities{Arch: []string{runtime.GOARCH}}})
 
 	best := reg.BestFor(&Config{})
 	if best == nil || best.Name() != ModeGVisor {
@@ -162,10 +163,10 @@ func TestRegistryBestForChoosesHighestUsableLevel(t *testing.T) {
 
 func TestRegistryBestForSkipsUnavailableHostRequirements(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(mockRunner{mode: ModeNative, detect: true})
-	reg.Register(mockRunner{mode: ModeProot, detect: true})
-	reg.Register(mockRunner{mode: ModeGVisor, detect: true, caps: RunnerCapabilities{Arch: []string{"definitely-not-this-arch"}}})
-	reg.Register(mockRunner{mode: ModeMicroVM, detect: true, caps: RunnerCapabilities{KVMRequired: true}})
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeGVisor, detect: true, caps: RunnerCapabilities{Arch: []string{"definitely-not-this-arch"}}})
+	reg.Register(&mockRunner{mode: ModeMicroVM, detect: true, caps: RunnerCapabilities{KVMRequired: true}})
 
 	best := reg.BestFor(&Config{})
 	if best == nil || best.Name() != ModeProot {
@@ -175,9 +176,9 @@ func TestRegistryBestForSkipsUnavailableHostRequirements(t *testing.T) {
 
 func TestRegistryBestForCrossArchPrefersEmulation(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(mockRunner{mode: ModeNative, detect: true})
-	reg.Register(mockRunner{mode: ModeProot, detect: true})
-	reg.Register(mockRunner{mode: ModeQEMUUser, detect: true})
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeQEMUUser, detect: true})
 
 	best := reg.BestFor(&Config{Platform: "linux/not-host"})
 	if best == nil || best.Name() != ModeQEMUUser {
@@ -189,10 +190,10 @@ func TestRegistryBestForUsesQEMUPreference(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("DOKI_EMULATION_MODE", "qemu")
 	reg := NewRegistry()
-	reg.Register(mockRunner{mode: ModeNative, detect: true})
-	reg.Register(mockRunner{mode: ModeProot, detect: true})
-	reg.Register(mockRunner{mode: ModeQEMUUser, detect: true})
-	reg.Register(mockRunner{mode: ModeLegacy32, detect: true})
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeProot, detect: true})
+	reg.Register(&mockRunner{mode: ModeQEMUUser, detect: true})
+	reg.Register(&mockRunner{mode: ModeLegacy32, detect: true})
 
 	best := reg.BestFor(&Config{Platform: "linux/not-host"})
 	if best == nil || best.Name() != ModeQEMUUser {
@@ -202,7 +203,7 @@ func TestRegistryBestForUsesQEMUPreference(t *testing.T) {
 
 func TestRegistryAllRunners(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(mockRunner{mode: ModeNative, detect: true})
+	reg.Register(&mockRunner{mode: ModeNative, detect: true})
 	all := reg.AllRunners()
 	if len(all) != len(AllExecutionModes()) {
 		t.Errorf("AllRunners() returned %d, want %d", len(all), len(AllExecutionModes()))
@@ -241,22 +242,30 @@ func TestIsWASMImage(t *testing.T) {
 
 // mockRunner is a minimal ContainerRunner for testing.
 type mockRunner struct {
+	mu     sync.Mutex
 	mode   ExecutionMode
 	detect bool
 	caps   RunnerCapabilities
 }
 
-func (m mockRunner) Name() ExecutionMode                                          { return m.mode }
-func (m mockRunner) Detect() bool                                                 { return m.detect }
-func (m mockRunner) Capabilities() RunnerCapabilities                             { return m.caps }
-func (m mockRunner) Create(_ context.Context, _ *Config) (string, error)          { return "", nil }
-func (m mockRunner) Start(_ context.Context, _ string) (int, error)               { return 0, nil }
-func (m mockRunner) Stop(_ context.Context, _ string, _ time.Duration) error      { return nil }
-func (m mockRunner) Exec(_ context.Context, _ string, _ *ExecConfig) (int, error) { return 0, nil }
-func (m mockRunner) Kill(_ context.Context, _ string, _ syscall.Signal) error     { return nil }
-func (m mockRunner) Pause(_ context.Context, _ string) error                      { return nil }
-func (m mockRunner) Resume(_ context.Context, _ string) error                     { return nil }
-func (m mockRunner) Wait(_ context.Context, _ string) (int, error)                { return 0, nil }
-func (m mockRunner) Stats(_ context.Context, _ string) (*ContainerStats, error)   { return nil, nil }
-func (m mockRunner) Inspect(_ context.Context, _ string) (*ContainerJSON, error)  { return nil, nil }
-func (m mockRunner) Cleanup(_ context.Context, _ string) error                    { return nil }
+func (m *mockRunner) Name() ExecutionMode { m.mu.Lock(); defer m.mu.Unlock(); return m.mode }
+func (m *mockRunner) Detect() bool        { m.mu.Lock(); defer m.mu.Unlock(); return m.detect }
+func (m *mockRunner) Capabilities() RunnerCapabilities {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	caps := m.caps
+	caps.Arch = append([]string(nil), caps.Arch...)
+	caps.GuestArch = append([]string(nil), caps.GuestArch...)
+	return caps
+}
+func (m *mockRunner) Create(_ context.Context, _ *Config) (string, error)          { return "", nil }
+func (m *mockRunner) Start(_ context.Context, _ string) (int, error)               { return 0, nil }
+func (m *mockRunner) Stop(_ context.Context, _ string, _ time.Duration) error      { return nil }
+func (m *mockRunner) Exec(_ context.Context, _ string, _ *ExecConfig) (int, error) { return 0, nil }
+func (m *mockRunner) Kill(_ context.Context, _ string, _ syscall.Signal) error     { return nil }
+func (m *mockRunner) Pause(_ context.Context, _ string) error                      { return nil }
+func (m *mockRunner) Resume(_ context.Context, _ string) error                     { return nil }
+func (m *mockRunner) Wait(_ context.Context, _ string) (int, error)                { return 0, nil }
+func (m *mockRunner) Stats(_ context.Context, _ string) (*ContainerStats, error)   { return nil, nil }
+func (m *mockRunner) Inspect(_ context.Context, _ string) (*ContainerJSON, error)  { return nil, nil }
+func (m *mockRunner) Cleanup(_ context.Context, _ string) error                    { return nil }
