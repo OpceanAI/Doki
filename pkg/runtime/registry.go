@@ -22,7 +22,7 @@ type RunnerInfo struct {
 // Registry manages all available container runners and selects the best
 // one for a given configuration.
 type Registry struct {
-	mu      sync.RWMutex
+	mu      sync.Mutex
 	runners map[ExecutionMode]ContainerRunner
 	order   []ExecutionMode // priority order (highest first)
 	log     *slog.Logger
@@ -63,8 +63,8 @@ func (r *Registry) Register(runner ContainerRunner) {
 
 // Get returns the runner for the given mode, or nil if not available.
 func (r *Registry) Get(mode ExecutionMode) ContainerRunner {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.runners[mode]
 }
 
@@ -75,8 +75,8 @@ func (r *Registry) Get(mode ExecutionMode) ContainerRunner {
 //  3. Highest available isolation level compatible with the host.
 //  4. Native fallback.
 func (r *Registry) BestFor(cfg *Config) ContainerRunner {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if requested := requestedRuntime(cfg); requested != "" {
 		if mode, ok := ParseExecutionMode(requested); ok {
@@ -209,8 +209,8 @@ func modeSupportsPlatform(info ExecutionModeInfo, platform string) bool {
 
 // Available returns all detected runners with their info.
 func (r *Registry) Available() []RunnerInfo {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	infos := make([]RunnerInfo, 0, len(r.runners))
 	for _, mode := range r.order {
@@ -227,8 +227,8 @@ func (r *Registry) Available() []RunnerInfo {
 
 // AllRunners returns info about all known modes (available and unavailable).
 func (r *Registry) AllRunners() []RunnerInfo {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	var infos []RunnerInfo
 	for _, mode := range AllExecutionModes() {

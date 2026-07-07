@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"runtime"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -242,22 +241,14 @@ func TestIsWASMImage(t *testing.T) {
 
 // mockRunner is a minimal ContainerRunner for testing.
 type mockRunner struct {
-	mu     sync.Mutex
 	mode   ExecutionMode
 	detect bool
 	caps   RunnerCapabilities
 }
 
-func (m *mockRunner) Name() ExecutionMode { m.mu.Lock(); defer m.mu.Unlock(); return m.mode }
-func (m *mockRunner) Detect() bool        { m.mu.Lock(); defer m.mu.Unlock(); return m.detect }
-func (m *mockRunner) Capabilities() RunnerCapabilities {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	caps := m.caps
-	caps.Arch = append([]string(nil), caps.Arch...)
-	caps.GuestArch = append([]string(nil), caps.GuestArch...)
-	return caps
-}
+func (m *mockRunner) Name() ExecutionMode                                          { return m.mode }
+func (m *mockRunner) Detect() bool                                                 { return m.detect }
+func (m *mockRunner) Capabilities() RunnerCapabilities                             { return m.caps }
 func (m *mockRunner) Create(_ context.Context, _ *Config) (string, error)          { return "", nil }
 func (m *mockRunner) Start(_ context.Context, _ string) (int, error)               { return 0, nil }
 func (m *mockRunner) Stop(_ context.Context, _ string, _ time.Duration) error      { return nil }
