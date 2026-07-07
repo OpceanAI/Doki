@@ -6,19 +6,13 @@ releases/
 /tmp/
 /testvol/
 /var/
-
-# Rust build artifacts
 cmd/doki-init-rust/target/
-
-# Doki binaries (built locally)
 /doki
 /dokid
 /doki-compose
 /doki-init
 /doki-kube
 /doki-kubectl
-
-# IDE / editors
 .vscode/
 .idea/
 *.swp
@@ -27,12 +21,8 @@ cmd/doki-init-rust/target/
 .ai/
 .windsurf/
 .cursor/
-
-# OS
 Thumbs.db
 Desktop.ini
-
-# Go
 vendor/
 *.test
 *.out
