@@ -14,22 +14,64 @@ ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
 ARG BUILD_USER=docker
 
-ENV DOKI_PKG=github.com/OpceanAI/Doki/pkg/common \
-    DOKI_API=1.54 \
-    DOKI_VER=0.10.0 \
-    GOFLAGS="-trimpath -ldflags=-s -w -X '${DOKI_PKG}.Version=${DOKI_VER}' \
-        -X '${DOKI_PKG}.DokiVersion=${DOKI_VER}' \
-        -X '${DOKI_PKG}.DokiAPIVersion=${DOKI_API}' \
-        -X '${DOKI_PKG}.GitCommit=${GIT_COMMIT}' \
-        -X '${DOKI_PKG}.BuildDate=${BUILD_DATE}' \
-        -X '${DOKI_PKG}.BuildUser=${BUILD_USER}'"
+ARG DOKI_PKG=github.com/OpceanAI/Doki/pkg/common
+ARG DOKI_API=1.54
+ARG DOKI_VER=0.10.0
 
-RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -o /build/doki         ./cmd/doki && \
-    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -o /build/dokid        ./cmd/dokid && \
-    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -o /build/doki-compose ./cmd/doki-compose && \
-    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -o /build/doki-init    ./cmd/doki-init && \
-    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -o /build/doki-kube    ./cmd/doki-kube && \
-    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -o /build/doki-kubectl ./cmd/doki-kubectl
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w \
+    -X ${DOKI_PKG}.Version=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiVersion=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiAPIVersion=${DOKI_API} \
+    -X ${DOKI_PKG}.GitCommit=${GIT_COMMIT} \
+    -X ${DOKI_PKG}.BuildDate=${BUILD_DATE} \
+    -X ${DOKI_PKG}.BuildUser=${BUILD_USER}" \
+    -o /build/doki ./cmd/doki && \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w \
+    -X ${DOKI_PKG}.Version=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiVersion=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiAPIVersion=${DOKI_API} \
+    -X ${DOKI_PKG}.GitCommit=${GIT_COMMIT} \
+    -X ${DOKI_PKG}.BuildDate=${BUILD_DATE} \
+    -X ${DOKI_PKG}.BuildUser=${BUILD_USER}" \
+    -o /build/dokid ./cmd/dokid && \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w \
+    -X ${DOKI_PKG}.Version=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiVersion=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiAPIVersion=${DOKI_API} \
+    -X ${DOKI_PKG}.GitCommit=${GIT_COMMIT} \
+    -X ${DOKI_PKG}.BuildDate=${BUILD_DATE} \
+    -X ${DOKI_PKG}.BuildUser=${BUILD_USER}" \
+    -o /build/doki-compose ./cmd/doki-compose && \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w \
+    -X ${DOKI_PKG}.Version=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiVersion=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiAPIVersion=${DOKI_API} \
+    -X ${DOKI_PKG}.GitCommit=${GIT_COMMIT} \
+    -X ${DOKI_PKG}.BuildDate=${BUILD_DATE} \
+    -X ${DOKI_PKG}.BuildUser=${BUILD_USER}" \
+    -o /build/doki-init ./cmd/doki-init && \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w \
+    -X ${DOKI_PKG}.Version=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiVersion=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiAPIVersion=${DOKI_API} \
+    -X ${DOKI_PKG}.GitCommit=${GIT_COMMIT} \
+    -X ${DOKI_PKG}.BuildDate=${BUILD_DATE} \
+    -X ${DOKI_PKG}.BuildUser=${BUILD_USER}" \
+    -o /build/doki-kube ./cmd/doki-kube && \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w \
+    -X ${DOKI_PKG}.Version=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiVersion=${DOKI_VER} \
+    -X ${DOKI_PKG}.DokiAPIVersion=${DOKI_API} \
+    -X ${DOKI_PKG}.GitCommit=${GIT_COMMIT} \
+    -X ${DOKI_PKG}.BuildDate=${BUILD_DATE} \
+    -X ${DOKI_PKG}.BuildUser=${BUILD_USER}" \
+    -o /build/doki-kubectl ./cmd/doki-kubectl
 
 FROM alpine:3.23
 
