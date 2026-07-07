@@ -1,10 +1,15 @@
 bin/
 releases/
 *.log
+*.log.*
 .DS_Store
 /tmp/
+/testvol/
+/var/
+
 # Rust build artifacts
 cmd/doki-init-rust/target/
+
 # Doki binaries (built locally)
 /doki
 /dokid
@@ -12,3 +17,25 @@ cmd/doki-init-rust/target/
 /doki-init
 /doki-kube
 /doki-kubectl
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.ai/
+.windsurf/
+.cursor/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Go
+vendor/
+*.test
+*.out
+cover.html
+coverage.out
+coverage.xml
