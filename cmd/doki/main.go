@@ -1508,13 +1508,13 @@ func handleEmu(_ *cli.DokiCLI, args []string) error {
 
 func printEmuResults(results []emulation.Result) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTATUS\tPATH\tVERSION\tERROR")
+	_, _ = fmt.Fprintln(w, "NAME\tSTATUS\tPATH\tVERSION\tERROR")
 	for _, r := range results {
 		status := "missing"
 		if r.Available {
 			status = "ok"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, status, r.Path, r.Version, r.Error)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, status, r.Path, r.Version, r.Error)
 	}
 	return w.Flush()
 }
@@ -1557,7 +1557,7 @@ func handleDeps(_ *cli.DokiCLI, args []string) error {
 func depsList() error {
 	results := deps.CheckSystemDeps()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTATUS\tVERSION\tTYPE\tHINT")
+	_, _ = fmt.Fprintln(w, "NAME\tSTATUS\tVERSION\tTYPE\tHINT")
 	for _, r := range results {
 		status := "missing"
 		if r.Installed {
@@ -1567,7 +1567,7 @@ func depsList() error {
 		if r.Required {
 			typ = "required"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, status, r.Version, typ, r.InstallHint)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, status, r.Version, typ, r.InstallHint)
 	}
 	return w.Flush()
 }
@@ -1615,9 +1615,9 @@ func depsGo() error {
 		return err
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "MODULE\tVERSION")
+	_, _ = fmt.Fprintln(w, "MODULE\tVERSION")
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%s\n", r.Path, r.Version)
+		_, _ = fmt.Fprintf(w, "%s\t%s\n", r.Path, r.Version)
 	}
 	return w.Flush()
 }

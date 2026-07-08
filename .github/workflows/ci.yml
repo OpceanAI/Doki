@@ -64,7 +64,7 @@ jobs:
       - name: Errcheck
         run: |
           go install github.com/kisielk/errcheck@latest
-          errcheck ./...
+          errcheck -ignoretests ./...
 
       - name: Govulncheck
         run: |

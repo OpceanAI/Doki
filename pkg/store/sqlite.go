@@ -249,7 +249,7 @@ func (s *SQLiteStore) List(prefix string) ([]*StoredObject, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	if prefix != "" {
 		if err := stmt.BindInt64(1, int64(len(prefix))); err != nil {
@@ -313,7 +313,7 @@ func (s *SQLiteStore) Watch(prefix string, sinceRevision int64) (<-chan WatchEve
 		err = perr
 		return nil, err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	if berr := stmt.BindInt64(1, sinceRevision); berr != nil {
 		err = berr
@@ -390,7 +390,7 @@ func (s *SQLiteStore) Compact(beforeRevision int64) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	if err := stmt.BindInt64(1, beforeRevision); err != nil {
 		return fmt.Errorf("bind before revision: %w", err)
@@ -450,7 +450,7 @@ func (s *SQLiteStore) readRevisionLocked() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	if err := stmt.BindText(1, revisionKey); err != nil {
 		return 0, fmt.Errorf("bind revision key: %w", err)
@@ -482,7 +482,7 @@ func (s *SQLiteStore) setRevisionLocked(rev int64) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	if err := stmt.BindText(1, strconv.FormatInt(rev, 10)); err != nil {
 		return fmt.Errorf("bind revision value: %w", err)
@@ -501,7 +501,7 @@ func (s *SQLiteStore) peekLocked(key string) (*StoredObject, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	if err := stmt.BindText(1, key); err != nil {
 		return nil, fmt.Errorf("bind key: %w", err)
@@ -525,7 +525,7 @@ func (s *SQLiteStore) upsertObjectLocked(obj *StoredObject, deleted bool) error 
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	if err := stmt.BindText(1, obj.Key); err != nil {
 		return fmt.Errorf("bind key: %w", err)
@@ -572,7 +572,7 @@ func (s *SQLiteStore) markDeletedLocked(key string, newRev int64) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	if err := stmt.BindInt64(1, newRev); err != nil {
 		return fmt.Errorf("bind mod_revision: %w", err)
