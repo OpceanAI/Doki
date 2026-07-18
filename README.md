@@ -24,7 +24,7 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 
 | Metric | Value |
 |:-------|:------|
-| **Version** | v0.11.1 |
+| **Version** | v0.12.0 |
 | **Binary size** | 13 MB |
 | **Memory (idle)** | 12 MB |
 | **Start time** | <15ms |
@@ -32,7 +32,7 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 | **Architectures** | ARM64, ARMv7, x86_64 |
 | **Runtime deps** | Zero |
 
-### Binary Availability by Platform (v0.11.1)
+### Binary Availability by Platform (v0.12.0)
 
 | Platform | doki | dokid | doki-compose | doki-init | doki-kube | doki-kubectl |
 |:---------|:----:|:-----:|:------------:|:---------:|:---------:|:------------:|
@@ -70,13 +70,13 @@ Doki is a container engine designed for every Linux kernel, from Android phones 
 | Instead of | Use Doki | Because |
 |:-----------|:---------|:--------|
 | Docker Desktop | `dokid` + `doki` | Same API, no VM overhead, works on Android |
-| Podman | `dokid` + `doki` | Same pod abstraction, plus microVM isolation |
+| Podman | `dokid` + `doki` | Pod, secret and manifest APIs on the same socket, plus scalable isolation |
 | containerd + crictl | `dokid` as CRI | Single binary instead of 3 daemons |
 | Docker Compose | `doki-compose` | Same YAML, same commands, same workflow |
 | Kubernetes (small deploys) | `doki kube play` | Run K8s YAML without a cluster |
 | Lima / Colima (macOS) | `dokid` | Native container daemon, no Linux VM needed |
 | Termux proot-distro | `doki run` | Actual OCI images instead of chroot tarballs |
-| kubectl + minikube | `doki-kubectl` + `doki-kube` | Single-binary K8s control plane with real CRI |
+| kubectl + minikube | `doki-kubectl` + `doki-kube` | Single-binary K8s control plane; run your YAML on one node |
 
 ---
 
@@ -92,7 +92,7 @@ Works as a regular user. Scales to root or microVM isolation when available. No 
 
 ### Docker Compatible
 
-Same REST API v1.54. Drop-in replacement for Docker CLI and SDKs. docker-compose, docker-py, CI/CD pipelines all work without modification.
+Speaks the Docker Engine REST API over the same Unix socket. Point `DOCKER_HOST` at `dokid` and the docker CLI, docker-py, dockerode, and docker-compose connect unchanged -- the common container, image, network, volume, exec, and build flows are implemented and tested.
 
 ### Ultra Lightweight
 
@@ -110,9 +110,9 @@ Full Compose spec: networks, volumes, secrets, health checks, depends_on with 60
 
 Push and pull to any OCI registry. Multi-architecture auto-resolution. Compatible with Docker Hub, GHCR, ECR, GCR, Quay, GitLab, Harbor.
 
-### Kubernetes 100%
+### Kubernetes Control Plane
 
-Complete Kubernetes 1.32 control plane in a single binary: apiserver, kubelet with real CRI gRPC, scheduler, 10 functional controllers, kube-proxy (iptables/nftables/userspace modes), and CoreDNS. SQLiteStore with crash-safe persistence. kubectl-compatible CLI.
+A single-binary Kubernetes control plane: an apiserver with real resource watch, a scheduler that filters and scores nodes, reconciling controllers (Deployment to ReplicaSet to Pod, Job, Endpoints, Service, garbage collection), kube-proxy (iptables/nftables/userspace modes), and CoreDNS. `dokid` exposes a working CRI gRPC runtime, so a real kubelet or crictl can drive it and `doki kube play` runs actual containers from Kubernetes YAML. kubectl-compatible CLI. Single-node focused; the control plane's own kubelet-over-CRI wiring and persistent storage are still landing.
 
 ### DokiLink Mesh
 
