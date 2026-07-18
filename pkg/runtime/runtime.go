@@ -1044,11 +1044,15 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 				if err := os.MkdirAll(targetInRootfs, 0755); err != nil {
 					return 0, nil, fmt.Errorf("create mount target %s: %w", mnt.Target, err)
 				}
-				bindArg := mnt.Source + ":" + mnt.Target
+				// proot's -b syntax is host:guest ONLY — it has no ":ro" suffix.
+				// Appending ":ro" made proot treat "guest:ro" as the literal guest
+				// path, so the mount landed at the wrong location and the real
+				// target was empty. proot cannot enforce read-only binds, so we
+				// mount read-write and warn rather than silently break the mount.
 				if mnt.ReadOnly {
-					bindArg += ":ro"
+					slog.Warn("proot cannot enforce read-only bind mount; mounting read-write", "target", mnt.Target)
 				}
-				prootArgs = append(prootArgs, "-b", bindArg)
+				prootArgs = append(prootArgs, "-b", mnt.Source+":"+mnt.Target)
 			}
 		case common.MountTmpfs:
 			target, terr := common.SecureJoin(cleanRootfs, mnt.Target)

@@ -40,6 +40,7 @@ type CRIContainer struct {
 	WorkingDir   string
 	Labels       map[string]string
 	Annotations  map[string]string
+	Mounts       []common.Mount
 	CreatedAt    int64
 	LogPath      string
 }
@@ -228,6 +229,7 @@ func (c *CRIPlugin) CreateContainer(cc *CRIContainer) error {
 		Cwd:         cc.WorkingDir,
 		Labels:      cc.Labels,
 		Annotations: cc.Annotations,
+		Mounts:      cc.Mounts,
 		ImageRef:    cc.Image,
 		NetworkMode: common.NetworkBridge,
 	}

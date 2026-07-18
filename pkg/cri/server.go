@@ -303,6 +303,23 @@ func (s *CRIServer) CreateContainer(ctx context.Context, req *v1.CreateContainer
 		env = append(env, kv.GetKey()+"="+string(kv.GetValue()))
 	}
 
+	// Translate the kubelet-supplied mounts (hostPath, emptyDir, ConfigMap,
+	// Secret, PVC — all already resolved to a host path by the kubelet) into
+	// runtime bind mounts. Previously these were dropped, so no volume of any
+	// kind reached the container.
+	mounts := make([]common.Mount, 0, len(cfg.GetMounts()))
+	for _, m := range cfg.GetMounts() {
+		if m.GetHostPath() == "" || m.GetContainerPath() == "" {
+			continue
+		}
+		mounts = append(mounts, common.Mount{
+			Type:     common.MountBind,
+			Source:   m.GetHostPath(),
+			Target:   m.GetContainerPath(),
+			ReadOnly: m.GetReadonly(),
+		})
+	}
+
 	cc := &CRIContainer{
 		ID:           containerID,
 		PodSandboxID: podID,
@@ -314,6 +331,7 @@ func (s *CRIServer) CreateContainer(ctx context.Context, req *v1.CreateContainer
 		WorkingDir:   cfg.GetWorkingDir(),
 		Labels:       cfg.GetLabels(),
 		Annotations:  cfg.GetAnnotations(),
+		Mounts:       mounts,
 		LogPath:      cfg.GetLogPath(),
 	}
 

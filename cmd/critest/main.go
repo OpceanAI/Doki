@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -26,6 +27,26 @@ func main() {
 	image := "busybox"
 	if len(os.Args) > 2 {
 		image = os.Args[2]
+	}
+
+	// Two host dirs to bind-mount: an input dir with a sentinel file, and an
+	// output dir. The container's OWN command copies sentinel -> output, and we
+	// read the output back from the host. This proves the CRI propagated the
+	// mounts to the container's init (unlike ExecSync, which under proot runs in
+	// a separate mount namespace and would not see the container's binds).
+	mountIn, err := os.MkdirTemp("", "critest-in-")
+	if err != nil {
+		fatal("mkdir mount-in", err)
+	}
+	defer func() { _ = os.RemoveAll(mountIn) }()
+	mountOut, err := os.MkdirTemp("", "critest-out-")
+	if err != nil {
+		fatal("mkdir mount-out", err)
+	}
+	defer func() { _ = os.RemoveAll(mountOut) }()
+	const sentinel = "MOUNT_OK_42"
+	if err := os.WriteFile(mountIn+"/sentinel", []byte(sentinel), 0644); err != nil {
+		fatal("write sentinel", err)
 	}
 
 	conn, err := grpc.NewClient("unix://"+sock, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -81,7 +102,12 @@ func main() {
 		Config: &v1.ContainerConfig{
 			Metadata: &v1.ContainerMetadata{Name: "critest-ctr"},
 			Image:    &v1.ImageSpec{Image: image},
-			Command:  []string{"sh", "-c", "echo cri-hello && sleep 30"},
+			Command:  []string{"sh", "-c", "cat /critest-in/sentinel > /critest-out/result 2>&1; echo cri-hello; sleep 30"},
+			// Mount host dirs to verify the CRI propagates volumes to the init.
+			Mounts: []*v1.Mount{
+				{HostPath: mountIn, ContainerPath: "/critest-in", Readonly: true},
+				{HostPath: mountOut, ContainerPath: "/critest-out", Readonly: false},
+			},
 		},
 		SandboxConfig: &v1.PodSandboxConfig{
 			Metadata: &v1.PodSandboxMetadata{Name: "critest-pod", Namespace: "default", Uid: "critest-uid"},
@@ -115,6 +141,19 @@ func main() {
 		warn("ExecSync", err.Error())
 	} else {
 		ok("ExecSync", fmt.Sprintf("exit=%d out=%q", es.ExitCode, string(es.Stdout)))
+	}
+
+	// 9. Verify the bind mounts reached the container's init: the container
+	// copied the input mount's sentinel into the output mount, which we read
+	// back here from the host side.
+	time.Sleep(1500 * time.Millisecond)
+	out, rerr := os.ReadFile(mountOut + "/result")
+	if rerr != nil {
+		fatal("MountCheck", fmt.Errorf("output mount not written (in+out binds not propagated): %v", rerr))
+	} else if got := strings.TrimSpace(string(out)); got == sentinel {
+		ok("MountCheck", fmt.Sprintf("both binds propagated to init: %q", got))
+	} else {
+		fatal("MountCheck", fmt.Errorf("mount content wrong: got %q want %q", got, sentinel))
 	}
 
 	// Cleanup

@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/k8s-types"
 	"github.com/OpceanAI/Doki/pkg/store"
 )
@@ -42,6 +44,7 @@ func NewManager(s store.Store, logger *slog.Logger) *Manager {
 	m.Register(&NamespaceController{store: s, logger: logger})
 	m.Register(&ServiceAccountController{store: s, logger: logger})
 	m.Register(&GarbageCollector{store: s, logger: logger})
+	m.Register(NewPVCProvisionerController(s, logger, filepath.Join(common.DataDir(), "local-path")))
 	return m
 }
 

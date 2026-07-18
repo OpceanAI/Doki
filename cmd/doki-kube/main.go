@@ -29,6 +29,7 @@ func main() {
 	serviceCIDR := flag.String("service-cidr", "10.96.0.0/12", "Cluster service CIDR")
 	dnsAddr := flag.String("dns-addr", "10.96.0.10:53", "Cluster DNS listen address")
 	storePath := flag.String("store-path", "", "State store path (empty = in-memory)")
+	criSocket := flag.String("cri-socket", "", "CRI runtime socket (empty = platform doki-cri.sock; served by dokid)")
 	flag.Parse()
 
 	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "-help" || os.Args[1] == "--help" || os.Args[1] == "help") {
@@ -80,7 +81,7 @@ func main() {
 		}
 
 	case "kubelet":
-		kl := kubelet.NewKubelet(*nodeName, s, logger)
+		kl := makeKubelet(ctx, *nodeName, s, logger, *criSocket)
 		if err := kl.Run(ctx); err != nil {
 			logger.Error("kubelet failed", "error", err)
 			os.Exit(1)
@@ -121,7 +122,7 @@ func main() {
 			_ = api.Start()
 		}()
 
-		kl := kubelet.NewKubelet(*nodeName, s, logger)
+		kl := makeKubelet(ctx, *nodeName, s, logger, *criSocket)
 		go func() { _ = kl.Run(ctx) }()
 
 		sched := scheduler.NewScheduler(s, logger)
@@ -152,4 +153,26 @@ func main() {
 		fmt.Fprintf(os.Stderr, "valid modes: all, apiserver, kubelet, scheduler, controller, proxy, dns\n")
 		os.Exit(1)
 	}
+}
+
+// makeKubelet builds a kubelet backed by the real CRI runtime served by dokid.
+// If the CRI socket can't be reached, it falls back to the local (no-runtime)
+// kubelet and says so plainly, so `doki-kube` still runs its control loops even
+// when no dokid is present — rather than silently pretending pods are running.
+func makeKubelet(ctx context.Context, nodeName string, s store.Store, logger *slog.Logger, criSocket string) *kubelet.Kubelet {
+	sock := criSocket
+	if sock == "" {
+		sock = common.DefaultCRISocket()
+	}
+	if common.PathExists(sock) {
+		if kl, err := kubelet.NewKubeletWithCRI(ctx, nodeName, s, logger, sock); err == nil {
+			logger.Info("kubelet using CRI runtime", "socket", sock)
+			return kl
+		} else {
+			logger.Warn("CRI runtime unavailable; kubelet runs without a container runtime", "socket", sock, "err", err)
+		}
+	} else {
+		logger.Warn("CRI socket not found; kubelet runs without a container runtime (start dokid to run real pods)", "socket", sock)
+	}
+	return kubelet.NewKubelet(nodeName, s, logger)
 }

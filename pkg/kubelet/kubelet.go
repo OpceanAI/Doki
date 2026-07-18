@@ -2,6 +2,7 @@
 package kubelet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -262,6 +263,11 @@ func (k *Kubelet) reconcilePodFake(pod *k8s.Pod, podKey string) {
 // ContainerStatus to populate the pod status with real IPs, state and image
 // digests.
 func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey string) {
+	// Capture the previous conditions (the pod arrives from the watch with the
+	// status we last wrote) so LastTransitionTime only advances when a
+	// condition's Status actually flips — otherwise every reconcile rewrites the
+	// timestamps, the persisted pod always differs, and the kubelet hot-loops.
+	prevConditions := pod.Status.Conditions
 	labels := sandboxLabels(pod)
 	sandboxCfg := &v1.PodSandboxConfig{
 		Metadata: &v1.PodSandboxMetadata{
@@ -316,7 +322,7 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 		}
 	}
 
-	mounts := criMounts(pod)
+	mounts := k.criMounts(pod)
 	for _, c := range pod.Spec.Containers {
 		containerID, ok := existing[c.Name]
 		if !ok {
@@ -459,10 +465,10 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 
 	containersReady := allRunning
 	pod.Status.Conditions = []k8s.PodCondition{
-		{Type: "Initialized", Status: "True", LastTransitionTime: now},
-		{Type: "Ready", Status: boolStatus(containersReady), LastTransitionTime: now},
-		{Type: "ContainersReady", Status: boolStatus(containersReady), LastTransitionTime: now},
-		{Type: "PodScheduled", Status: "True", LastTransitionTime: now},
+		{Type: "Initialized", Status: "True", LastTransitionTime: condTime(prevConditions, "Initialized", "True", now)},
+		{Type: "Ready", Status: boolStatus(containersReady), LastTransitionTime: condTime(prevConditions, "Ready", boolStatus(containersReady), now)},
+		{Type: "ContainersReady", Status: boolStatus(containersReady), LastTransitionTime: condTime(prevConditions, "ContainersReady", boolStatus(containersReady), now)},
+		{Type: "PodScheduled", Status: "True", LastTransitionTime: condTime(prevConditions, "PodScheduled", "True", now)},
 	}
 
 	k.persistPod(pod, podKey)
@@ -491,6 +497,21 @@ func (k *Kubelet) findContainerID(ctx context.Context, sandboxID, name string) s
 
 // persistPod serialises the pod and writes it back to the store, logging
 // any error instead of silently dropping it.
+// condTime returns the LastTransitionTime a condition should carry: the prior
+// timestamp if the condition already existed with the same status (so it stays
+// stable across reconciles), otherwise now (the status just changed).
+func condTime(prev []k8s.PodCondition, condType, status string, now time.Time) time.Time {
+	for _, c := range prev {
+		if c.Type == condType {
+			if c.Status == status && !c.LastTransitionTime.IsZero() {
+				return c.LastTransitionTime
+			}
+			break
+		}
+	}
+	return now
+}
+
 func (k *Kubelet) persistPod(pod *k8s.Pod, podKey string) {
 	data, err := json.Marshal(pod)
 	if err != nil {
@@ -498,6 +519,12 @@ func (k *Kubelet) persistPod(pod *k8s.Pod, podKey string) {
 		return
 	}
 	key := store.KeyFor("", "pods", pod.Namespace, pod.Name)
+	// Skip the write when nothing changed. Our own Put fires a watch event that
+	// re-enters reconcilePod; without this guard the kubelet spins in a hot loop
+	// re-persisting an identical pod status thousands of times a second.
+	if existing, gerr := k.store.Get(key); gerr == nil && existing != nil && bytes.Equal(existing.Value, data) {
+		return
+	}
 	if err := k.store.Put(key, &store.StoredObject{Value: data}); err != nil {
 		k.logger.Error("failed to persist pod", "pod", podKey, "error", err)
 	}
@@ -624,14 +651,27 @@ func containerConfig(pod *k8s.Pod, c k8s.Container, mounts []*v1.Mount) *v1.Cont
 // volumes map to a per-pod directory under /var/lib/doki/emptydir. Other
 // volume types are skipped (the kubelet caller is responsible for
 // projecting ConfigMap/Secret content).
-func criMounts(pod *k8s.Pod) []*v1.Mount {
+func (k *Kubelet) criMounts(pod *k8s.Pod) []*v1.Mount {
 	hostPaths := make(map[string]string, len(pod.Spec.Volumes))
 	for _, vol := range pod.Spec.Volumes {
 		switch {
 		case vol.HostPath != nil:
 			hostPaths[vol.Name] = vol.HostPath.Path
 		case vol.EmptyDir != nil:
-			hostPaths[vol.Name] = filepath.Join(common.AppDataDir(), "emptydir", pod.UID, vol.Name)
+			// The source must exist before proot/bind can mount it; the old
+			// code referenced this path but never created it.
+			dir := filepath.Join(common.AppDataDir(), "emptydir", pod.UID, vol.Name)
+			if err := os.MkdirAll(dir, 0o777); err != nil {
+				k.logger.Warn("emptyDir mkdir", "pod", pod.Name, "vol", vol.Name, "err", err)
+				continue
+			}
+			hostPaths[vol.Name] = dir
+		case vol.PersistentVolumeClaim != nil:
+			if p := k.resolvePVCHostPath(pod.Namespace, vol.PersistentVolumeClaim.ClaimName); p != "" {
+				hostPaths[vol.Name] = p
+			} else {
+				k.logger.Info("PVC not bound yet; pod volume deferred", "pod", pod.Name, "claim", vol.PersistentVolumeClaim.ClaimName)
+			}
 		}
 	}
 
@@ -650,6 +690,33 @@ func criMounts(pod *k8s.Pod) []*v1.Mount {
 		}
 	}
 	return mounts
+}
+
+// resolvePVCHostPath resolves a PVC name to the host directory of its bound PV
+// (created by the PVC provisioner controller). Returns "" if the claim is not
+// yet bound, so the pod's volume is retried on the next reconcile.
+func (k *Kubelet) resolvePVCHostPath(namespace, claimName string) string {
+	if k.store == nil {
+		return ""
+	}
+	obj, err := k.store.Get(store.KeyFor("", "persistentvolumeclaims", namespace, claimName))
+	if err != nil || obj == nil {
+		return ""
+	}
+	var pvc k8s.PersistentVolumeClaim
+	if json.Unmarshal(obj.Value, &pvc) != nil || pvc.Spec.VolumeName == "" {
+		return ""
+	}
+	pvObj, err := k.store.Get(store.KeyFor("", "persistentvolumes", "", pvc.Spec.VolumeName))
+	if err != nil || pvObj == nil {
+		return ""
+	}
+	var pv k8s.PersistentVolume
+	if json.Unmarshal(pvObj.Value, &pv) != nil || pv.Spec.HostPath == nil || pv.Spec.HostPath.Path == "" {
+		return ""
+	}
+	_ = os.MkdirAll(pv.Spec.HostPath.Path, 0o777)
+	return pv.Spec.HostPath.Path
 }
 
 func boolStatus(b bool) string {

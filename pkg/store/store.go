@@ -87,6 +87,12 @@ func (s *MemoryStore) Put(key string, obj *StoredObject) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// The key MUST be stamped onto the object: watchers (kubelet, scheduler,
+	// controllers) and the replay path match a watch prefix against obj.Key, so
+	// an empty Key meant every watch event was silently dropped and nothing
+	// reconciled. Callers pass the key separately and often leave obj.Key blank.
+	obj.Key = key
+
 	rev := s.revision.Add(1)
 
 	existing, exists := s.objects[key]

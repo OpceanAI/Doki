@@ -151,6 +151,12 @@ func (a *APIServer) handleNamespacedResources(w http.ResponseWriter, r *http.Req
 	resource := parts[1]
 
 	if len(parts) == 2 {
+		// POST to a collection creates the resource (name comes from the body's
+		// metadata.name), matching real Kubernetes. GET lists; watch streams.
+		if r.Method == http.MethodPost {
+			a.handleResource(w, r, "", resource, ns, "")
+			return
+		}
 		if isWatch(r) {
 			a.handleWatch(w, r, "", resource, ns, "")
 			return
@@ -364,6 +370,18 @@ func (a *APIServer) handleResource(w http.ResponseWriter, r *http.Request, group
 			meta["creationTimestamp"] = time.Now().UTC().Format(time.RFC3339)
 		}
 		objMap["metadata"] = meta
+		// For a POST to a collection the name is in the body, not the path;
+		// derive it and recompute the storage key.
+		if name == "" {
+			if n, ok := meta["name"].(string); ok {
+				name = n
+			}
+			if name == "" {
+				http.Error(w, "metadata.name is required", http.StatusBadRequest)
+				return
+			}
+			key = store.KeyFor(group, resource, namespace, name)
+		}
 		stored, err := json.Marshal(objMap)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
