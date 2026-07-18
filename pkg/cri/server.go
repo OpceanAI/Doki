@@ -214,15 +214,20 @@ func (s *CRIServer) PodSandboxStatus(ctx context.Context, req *v1.PodSandboxStat
 		return nil, notFoundErr("pod sandbox", req.GetPodSandboxId(), err)
 	}
 	now := time.Now().UnixNano()
+	status := &v1.PodSandboxStatus{
+		Id:          sandbox.ID,
+		Metadata:    &v1.PodSandboxMetadata{Name: sandbox.Name, Namespace: sandbox.Namespace, Uid: sandbox.UID},
+		State:       podSandboxStateFromString(sandbox.State),
+		CreatedAt:   toCINanos(sandbox.CreatedAt),
+		Labels:      sandbox.Labels,
+		Annotations: sandbox.Annotations,
+	}
+	// Report the pod IP so the kubelet can populate PodIP.
+	if sandbox.IP != "" {
+		status.Network = &v1.PodSandboxNetworkStatus{Ip: sandbox.IP}
+	}
 	resp := &v1.PodSandboxStatusResponse{
-		Status: &v1.PodSandboxStatus{
-			Id:          sandbox.ID,
-			Metadata:    &v1.PodSandboxMetadata{Name: sandbox.Name, Namespace: sandbox.Namespace, Uid: sandbox.UID},
-			State:       podSandboxStateFromString(sandbox.State),
-			CreatedAt:   toCINanos(sandbox.CreatedAt),
-			Labels:      sandbox.Labels,
-			Annotations: sandbox.Annotations,
-		},
+		Status:    status,
 		Info:      map[string]string{"runtimeHandler": "doki", "sandbox_id": sandbox.ID},
 		Timestamp: now,
 	}

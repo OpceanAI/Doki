@@ -3,6 +3,7 @@ package cri
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -58,6 +59,8 @@ type PodSandbox struct {
 	Hostname     string            `json:"hostname"`
 	LogDirectory string            `json:"log_directory"`
 	State        string            `json:"state"`
+	IP           string            `json:"ip"`
+	Network      string            `json:"network"`
 }
 
 // NewCRIPlugin creates a new CRI plugin.
@@ -79,15 +82,10 @@ func (c *CRIPlugin) RunPodSandbox(id, name, namespace string, labels, annotation
 	// Create a pause container that acts as the pod infra container.
 	pauseContainerID := common.GenerateID(64)
 
-	// Create pod network namespace.
-	networkCfg := &network.NetworkConfig{
-		Name:   "pod-" + id[:12],
-		Driver: "bridge",
-	}
-	nw, err := c.network.CreateNetwork(networkCfg)
-	if err != nil {
-		return nil, fmt.Errorf("create pod network: %w", err)
-	}
+	// Attach the pod to the default "bridge" network, which already has an IPAM
+	// subnet configured. (Creating a fresh per-pod network with no subnet meant
+	// allocateIP had nothing to hand out and the pod never got an IP.)
+	podNetwork := "bridge"
 
 	// Create the infra container (pause container).
 	cfg := &runtime.Config{
@@ -107,6 +105,19 @@ func (c *CRIPlugin) RunPodSandbox(id, name, namespace string, labels, annotation
 		return nil, fmt.Errorf("start pause container: %w", err)
 	}
 
+	// Wire the pod network on the pause (infra) container's netns and record
+	// the pod IP, so the whole pod shares one network identity — the CNI role
+	// the runtime plays. On hosts without CAP_NET_ADMIN (rootless/Termux) the
+	// veth/bridge setup can't complete; the IP is still allocated, so we report
+	// it best-effort and log rather than fail the sandbox.
+	podIP := ""
+	if st, serr := c.runtime.State(pauseContainerID); serr == nil && st != nil {
+		if err := c.network.SetupNetwork(pauseContainerID, st.Pid, podNetwork); err != nil {
+			slog.Warn("pod sandbox network setup incomplete", "pod", name, "err", err)
+		}
+		podIP = c.network.ContainerIP(podNetwork, pauseContainerID)
+	}
+
 	sandbox := &PodSandbox{
 		ID:           id,
 		Name:         name,
@@ -119,11 +130,11 @@ func (c *CRIPlugin) RunPodSandbox(id, name, namespace string, labels, annotation
 		Hostname:     name,
 		LogDirectory: "/var/log/pods/" + namespace + "_" + name + "_" + id,
 		State:        "SANDBOX_READY",
+		IP:           podIP,
+		Network:      podNetwork,
 	}
 
 	c.podSandboxes[id] = sandbox
-
-	_ = nw
 
 	return sandbox, nil
 }
@@ -138,16 +149,25 @@ func (c *CRIPlugin) StopPodSandbox(id string) error {
 		return common.NewErrNotFound("pod", id)
 	}
 
+	// Tear down the pod network for the pause (infra) container. The infra
+	// container is the pod's network anchor and is the first entry. The previous
+	// code passed the network name as the container ID and an empty container
+	// ID, so the endpoint was never actually disconnected.
+	pauseID := ""
+	if len(sandbox.Containers) > 0 {
+		pauseID = sandbox.Containers[0]
+	}
+	if sandbox.Network != "" && pauseID != "" {
+		_ = c.network.Disconnect(sandbox.Network, pauseID, 0)
+	}
+
 	for _, containerID := range sandbox.Containers {
 		_ = c.runtime.Stop(containerID, 10)
 		_ = c.runtime.Delete(containerID, true)
 		delete(c.containers, containerID)
 	}
 	sandbox.Containers = nil
-
 	sandbox.State = "SANDBOX_NOTREADY"
-	// Cleanup network.
-	_ = c.network.Disconnect("pod-"+id[:12], "", 0)
 
 	return nil
 }

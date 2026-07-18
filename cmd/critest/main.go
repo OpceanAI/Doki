@@ -96,6 +96,15 @@ func main() {
 	}
 	ok("RunPodSandbox", sb.PodSandboxId)
 
+	// 4b. PodSandboxStatus — the pod should have a network IP allocated.
+	if ss, serr := rt.PodSandboxStatus(ctx, &v1.PodSandboxStatusRequest{PodSandboxId: sb.PodSandboxId}); serr != nil {
+		warn("PodSandboxStatus", serr.Error())
+	} else if ip := ss.GetStatus().GetNetwork().GetIp(); ip != "" {
+		ok("PodSandboxStatus", "pod IP = "+ip)
+	} else {
+		warn("PodSandboxStatus", "no pod IP allocated")
+	}
+
 	// 5. CreateContainer
 	cc, err := rt.CreateContainer(ctx, &v1.CreateContainerRequest{
 		PodSandboxId: sb.PodSandboxId,

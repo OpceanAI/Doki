@@ -229,6 +229,20 @@ func (m *Manager) GetNetwork(idOrName string) (*Network, error) {
 	return nw, nil
 }
 
+// ContainerIP returns the IPv4 address allocated to containerID on the named
+// network, or "" if it has no endpoint there. Used by the CRI to report a pod's
+// IP in PodSandboxStatus.
+func (m *Manager) ContainerIP(networkName, containerID string) string {
+	nw, err := m.GetNetwork(networkName)
+	if err != nil {
+		return ""
+	}
+	if ep, ok := nw.Containers[containerID]; ok {
+		return ep.IPv4Address
+	}
+	return ""
+}
+
 // ListNetworks returns all networks.
 func (m *Manager) ListNetworks() ([]common.NetworkInfo, error) {
 	m.mu.RLock()
