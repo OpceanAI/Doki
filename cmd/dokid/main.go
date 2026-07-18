@@ -298,14 +298,24 @@ func main() {
 	mw := api.NewMiddleware()
 	rateLimiter := api.NewRateLimit(rateLimitPerSec, rateLimitBurst)
 	defer rateLimiter.Stop()
+	// Optional bearer-token auth, enabled by setting DOKI_API_TOKEN. Off by
+	// default (the unix socket is the trust boundary), but recommended when a
+	// TCP listener is exposed.
+	apiToken := os.Getenv("DOKI_API_TOKEN")
 	server.SetMiddleware(
 		mw.RequestID,
 		mw.Recovery,
 		mw.CORS,
+		api.TokenAuth(apiToken),
 		rateLimiter.RateLimitMiddleware,
 		mw.Logging,
 	)
 	logger.Info("rate limiter", "req_per_sec", rateLimitPerSec, "burst", rateLimitBurst)
+	if apiToken != "" {
+		logger.Info("API bearer-token auth enabled")
+	} else if tcpAddr != "" && !tlsEnabled {
+		logger.Warn("TCP listener has no authentication; set DOKI_API_TOKEN or enable TLS to protect it")
+	}
 
 	if debugMode {
 		go startPprofServer(6060)
@@ -355,10 +365,11 @@ func main() {
 	recoverContainers(logger, rt, dataDir, imgStore, netMgr)
 
 	srv := &http.Server{
-		Handler:      server,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Handler:        server,
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   300 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MiB — bound header memory per connection
 	}
 	for _, ln := range listeners {
 		go func(l net.Listener) {

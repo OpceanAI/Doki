@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"log"
 	"log/slog"
 	"net"
@@ -83,6 +84,35 @@ func (m *Middleware) CORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// TokenAuth returns a middleware that requires an "Authorization: Bearer <token>"
+// header on every request (except health/ping probes) when token is non-empty.
+// When token is empty it is a no-op, preserving the default trust-the-socket
+// model. This gives operators a simple way to protect a TCP listener without
+// standing up mutual TLS. The comparison is constant-time to avoid a timing
+// oracle on the token.
+func TokenAuth(token string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if token == "" {
+			return next
+		}
+		want := "Bearer " + token
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/_ping", "/health", "/healthz", "/livez", "/readyz":
+				next.ServeHTTP(w, r)
+				return
+			}
+			got := r.Header.Get("Authorization")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+				w.Header().Set("WWW-Authenticate", "Bearer")
+				http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RequestID adds a unique request ID header.

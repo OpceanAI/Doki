@@ -15,6 +15,10 @@ import (
 	"github.com/OpceanAI/Doki/pkg/common"
 )
 
+// maxPodmanJSONBody caps JSON request bodies for the podman shim endpoints to
+// bound memory against an oversized body (small configs only).
+const maxPodmanJSONBody = 4 << 20
+
 type PodmanServer struct {
 	podMgr      *PodManager
 	secretMgr   *SecretManager
@@ -371,7 +375,7 @@ func (s *PodmanServer) handleManifestAction(w http.ResponseWriter, name, action 
 			Variant  string   `json:"variant"`
 			Features []string `json:"osFeatures"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -395,7 +399,7 @@ func (s *PodmanServer) handleManifestAction(w http.ResponseWriter, name, action 
 		w.WriteHeader(http.StatusNoContent)
 	case "annotate":
 		var body Platform
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -452,7 +456,7 @@ func (s *PodmanServer) handleContainersCreate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var cfg map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&cfg); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -506,7 +510,7 @@ func (s *PodmanServer) handlePodsCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var cfg PodCreateConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&cfg); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -609,7 +613,7 @@ func (s *PodmanServer) handleManifestsCreate(w http.ResponseWriter, r *http.Requ
 		Name   string   `json:"name"`
 		Images []string `json:"images"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -666,7 +670,7 @@ func (s *PodmanServer) handleSecretsCreate(w http.ResponseWriter, r *http.Reques
 		Driver string            `json:"Driver"`
 		Labels map[string]string `json:"Labels"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -719,7 +723,7 @@ func (s *PodmanServer) handleVolumesCreate(w http.ResponseWriter, r *http.Reques
 	var body struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -764,7 +768,7 @@ func (s *PodmanServer) handleNetworksCreate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var body map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

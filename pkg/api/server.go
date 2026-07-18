@@ -32,6 +32,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// maxJSONBody caps the size of a JSON request body for control endpoints
+// (container/volume/network/exec configs are all small). It bounds memory use
+// so an unauthenticated client on the socket can't OOM the daemon by streaming a
+// multi-GB body. Bulk endpoints (image load, build context, archive put) stream
+// their own bodies and are not affected by this cap.
+const maxJSONBody = 4 << 20 // 4 MiB
+
 // Server implements the Docker Engine v1.55 compatible HTTP API.
 type Server struct {
 	config     *common.DokiConfig
@@ -610,7 +617,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		ServerAddress string `json:"serveraddress"`
 		IdentityToken string `json:"identitytoken"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&creds); err != nil {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid JSON"})
 		return
 	}
@@ -756,7 +763,7 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		ContainerName string             `json:"Name,omitempty"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
@@ -1856,7 +1863,7 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 			Name string `json:"Name"`
 		} `json:"RestartPolicy"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -1953,7 +1960,7 @@ func (s *Server) handleExecCreate(w http.ResponseWriter, r *http.Request, contai
 		User         string   `json:"User"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -2025,7 +2032,7 @@ func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID 
 		Height int    `json:"h,omitempty"`
 		Width  int    `json:"w,omitempty"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&startReq)
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&startReq)
 
 	s.execMu.Lock()
 	cfg, ok := s.execStore[execID]
@@ -2335,7 +2342,7 @@ func (s *Server) handleImageTag(w http.ResponseWriter, r *http.Request, id strin
 		Repo string `json:"repo"`
 		Tag  string `json:"tag"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -2569,7 +2576,7 @@ func (s *Server) handleNetworkCreate(w http.ResponseWriter, r *http.Request) {
 		Labels     map[string]string `json:"Labels"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -2632,7 +2639,7 @@ func (s *Server) handleNetworkDispatch(w http.ResponseWriter, r *http.Request) {
 			Container      string                   `json:"Container"`
 			EndpointConfig *common.EndpointSettings `json:"EndpointConfig"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
@@ -2652,7 +2659,7 @@ func (s *Server) handleNetworkDispatch(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Container string `json:"Container"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
@@ -2709,7 +2716,7 @@ func (s *Server) handleVolumeCreate(w http.ResponseWriter, r *http.Request) {
 		Labels     map[string]string `json:"Labels"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -2928,7 +2935,7 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		Author    string `json:"Author"`
 		Message   string `json:"Message"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -2948,7 +2955,7 @@ func (s *Server) handlePodCreate(w http.ResponseWriter, r *http.Request) {
 		Name   string            `json:"Name"`
 		Labels map[string]string `json:"Labels"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
