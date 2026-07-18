@@ -3,9 +3,11 @@ package cli
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -25,6 +27,7 @@ import (
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
+	"golang.org/x/term"
 )
 
 // ExitError signals that the invoked process (typically a container) terminated
@@ -756,22 +759,24 @@ func (c *DokiCLI) Exec(containerID string, cmd []string, tty, detach, interactiv
 		"Detach": detach,
 		"Tty":    tty,
 	}
-	resp2, err := c.doAPI("POST", "/exec/"+execResult.Id+"/start", startBody)
+
+	if detach {
+		resp2, err := c.doAPI("POST", "/exec/"+execResult.Id+"/start", startBody)
+		if err != nil {
+			return fmt.Errorf("exec start: %w", err)
+		}
+		_ = resp2.Body.Close()
+		return nil
+	}
+
+	// Attached: hijack the connection so stdin (interactive) flows to the
+	// process and stdout/stderr stream back until it exits.
+	conn, br, err := c.hijackAPI("POST", "/exec/"+execResult.Id+"/start", startBody)
 	if err != nil {
 		return fmt.Errorf("exec start: %w", err)
 	}
-	defer func() { _ = resp2.Body.Close() }()
-
-	if !detach {
-		if tty {
-			// TTY mode: raw stream, no demux needed
-			_, _ = io.Copy(os.Stdout, resp2.Body)
-		} else {
-			// Non-TTY: multiplexed stream, need demux
-			demuxStream(resp2.Body, os.Stdout, os.Stderr)
-		}
-	}
-
+	defer func() { _ = conn.Close() }()
+	streamHijack(conn, br, tty, interactive)
 	return nil
 }
 
@@ -939,7 +944,10 @@ func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
 		}
 	}
 	if hadError {
-		return fmt.Errorf("inspect: one or more objects not found")
+		// The per-object "Error: no such object" lines were already printed to
+		// stderr above; return a silent non-zero exit so main doesn't print a
+		// second, redundant "Error:" line.
+		return &ExitError{Code: 1}
 	}
 	return nil
 }
@@ -2490,6 +2498,12 @@ func (c *DokiCLI) doAPI(method, path string, body interface{}) (*http.Response, 
 
 	resp, err := c.client.Do(req)
 	if err != nil {
+		// Turn the raw Go transport error (which leaks the http://unix URL and
+		// socket path) into the familiar Docker-style hint when the daemon is
+		// unreachable.
+		if isConnRefused(err) {
+			return nil, fmt.Errorf("cannot connect to the Doki daemon at %s.\nIs dokid running? Start it with 'dokid' or check DOKI_HOST.", c.socket)
+		}
 		return nil, err
 	}
 
@@ -2507,6 +2521,93 @@ func (c *DokiCLI) doAPI(method, path string, body interface{}) (*http.Response, 
 	}
 
 	return resp, nil
+}
+
+// isConnRefused reports whether err is a "daemon not reachable" transport error
+// (socket missing or connection refused), so the CLI can print a friendly hint
+// instead of the raw Go error that leaks the internal URL and socket path.
+func isConnRefused(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such file or directory") ||
+		strings.Contains(msg, "connect: ")
+}
+
+// hijackAPI opens a raw connection to the daemon, sends the request, reads the
+// response headers, and hands back the underlying connection for full-duplex
+// streaming (attach/exec). A normal http.Client cannot do this because it owns
+// the connection and buffers the body. Returns the conn (for writing stdin) and
+// a buffered reader (for reading stdout/stderr — it may already hold bytes that
+// followed the headers, so callers must read through it, not the raw conn).
+func (c *DokiCLI) hijackAPI(method, path string, body interface{}) (net.Conn, *bufio.Reader, error) {
+	var payload []byte
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, nil, err
+		}
+		payload = b
+	}
+	conn, err := net.Dial("unix", c.socket)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot connect to the Doki daemon at %s: is dokid running?", c.socket)
+	}
+	req, err := http.NewRequest(method, "http://unix/v1.44"+path, bytes.NewReader(payload))
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", common.UserAgent())
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "tcp")
+	if err := req.Write(conn); err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusSwitchingProtocols {
+		msg, _ := io.ReadAll(resp.Body)
+		_ = conn.Close()
+		return nil, nil, fmt.Errorf("attach failed: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
+	return conn, br, nil
+}
+
+// streamHijack wires the local terminal to a hijacked daemon connection.
+// stdin (raw) is copied to conn; the daemon's output is copied back — raw when
+// tty, stdcopy-demuxed otherwise. It returns when the daemon closes the stream
+// (process exit). When tty and stdin is a real terminal, it switches to raw
+// mode for the duration so keystrokes reach the container unbuffered.
+func streamHijack(conn net.Conn, br *bufio.Reader, tty, attachStdin bool) {
+	if tty && term.IsTerminal(int(os.Stdin.Fd())) {
+		if state, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
+			defer func() { _ = term.Restore(int(os.Stdin.Fd()), state) }()
+		}
+	}
+
+	if attachStdin {
+		go func() {
+			_, _ = io.Copy(conn, os.Stdin)
+			if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+				_ = cw.CloseWrite()
+			}
+		}()
+	}
+
+	if tty {
+		_, _ = io.Copy(os.Stdout, br)
+	} else {
+		demuxStream(br, os.Stdout, os.Stderr)
+	}
 }
 
 func (c *DokiCLI) listContainers(all bool) ([]common.ContainerInfo, error) {
@@ -2527,24 +2628,18 @@ func (c *DokiCLI) listContainers(all bool) ([]common.ContainerInfo, error) {
 	return containers, nil
 }
 
+// waitContainer blocks until the container exits. It uses the server-side
+// /wait endpoint (which blocks until the process is reaped) rather than polling
+// /containers/{id}/json — the latter returns a Docker-format body whose "State"
+// is an object, which does not decode into common.ContainerJSON's string State
+// field, so the old polling loop failed to decode every tick and hung forever.
 func (c *DokiCLI) waitContainer(containerID string) {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-	for range ticker.C {
-		resp, err := c.doAPI("GET", "/containers/"+containerID+"/json", nil)
-		if err != nil {
-			return
-		}
-		var js common.ContainerJSON
-		if err := json.NewDecoder(resp.Body).Decode(&js); err != nil {
-			_ = resp.Body.Close()
-			continue
-		}
-		_ = resp.Body.Close()
-		if js.ContainerInfo == nil || js.ContainerInfo.State != common.StateRunning {
-			return
-		}
+	resp, err := c.doAPI("POST", "/containers/"+containerID+"/wait", nil)
+	if err != nil {
+		return
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 }
 
 // Ping checks whether the Doki daemon is reachable.

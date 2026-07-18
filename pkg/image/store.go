@@ -256,6 +256,24 @@ func (s *Store) downloadLayersParallel(registryHost, name string, layers []regis
 	return digests, nil
 }
 
+// normalizeRepoTag ensures a repo:tag string carries an explicit tag, defaulting
+// to ":latest" when the user pulled by bare name (e.g. "busybox"). It ignores a
+// ":" that is part of a registry:port host, and leaves digest refs untouched, so
+// `doki images` shows "busybox  latest" instead of "busybox  -".
+func normalizeRepoTag(ref string) string {
+	if ref == "" || strings.Contains(ref, "@") {
+		return ref
+	}
+	lastPart := ref
+	if i := strings.LastIndex(ref, "/"); i != -1 {
+		lastPart = ref[i+1:]
+	}
+	if !strings.Contains(lastPart, ":") {
+		return ref + ":latest"
+	}
+	return ref
+}
+
 func (s *Store) saveImageRecord(imageRef string, _ *registry.ImageRef, manifest *registry.ManifestV2, mediaType string, config *Config, layers []string) (*ImageRecord, error) {
 	// Create and save record (lock for state modification).
 	s.mu.Lock()
@@ -266,7 +284,7 @@ func (s *Store) saveImageRecord(imageRef string, _ *registry.ImageRef, manifest 
 	imageID := manifest.Config.Digest
 	record := &ImageRecord{
 		ID:           imageID,
-		RepoTags:     []string{imageRef},
+		RepoTags:     []string{normalizeRepoTag(imageRef)},
 		RepoDigests:  []string{},
 		Config:       config,
 		Manifest:     manifest,
@@ -356,9 +374,12 @@ func (s *Store) Get(idOrTag string) (*ImageRecord, error) {
 		return nil, err
 	}
 
+	// Normalize the query the same way stored tags are ("busybox" → "busybox:latest")
+	// so a bare-name lookup matches an image saved with an explicit :latest tag.
+	needle := normalizeRepoTag(idOrTag)
 	for _, record := range records {
 		for _, tag := range record.RepoTags {
-			if tag == idOrTag {
+			if tag == idOrTag || tag == needle {
 				rec := record // copy the loop variable
 				return &rec, nil
 			}

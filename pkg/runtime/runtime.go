@@ -811,7 +811,13 @@ func (rt *Runtime) monitorProcess(state *ContainerState, logFile *os.File) {
 	// may have already called Wait() via their fast-detection goroutines.
 	if state.Cmd != nil && state.Cmd.ProcessState == nil {
 		if err := state.Cmd.Wait(); err != nil {
-			slog.Default().Warn("wait failed", "error", err)
+			// A non-zero container exit code surfaces as *exec.ExitError — that
+			// is a normal container exit, not a daemon failure, so don't log it
+			// as a warning (it only spammed the logs, e.g. "exit status 42").
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) {
+				slog.Default().Warn("container wait failed", "error", err)
+			}
 		}
 	}
 	if logFile != nil {
@@ -1029,8 +1035,12 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 		switch mnt.Type {
 		case common.MountBind:
 			if mnt.Source != "" && mnt.Target != "" {
-				// Ensure the target directory exists inside the rootfs.
-				targetInRootfs := filepath.Join(cleanRootfs, mnt.Target)
+				// Ensure the target directory exists inside the rootfs, clamped
+				// so a crafted target can't MkdirAll outside the container root.
+				targetInRootfs, terr := common.SecureJoin(cleanRootfs, mnt.Target)
+				if terr != nil {
+					return 0, nil, fmt.Errorf("resolve mount target %s: %w", mnt.Target, terr)
+				}
 				if err := os.MkdirAll(targetInRootfs, 0755); err != nil {
 					return 0, nil, fmt.Errorf("create mount target %s: %w", mnt.Target, err)
 				}
@@ -1041,7 +1051,10 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 				prootArgs = append(prootArgs, "-b", bindArg)
 			}
 		case common.MountTmpfs:
-			target := filepath.Join(cleanRootfs, mnt.Target)
+			target, terr := common.SecureJoin(cleanRootfs, mnt.Target)
+			if terr != nil {
+				return 0, nil, fmt.Errorf("resolve tmpfs target %s: %w", mnt.Target, terr)
+			}
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return 0, nil, fmt.Errorf("create tmpfs target %s: %w", mnt.Target, err)
 			}
@@ -1254,7 +1267,14 @@ func (rt *Runtime) setupMounts(rootfsDir string, cfg *Config) error {
 	_ = fuse.ShmMount(filepath.Join(rootfsDir, "dev", "shm"), shmSize)
 
 	for _, mnt := range cfg.Mounts {
-		target := filepath.Join(rootfsDir, mnt.Target)
+		// Resolve the mount target within the rootfs, clamping symlinks and ".."
+		// to the container root so a crafted target ("../../etc", or a symlink
+		// planted by the image) cannot bind-mount over a host path.
+		target, terr := common.SecureJoin(rootfsDir, mnt.Target)
+		if terr != nil {
+			slog.Warn("mount: resolve target", "target", mnt.Target, "err", terr)
+			continue
+		}
 		switch mnt.Type {
 		case common.MountBind:
 			if mnt.Source != "" {
@@ -1447,9 +1467,14 @@ func (rt *Runtime) ExecAttach(containerID string, args []string, env []string, w
 			if perr != nil {
 				return nil
 			}
-			if workingDir != "" {
-				prootArgs = append(prootArgs, "-w", workingDir)
+			// Default the guest working directory to "/". Without -w, proot
+			// inherits the daemon's host cwd, which does not exist inside the
+			// guest rootfs and emits a "can't chdir" warning on every exec.
+			guestWD := workingDir
+			if guestWD == "" {
+				guestWD = "/"
 			}
+			prootArgs = append(prootArgs, "-w", guestWD)
 			prootArgs = append(prootArgs, args...)
 			prootBin := proot.FindProotBinary()
 			if prootBin == "" {
@@ -1519,20 +1544,55 @@ func (rt *Runtime) ExecAttach(containerID string, args []string, env []string, w
 		}, nil
 	}
 
-	cmd.Stdin = stdinR
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
+
+	// Feed stdin through an *os.File pipe (StdinPipe), NOT by assigning the
+	// io.PipeReader to cmd.Stdin. If cmd.Stdin is a non-*os.File reader, os/exec
+	// spawns an internal copy goroutine that blocks reading it, and cmd.Wait()
+	// waits for that goroutine — for a non-interactive exec the client never
+	// closes stdin, so Wait() would hang forever and the daemon would never
+	// close the hijacked connection (exec appeared to run but never returned).
+	// With StdinPipe the child reads a real fd, so Wait() only depends on the
+	// process exiting. The copier below unblocks when the wait goroutine closes
+	// stdinR after the process dies.
+	stdinPipe, serr := cmd.StdinPipe()
+	if serr != nil {
+		_ = stdoutW.Close()
+		_ = stderrW.Close()
+		_ = stdinR.Close()
+		return nil, fmt.Errorf("exec stdin: %w", serr)
+	}
+	go func() {
+		_, _ = io.Copy(stdinPipe, stdinR)
+		_ = stdinPipe.Close()
+	}()
+
+	// Start synchronously so cmd.Process is populated before we read its Pid.
+	// Previously cmd.Run() ran in the goroutine below and the returned struct
+	// read cmd.Process.Pid immediately — a race that dereferenced a nil
+	// cmd.Process and panicked the daemon on every exec.
+	if err := cmd.Start(); err != nil {
+		_ = stdoutW.Close()
+		_ = stderrW.Close()
+		_ = stdinR.Close()
+		return nil, fmt.Errorf("exec start: %w", err)
+	}
 
 	waitDone := make(chan struct{})
 	var waitErr error
 	go func() {
-		waitErr = cmd.Run()
+		waitErr = cmd.Wait()
 		_ = stdoutW.Close()
 		_ = stderrW.Close()
 		_ = stdinR.Close()
 		close(waitDone)
 	}()
 
+	pid := -1
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
 	return &ExecResult{
 		Stdin:  writeCloserAdapter{w: stdinW},
 		Stdout: readCloserAdapter{r: stdoutR},
@@ -1541,7 +1601,7 @@ func (rt *Runtime) ExecAttach(containerID string, args []string, env []string, w
 			<-waitDone
 			return waitErr
 		},
-		Pid: cmd.Process.Pid,
+		Pid: pid,
 	}, nil
 }
 

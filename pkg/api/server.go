@@ -29,6 +29,7 @@ import (
 	"github.com/OpceanAI/Doki/pkg/podman"
 	dokiruntime "github.com/OpceanAI/Doki/pkg/runtime"
 	"github.com/OpceanAI/Doki/pkg/stdcopy"
+	"gopkg.in/yaml.v3"
 )
 
 // Server implements the Docker Engine v1.55 compatible HTTP API.
@@ -2124,18 +2125,13 @@ func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID 
 				}
 			}
 		}()
-		// Stdin frames from client.
+		// Stdin from the client is a RAW stream in both TTY and non-TTY
+		// modes — only stdout/stderr are stdcopy-multiplexed. (The previous
+		// code read stdin as stdcopy frames, which no real Docker/Podman
+		// client sends, so `exec -i` never delivered input to the process.)
 		go func() {
-			for {
-				_, payload, rerr := stdcopy.ReadFrame(conn)
-				if rerr != nil {
-					_ = res.Stdin.Close()
-					return
-				}
-				if len(payload) > 0 {
-					_, _ = res.Stdin.Write(payload)
-				}
-			}
+			_, _ = io.Copy(res.Stdin, conn)
+			_ = res.Stdin.Close()
 		}()
 	}
 
@@ -3018,126 +3014,162 @@ func (s *Server) handleKubePlay(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+
+// kubeManifest and friends model the subset of Kubernetes YAML that `kube play`
+// understands. Parsed with a real YAML decoder (yaml.v3) rather than a
+// hand-rolled line splitter, so nested command/args/env/replicas are honored.
+type kubeManifest struct {
+	Kind     string   `yaml:"kind"`
+	Metadata kubeMeta `yaml:"metadata"`
+	Spec     kubeSpec `yaml:"spec"`
+}
+
+type kubeMeta struct {
+	Name   string            `yaml:"name"`
+	Labels map[string]string `yaml:"labels"`
+}
+
+type kubeSpec struct {
+	Containers []kubeContainer `yaml:"containers"` // Pod
+	Replicas   *int            `yaml:"replicas"`   // Deployment/ReplicaSet
+	Template   *kubeTemplate   `yaml:"template"`   // Deployment/ReplicaSet
+}
+
+type kubeTemplate struct {
+	Metadata kubeMeta `yaml:"metadata"`
+	Spec     kubeSpec `yaml:"spec"`
+}
+
+type kubeContainer struct {
+	Name    string     `yaml:"name"`
+	Image   string     `yaml:"image"`
+	Command []string   `yaml:"command"`
+	Args    []string   `yaml:"args"`
+	Env     []kubeEnv  `yaml:"env"`
+	Ports   []kubePort `yaml:"ports"`
+}
+
+type kubeEnv struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+
+type kubePort struct {
+	ContainerPort int    `yaml:"containerPort"`
+	Protocol      string `yaml:"protocol"`
+}
+
 func parseKubeYAML(yamlStr string, s *Server) []string {
 	var created []string
-	lines := strings.Split(yamlStr, "\n")
-	var current map[string]interface{}
-	inDoc := false
-	indent := ""
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "---" || trimmed == "" {
+	dec := yaml.NewDecoder(strings.NewReader(yamlStr))
+	for {
+		var m kubeManifest
+		err := dec.Decode(&m)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			slog.Warn("kube play: parse manifest", "err", err)
+			break
+		}
+		if m.Kind == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "kind:") {
-			if current != nil {
-				if id := applyKubeResource(current, s); id != "" {
-					created = append(created, id)
-				}
-			}
-			current = make(map[string]interface{})
-			current["kind"] = strings.TrimSpace(strings.TrimPrefix(trimmed, "kind:"))
-			inDoc = true
-			indent = ""
-			continue
-		}
-		if inDoc && current != nil {
-			if strings.HasPrefix(trimmed, "spec:") || strings.HasPrefix(trimmed, "metadata:") {
-				indent = ""
-				switch {
-				case strings.HasPrefix(trimmed, "spec:"):
-					if spec, ok := current["spec"].(map[string]interface{}); ok {
-						parseYAMLBlock(line, spec, &indent)
-					} else {
-						current["spec"] = make(map[string]interface{})
-					}
-				case strings.HasPrefix(trimmed, "metadata:"):
-					if meta, ok := current["metadata"].(map[string]interface{}); ok {
-						parseYAMLBlock(line, meta, &indent)
-					} else {
-						current["metadata"] = make(map[string]interface{})
-					}
-				}
-			} else if trimmed != "" {
-				kv := strings.SplitN(trimmed, ":", 2)
-				if len(kv) == 2 {
-					key := strings.TrimSpace(kv[0])
-					val := strings.TrimSpace(kv[1])
-					if val == "" {
-						val = ""
-					}
-					if indent != "" {
-						key = indent + key
-					}
-					current[key] = val
-				}
-			}
-		}
-	}
-	if current != nil {
-		if id := applyKubeResource(current, s); id != "" {
-			created = append(created, id)
-		}
+		created = append(created, s.applyKubeManifest(&m)...)
 	}
 	return created
 }
 
-func parseYAMLBlock(line string, m map[string]interface{}, indent *string) {
-	// placeholder for nested parsing
-	_ = line
-	_ = m
-	_ = indent
+// applyKubeManifest turns a single manifest into running containers. Pods create
+// one container per spec.containers; Deployment/ReplicaSet honor spec.replicas.
+// Non-workload kinds are accepted (no error) so multi-doc manifests don't fail.
+func (s *Server) applyKubeManifest(m *kubeManifest) []string {
+	switch m.Kind {
+	case "Pod":
+		return s.createKubePod(m.Metadata.Name, m.Spec.Containers, 0, 0)
+	case "Deployment", "ReplicaSet", "StatefulSet", "DaemonSet":
+		if m.Spec.Template == nil {
+			slog.Warn("kube play: workload without template", "kind", m.Kind, "name", m.Metadata.Name)
+			return nil
+		}
+		replicas := 1
+		if m.Spec.Replicas != nil {
+			replicas = *m.Spec.Replicas
+		}
+		var ids []string
+		for i := 0; i < replicas; i++ {
+			ids = append(ids, s.createKubePod(m.Metadata.Name, m.Spec.Template.Spec.Containers, i, replicas)...)
+		}
+		return ids
+	case "ConfigMap", "Secret", "Service", "Namespace", "PersistentVolumeClaim":
+		slog.Info("kube play: resource accepted (no container created)", "kind", m.Kind, "name", m.Metadata.Name)
+		return nil
+	default:
+		slog.Warn("kube play: unsupported kind", "kind", m.Kind, "name", m.Metadata.Name)
+		return nil
+	}
 }
 
-func applyKubeResource(resource map[string]interface{}, s *Server) string {
-	_, _ = resource["kind"].(string)
-	meta, _ := resource["metadata"].(map[string]interface{})
-	spec, _ := resource["spec"].(map[string]interface{})
-	name := ""
-	if meta != nil {
-		if n, ok := meta["name"].(string); ok {
-			name = n
+// createKubePod creates and starts one container per pod container. replicaTotal
+// > 0 marks a Deployment replica so names get a -N suffix.
+func (s *Server) createKubePod(podName string, containers []kubeContainer, replicaIdx, replicaTotal int) []string {
+	var ids []string
+	for _, c := range containers {
+		if c.Image == "" {
+			continue
 		}
-	}
-	image, _ := resource["image"].(string)
-	if image == "" && spec != nil {
-		if containers, ok := spec["containers"].([]interface{}); ok && len(containers) > 0 {
-			if first, ok := containers[0].(map[string]interface{}); ok {
-				if img, ok := first["image"].(string); ok {
-					image = img
-				}
-			}
+		if _, err := s.image.Pull(c.Image); err != nil {
+			slog.Warn("kube play: pull image", "image", c.Image, "err", err)
+			continue
 		}
+		name := podName
+		if replicaTotal > 0 {
+			name = fmt.Sprintf("%s-%d", podName, replicaIdx)
+		}
+		if len(containers) > 1 && c.Name != "" {
+			name = name + "-" + c.Name
+		}
+		cid := common.GenerateID(64)
+		cfg := &dokiruntime.Config{
+			ID:       cid,
+			ImageRef: c.Image,
+			Env:      kubeEnvSlice(c.Env),
+			Annotations: map[string]string{
+				"doki.name": name,
+				"doki.kube": "true",
+				"doki.pod":  podName,
+			},
+		}
+		// K8s: command overrides ENTRYPOINT, args overrides CMD. Concatenate to
+		// the runtime's single arg vector; empty means use the image's default.
+		var argv []string
+		argv = append(argv, c.Command...)
+		argv = append(argv, c.Args...)
+		if len(argv) > 0 {
+			cfg.Args = argv
+		}
+		if layers, err := s.image.GetLayerPaths(c.Image); err == nil {
+			cfg.ImageLayers = layers
+		}
+		if _, err := s.runtime.Create(cfg); err != nil {
+			slog.Warn("kube play: create container", "name", name, "err", err)
+			continue
+		}
+		if err := s.runtime.Start(cid); err != nil {
+			slog.Warn("kube play: start container", "name", name, "err", err)
+			continue
+		}
+		ids = append(ids, cid[:12])
 	}
-	if image == "" {
-		return ""
+	return ids
+}
+
+func kubeEnvSlice(env []kubeEnv) []string {
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		out = append(out, e.Name+"="+e.Value)
 	}
-	if name == "" {
-		name = image
-	}
-	containerID := common.GenerateID(64)
-	if _, err := s.image.Pull(image); err != nil {
-		slog.Warn("apply kube: pull image", "image", image, "err", err)
-		return ""
-	}
-	cfg := &dokiruntime.Config{
-		ID:       containerID,
-		Args:     []string{"/bin/sh"},
-		ImageRef: image,
-		Annotations: map[string]string{
-			"doki.name": name,
-			"doki.kube": "true",
-		},
-	}
-	if _, err := s.runtime.Create(cfg); err != nil {
-		slog.Warn("apply kube: create container", "err", err)
-		return ""
-	}
-	if err := s.runtime.Start(containerID); err != nil {
-		slog.Warn("apply kube: start container", "id", containerID, "err", err)
-		return ""
-	}
-	return containerID[:12]
+	return out
 }
 
 // handleGenerateKube generates a kube YAML from running containers.

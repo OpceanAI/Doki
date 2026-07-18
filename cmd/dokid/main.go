@@ -31,6 +31,7 @@ import (
 	"github.com/OpceanAI/Doki/internal/dokivm"
 	"github.com/OpceanAI/Doki/pkg/api"
 	"github.com/OpceanAI/Doki/pkg/common"
+	"github.com/OpceanAI/Doki/pkg/cri"
 	"github.com/OpceanAI/Doki/pkg/image"
 	"github.com/OpceanAI/Doki/pkg/netlink"
 	"github.com/OpceanAI/Doki/pkg/network"
@@ -67,6 +68,8 @@ var (
 	rateLimitPerSec float64
 	rateLimitBurst  int
 	dnsListen       string
+	criSocket       string
+	noCRI           bool
 	showVersion     bool
 )
 
@@ -97,6 +100,8 @@ func main() {
 	flag.Float64Var(&rateLimitPerSec, "rate-limit", 100, "Rate limit requests per second")
 	flag.IntVar(&rateLimitBurst, "rate-burst", 200, "Rate limit burst size")
 	flag.StringVar(&dnsListen, "dns-listen", dnsListen, "DNS server listen address (default: 127.0.0.11:8053 on Android, 127.0.0.11:53 on Linux)")
+	flag.StringVar(&criSocket, "cri-socket", "", "CRI gRPC socket path (default: platform doki-cri.sock)")
+	flag.BoolVar(&noCRI, "no-cri", false, "Disable the Kubernetes CRI (Container Runtime Interface) service")
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.Parse()
 
@@ -266,6 +271,24 @@ func main() {
 	logger.Info("available runtimes", "count", len(registry.Available()))
 	logger.Info("container DNS", "addr", dnsAddr)
 
+	// Kubernetes CRI service. dokid can act as a container runtime for a real
+	// kubelet / crictl over a gRPC Unix socket. A failure to start it must not
+	// bring down the Docker API, so errors here are logged, not fatal.
+	var criServer *cri.CRIServer
+	if !noCRI {
+		criSock := criSocket
+		if criSock == "" {
+			criSock = common.DefaultCRISocket()
+		}
+		criServer = cri.NewCRIServer(cri.NewCRIPlugin(rt, imgStore, netMgr))
+		go func() {
+			logger.Info("CRI service starting", "socket", criSock)
+			if err := criServer.ListenAndServe(criSock); err != nil {
+				logger.Warn("CRI service stopped", "socket", criSock, "err", err)
+			}
+		}()
+	}
+
 	server, err := api.NewServer(cfg, rt, imgStore, netMgr)
 	if err != nil {
 		logger.Error("failed to create API server", "err", err)
@@ -360,6 +383,11 @@ func main() {
 	defer shutCancel()
 	if err := srv.Shutdown(shutCtx); err != nil {
 		logger.Error("http shutdown", "err", err)
+	}
+	if criServer != nil {
+		if err := criServer.Close(); err != nil {
+			logger.Warn("CRI shutdown", "err", err)
+		}
 	}
 	rootCancel()
 	logger.Info("dokid stopped")

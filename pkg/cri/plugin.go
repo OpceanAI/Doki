@@ -232,6 +232,13 @@ func (c *CRIPlugin) CreateContainer(cc *CRIContainer) error {
 		NetworkMode: common.NetworkBridge,
 	}
 
+	// Resolve the image's layer tarballs so Create extracts a real rootfs.
+	// Without this the container's rootfs is empty and nothing runs (the
+	// kubelet's exec liveness/readiness probes and the entrypoint both fail).
+	if layers, err := c.image.GetLayerPaths(cc.Image); err == nil {
+		cfg.ImageLayers = layers
+	}
+
 	if _, err := c.runtime.Create(cfg); err != nil {
 		return err
 	}
