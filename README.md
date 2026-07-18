@@ -1263,8 +1263,10 @@ limitations under the License.
 | GitHub | [OpceanAI/Doki](https://github.com/OpceanAI/Doki) | Yes (primary) |
 | GitLab | [aguitauwu/doki](https://gitlab.com/aguitauwu/doki) | mirror |
 | Codeberg | [aguitauwu/Doki](https://codeberg.org/aguitauwu/Doki) | mirror |
+| Aguita | [root/Doki](https://git.aguita.site/root/Doki) | mirror |
 | Website | [dok1.xyz](https://dok1.xyz) | docs / install script |
 | Spanish README | [README.es.md](README.es.md) | translation |
+| Chinese README | [README.zh.md](README.zh.md) | translation |
 
 > Main is the only source of truth. Mirrors are force-synced from `main` after each release. If you find a divergence, open an issue on GitHub.
 
