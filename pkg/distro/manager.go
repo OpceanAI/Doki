@@ -251,10 +251,21 @@ func extractLayerNative(tarPath, dest string) error {
 			return err
 		}
 
-		target := filepath.Clean(filepath.Join(dest, hdr.Name))
-		if hdr.Name == "." || hdr.Name == "./" || target == cleanDest {
+		// Reject lexical ".." escapes, then resolve the parent with symlink
+		// semantics clamped to root so a symlink in an earlier entry cannot
+		// redirect a later write outside the rootfs (CVE-2018-15664 class).
+		lexical := filepath.Clean(filepath.Join(dest, hdr.Name))
+		if hdr.Name == "." || hdr.Name == "./" || lexical == cleanDest {
 			continue
 		}
+		if !strings.HasPrefix(lexical, cleanDest+string(os.PathSeparator)) && lexical != cleanDest {
+			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, lexical)
+		}
+		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(hdr.Name))
+		if perr != nil {
+			return fmt.Errorf("tar: resolve %s: %w", hdr.Name, perr)
+		}
+		target := filepath.Clean(filepath.Join(parent, filepath.Base(hdr.Name)))
 		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, target)
 		}
@@ -262,16 +273,15 @@ func extractLayerNative(tarPath, dest string) error {
 		baseName := filepath.Base(hdr.Name)
 		if strings.HasPrefix(baseName, ".wh.") {
 			if baseName == ".wh..wh..opq" {
-				opqDir := filepath.Clean(filepath.Join(dest, filepath.Dir(hdr.Name)))
-				if strings.HasPrefix(opqDir, cleanDest+string(os.PathSeparator)) || opqDir == cleanDest {
-					entries, _ := os.ReadDir(opqDir)
+				if strings.HasPrefix(parent, cleanDest+string(os.PathSeparator)) || parent == cleanDest {
+					entries, _ := os.ReadDir(parent)
 					for _, e := range entries {
-						_ = os.RemoveAll(filepath.Join(opqDir, e.Name()))
+						_ = os.RemoveAll(filepath.Join(parent, e.Name()))
 					}
 				}
 				continue
 			}
-			whTarget := filepath.Clean(filepath.Join(dest, filepath.Dir(hdr.Name), baseName[4:]))
+			whTarget := filepath.Clean(filepath.Join(parent, baseName[4:]))
 			if strings.HasPrefix(whTarget, cleanDest+string(os.PathSeparator)) || whTarget == cleanDest {
 				_ = os.RemoveAll(whTarget)
 			}

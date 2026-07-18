@@ -454,12 +454,28 @@ func extractTarGz(tarPath, dest string) error {
 			return err
 		}
 
-		// Path traversal protection (CWE-22).
+		// Path traversal protection (CWE-22, CWE-59).
+		//
+		// Lexical cleaning alone is NOT enough: a malicious layer can extract
+		// an (absolute or relative) symlink and then write a file *through* it,
+		// escaping the rootfs onto the host (CVE-2018-15664 class). We defend by
+		// resolving the parent directory with symlink semantics clamped to the
+		// extraction root, so no already-extracted symlink can lead outside it.
 		cleanDest := filepath.Clean(dest)
-		target := filepath.Clean(filepath.Join(dest, hdr.Name))
-		if hdr.Name == "." || hdr.Name == "./" || target == cleanDest {
+		// First, reject lexical ".." escapes in the entry name itself.
+		lexical := filepath.Clean(filepath.Join(cleanDest, hdr.Name))
+		if hdr.Name == "." || hdr.Name == "./" || lexical == cleanDest {
 			continue
 		}
+		if !strings.HasPrefix(lexical, cleanDest+string(os.PathSeparator)) {
+			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, lexical)
+		}
+		// Then resolve the parent with symlink semantics clamped to root.
+		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(hdr.Name))
+		if perr != nil {
+			return fmt.Errorf("tar: resolve %s: %w", hdr.Name, perr)
+		}
+		target := filepath.Clean(filepath.Join(parent, filepath.Base(hdr.Name)))
 		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, target)
 		}
@@ -467,18 +483,19 @@ func extractTarGz(tarPath, dest string) error {
 		// C1: Whiteout files - OCI layers use .wh.<filename> to mark deleted files.
 		baseName := filepath.Base(hdr.Name)
 		if strings.HasPrefix(baseName, ".wh.") {
-			// Opaque whiteout: .wh..wh..opq clears the entire directory
+			// Opaque whiteout: .wh..wh..opq clears the entire directory.
+			// parent is already resolved within cleanDest (see SecureJoin above),
+			// so ReadDir/RemoveAll cannot follow a symlink out of the rootfs.
 			if baseName == ".wh..wh..opq" {
-				opqDir := filepath.Clean(filepath.Join(dest, filepath.Dir(hdr.Name)))
-				if strings.HasPrefix(opqDir, cleanDest+string(os.PathSeparator)) || opqDir == cleanDest {
-					entries, _ := os.ReadDir(opqDir)
+				if strings.HasPrefix(parent, cleanDest+string(os.PathSeparator)) || parent == cleanDest {
+					entries, _ := os.ReadDir(parent)
 					for _, e := range entries {
-						_ = os.RemoveAll(filepath.Join(opqDir, e.Name()))
+						_ = os.RemoveAll(filepath.Join(parent, e.Name()))
 					}
 				}
 				continue
 			}
-			whTarget := filepath.Clean(filepath.Join(dest, filepath.Dir(hdr.Name), baseName[4:]))
+			whTarget := filepath.Clean(filepath.Join(parent, baseName[4:]))
 			if strings.HasPrefix(whTarget, cleanDest+string(os.PathSeparator)) || whTarget == cleanDest {
 				_ = os.RemoveAll(whTarget)
 			}

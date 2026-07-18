@@ -136,11 +136,21 @@ func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, _ stri
 
 		var target string
 		if destIsDir || pathEndsWithSlash {
-			target = filepath.Join(containerPath, hdr.Name)
-			if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(containerPath)+string(os.PathSeparator)) {
+			// Reject lexical ".." escapes, then resolve the parent directory with
+			// symlink semantics clamped to containerPath so a pre-existing symlink
+			// in the container rootfs cannot redirect the write onto the host
+			// (CVE-2018-15664 class).
+			lexical := filepath.Clean(filepath.Join(containerPath, hdr.Name))
+			if !strings.HasPrefix(lexical, filepath.Clean(containerPath)+string(os.PathSeparator)) {
 				s.writeError(w, http.StatusBadRequest, "invalid path in archive")
 				return
 			}
+			parent, perr := common.SecureJoin(containerPath, filepath.Dir(hdr.Name))
+			if perr != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid path in archive")
+				return
+			}
+			target = filepath.Join(parent, filepath.Base(hdr.Name))
 		} else {
 			target = containerPath
 		}
@@ -150,7 +160,11 @@ func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, _ stri
 			_ = os.MkdirAll(target, os.FileMode(hdr.Mode))
 		case tar.TypeReg:
 			_ = os.MkdirAll(filepath.Dir(target), 0755)
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, os.FileMode(hdr.Mode))
+			// Replace an existing symlink at the leaf instead of writing through it.
+			if fi, lerr := os.Lstat(target); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+				_ = os.Remove(target)
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
 			if err != nil {
 				continue
 			}

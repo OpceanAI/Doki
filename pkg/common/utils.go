@@ -241,6 +241,83 @@ func ResolvePath(base, path string) string {
 	return filepath.Join(base, path)
 }
 
+// SecureJoin resolves unsafePath beneath root, following any symlink components
+// that already exist on disk but clamping every result to root — absolute
+// symlink targets and ".." are interpreted as if root were "/", exactly like a
+// chroot. The returned path is guaranteed to be within root. Trailing components
+// that do not yet exist are appended literally.
+//
+// This is the defense against symlink-based path-traversal escapes during
+// extraction and container file copy (CVE-2018-15664 class): resolve the
+// PARENT directory of a target through SecureJoin, then join the final path
+// element yourself so an existing symlink at the leaf is replaced rather than
+// followed.
+func SecureJoin(root, unsafePath string) (string, error) {
+	const maxLinks = 255
+	root = filepath.Clean(root)
+	linksWalked := 0
+	current := "" // path relative to root, always kept inside root
+	remaining := filepath.ToSlash(unsafePath)
+
+	for remaining != "" {
+		var part string
+		if i := strings.IndexByte(remaining, '/'); i == -1 {
+			part, remaining = remaining, ""
+		} else {
+			part, remaining = remaining[:i], remaining[i+1:]
+		}
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			current = filepath.Dir(current)
+			if current == "." || current == string(os.PathSeparator) {
+				current = ""
+			}
+			continue
+		}
+
+		next := filepath.Join(current, part)
+		full := filepath.Join(root, next)
+		fi, err := os.Lstat(full)
+		if err != nil {
+			if os.IsNotExist(err) {
+				current = next
+				continue
+			}
+			return "", err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			current = next
+			continue
+		}
+		// Expand the symlink, clamped to root.
+		linksWalked++
+		if linksWalked > maxLinks {
+			return "", fmt.Errorf("too many symlinks while resolving %q", unsafePath)
+		}
+		dest, err := os.Readlink(full)
+		if err != nil {
+			return "", err
+		}
+		dest = filepath.ToSlash(dest)
+		if filepath.IsAbs(dest) {
+			current = ""
+		} else {
+			current = filepath.Dir(current)
+			if current == "." || current == string(os.PathSeparator) {
+				current = ""
+			}
+		}
+		if remaining == "" {
+			remaining = strings.TrimPrefix(dest, "/")
+		} else {
+			remaining = strings.TrimPrefix(dest, "/") + "/" + remaining
+		}
+	}
+	return filepath.Join(root, current), nil
+}
+
 // CommandExists checks if a command exists in PATH.
 func CommandExists(cmd string) bool {
 	_, err := exec.LookPath(cmd)
