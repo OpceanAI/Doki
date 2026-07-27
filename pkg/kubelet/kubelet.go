@@ -63,11 +63,11 @@ type Kubelet struct {
 // compatibility; new callers should prefer NewKubeletWithCRI.
 func NewKubelet(nodeName string, s store.Store, logger *slog.Logger) *Kubelet {
 	return &Kubelet{
-		nodeName:  nodeName,
-		store:     s,
-		pods:      make(map[string]*k8s.Pod),
-		running:   make(map[string]bool),
-		logger:    logger,
+		nodeName:    nodeName,
+		store:       s,
+		pods:        make(map[string]*k8s.Pod),
+		running:     make(map[string]bool),
+		logger:      logger,
 		nodeIP:      detectNodeIP(),
 		criSocket:   defaultCRISocket(),
 		lastRestart: make(map[string]time.Time),
@@ -415,9 +415,10 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 	allRunning := true
 	allExited0 := true
 	anyExitedNon0 := false
+	allReady := true
 
 	for _, c := range pod.Spec.Containers {
-		cs := k8s.ContainerStatus{Name: c.Name, Image: c.Image, RestartCount: 0}
+		cs := k8s.ContainerStatus{Name: c.Name, Image: c.Image, RestartCount: restartCounts[c.Name]}
 
 		containerID, ok := existing[c.Name]
 		if !ok {
@@ -429,6 +430,7 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 		if containerID == "" {
 			allRunning = false
 			allExited0 = false
+			allReady = false
 			cs.State = k8s.ContainerState{Waiting: &k8s.ContainerStateWaiting{Reason: "ContainerNotCreated"}}
 			statuses = append(statuses, cs)
 			continue
@@ -440,6 +442,7 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 			k.logger.Warn("cri: container status", "pod", podKey, "container", c.Name, "error", err)
 			allRunning = false
 			allExited0 = false
+			allReady = false
 			cs.State = k8s.ContainerState{Waiting: &k8s.ContainerStateWaiting{Reason: "StatusUnknown"}}
 			statuses = append(statuses, cs)
 			continue
@@ -455,12 +458,20 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 		switch st.GetState() {
 		case v1.ContainerState_CONTAINER_RUNNING:
 			running := true
-			cs.Ready = true
 			cs.Started = &running
 			cs.State = k8s.ContainerState{Running: &k8s.ContainerStateRunning{StartedAt: time.Unix(0, st.GetStartedAt()).UTC()}}
 			allExited0 = false
+			// K13: a container is Ready only when its readiness probe passes.
+			// Without a probe, "running" is ready, matching Kubernetes. Service
+			// endpoints depend on this, so a running-but-not-ready pod must not
+			// be marked ready.
+			cs.Ready = k.containerReady(ctx, pod, c, containerID, st.GetStartedAt())
+			if !cs.Ready {
+				allReady = false
+			}
 		case v1.ContainerState_CONTAINER_EXITED:
 			allRunning = false
+			allReady = false
 			cs.State = k8s.ContainerState{Terminated: &k8s.ContainerStateTerminated{
 				ExitCode:    st.GetExitCode(),
 				Reason:      st.GetReason(),
@@ -476,33 +487,41 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 		case v1.ContainerState_CONTAINER_CREATED:
 			allRunning = false
 			allExited0 = false
+			allReady = false
 			cs.State = k8s.ContainerState{Waiting: &k8s.ContainerStateWaiting{Reason: "ContainerCreated"}}
 		default: // CONTAINER_UNKNOWN or unspecified
 			allRunning = false
 			allExited0 = false
+			allReady = false
 			cs.State = k8s.ContainerState{Waiting: &k8s.ContainerStateWaiting{Reason: "Unknown"}}
 		}
 		statuses = append(statuses, cs)
 	}
 	pod.Status.ContainerStatuses = statuses
 
-	// Derive the pod phase from the aggregate sandbox + container states.
+	// Derive the pod phase from the aggregate sandbox + container states, taking
+	// the restart policy into account (K14): a pod that will restart its
+	// containers must not be reported as terminally Failed/Succeeded.
 	switch {
 	case sandboxStatus.GetStatus().GetState() != v1.PodSandboxState_SANDBOX_READY:
 		pod.Status.Phase = k8s.PodPending
 	case len(statuses) == 0:
 		pod.Status.Phase = k8s.PodPending
-	case anyExitedNon0:
+	case anyExitedNon0 && policy == restartNever:
 		pod.Status.Phase = k8s.PodFailed
-	case allExited0:
+	case allExited0 && policy != restartAlways:
 		pod.Status.Phase = k8s.PodSucceeded
 	case allRunning:
 		pod.Status.Phase = k8s.PodRunning
 	default:
+		// Containers are being (re)started, or a crash-looping container is in
+		// backoff — still an active pod, not terminal.
 		pod.Status.Phase = k8s.PodPending
 	}
 
-	containersReady := allRunning
+	// Ready reflects readiness probes (K13), not merely "running". Service
+	// endpoint controllers gate traffic on this condition.
+	containersReady := allRunning && allReady
 	pod.Status.Conditions = []k8s.PodCondition{
 		{Type: "Initialized", Status: "True", LastTransitionTime: condTime(prevConditions, "Initialized", "True", now)},
 		{Type: "Ready", Status: boolStatus(containersReady), LastTransitionTime: condTime(prevConditions, "Ready", boolStatus(containersReady), now)},

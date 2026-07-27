@@ -37,7 +37,7 @@ func putObj(t *testing.T, s store.Store, key string, v interface{}) {
 func TestProjectConfigMap(t *testing.T) {
 	k := testKubelet(t)
 	cm := k8s.ConfigMap{Data: map[string]string{
-		"app.conf": "key=value\n",
+		"app.conf":  "key=value\n",
 		"log.level": "debug",
 	}}
 	cm.Name = "myconfig"
