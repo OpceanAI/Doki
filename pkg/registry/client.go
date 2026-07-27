@@ -407,11 +407,36 @@ func (c *Client) GetManifest(registry, name, reference string) (*ManifestV2, str
 	contentType := resp.Header.Get("Content-Type")
 	digest := resp.Header.Get("Docker-Content-Digest")
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	// MED-4 / HIGH-1: verify the manifest bytes hash to the digest we asked for
+	// (when the reference is itself a digest) and/or to the Docker-Content-Digest
+	// header. This is what makes a digest pin actually pin something.
+	if err := verifyManifestDigest(reference, digest, body); err != nil {
+		return nil, "", err
+	}
+
 	var manifest ManifestV2
-	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+	if err := json.Unmarshal(body, &manifest); err != nil {
 		return nil, "", err
 	}
 	return &manifest, contentType + "|" + digest, nil
+}
+
+// verifyManifestDigest checks the raw manifest bytes against the requested
+// reference (if it is a digest) and the registry's Docker-Content-Digest header.
+// A mismatch means the registry served content other than what was pinned.
+func verifyManifestDigest(reference, headerDigest string, body []byte) error {
+	computed := fmt.Sprintf("sha256:%x", sha256.Sum256(body))
+	if strings.HasPrefix(reference, "sha256:") && reference != computed {
+		return fmt.Errorf("manifest digest mismatch: pinned %s, got %s", reference, computed)
+	}
+	if headerDigest != "" && strings.HasPrefix(headerDigest, "sha256:") && headerDigest != computed {
+		return fmt.Errorf("manifest digest header mismatch: header %s, computed %s", headerDigest, computed)
+	}
+	return nil
 }
 
 // DownloadBlob downloads a blob by digest and writes it to the provided writer.
@@ -481,9 +506,20 @@ func (c *Client) DoRequest(ctx context.Context, method, urlStr string, headers m
 	return c.doAuthRequest(ctx, method, urlStr, headers, body)
 }
 
-// GetConfig downloads the image configuration blob referenced by a manifest.
+// GetConfig downloads the image configuration blob referenced by a manifest and
+// verifies it hashes to manifest.Config.Digest (MED-4).
 func (c *Client) GetConfig(registry, name string, manifest *ManifestV2) ([]byte, error) {
-	return c.GetBlob(registry, name, manifest.Config.Digest)
+	data, err := c.GetBlob(registry, name, manifest.Config.Digest)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(manifest.Config.Digest, "sha256:") {
+		computed := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+		if computed != manifest.Config.Digest {
+			return nil, fmt.Errorf("config digest mismatch: expected %s, got %s", manifest.Config.Digest, computed)
+		}
+	}
+	return data, nil
 }
 
 // Push uploads a manifest and its blobs to a registry.
@@ -646,6 +682,12 @@ func (c *Client) ResolveManifest(registry, name, reference string) (*ManifestV2,
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		return nil, "", err
+	}
+
+	// HIGH-1/MED-4: if we requested a specific digest, or the registry sent a
+	// content-digest header, verify the bytes match before trusting them.
+	if err := verifyManifestDigest(reference, digest, body); err != nil {
 		return nil, "", err
 	}
 

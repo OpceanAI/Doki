@@ -384,6 +384,38 @@ func (rt *Runtime) extractLayers(rootfsDir string, layers []string) error {
 	return nil
 }
 
+// HIGH-2: hard caps to defeat decompression bombs during layer extraction.
+const (
+	// maxLayerUncompressedBytes bounds total uncompressed output of a single
+	// layer (a tiny gzip can otherwise expand to terabytes and fill the disk).
+	maxLayerUncompressedBytes = 16 << 30 // 16 GiB
+	// maxLayerEntries bounds the number of tar entries (inode exhaustion).
+	maxLayerEntries = 2_000_000
+)
+
+// streamDecompress runs an external decompressor (xz/zstd) reading from src and
+// returns a reader over its stdout plus a cleanup func. Streaming avoids
+// buffering the entire decompressed layer in RAM (HIGH-2 OOM class).
+func streamDecompress(tool string, src io.Reader) (io.Reader, func(), error) {
+	cmd := exec.Command(tool, "-dc")
+	cmd.Stdin = src
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("tar: %s pipe: %w", tool, err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, func() {}, fmt.Errorf("tar: %s start: %w", tool, err)
+	}
+	cleanup := func() {
+		_ = stdout.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}
+	return stdout, cleanup, nil
+}
+
 func extractTarGz(tarPath, dest string) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
@@ -405,6 +437,14 @@ func extractTarGz(tarPath, dest string) error {
 		return err
 	}
 
+	// HIGH-2: cleanups for any streaming decompressor commands we start.
+	var decompressCleanup []func()
+	defer func() {
+		for _, c := range decompressCleanup {
+			c()
+		}
+	}()
+
 	var decompressed io.Reader
 	switch {
 	case n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b:
@@ -421,28 +461,32 @@ func extractTarGz(tarPath, dest string) error {
 	case n >= 2 && magic[0] == 0x42 && magic[1] == 0x5a:
 		decompressed = bzip2.NewReader(f)
 	case n >= 4 && magic[0] == 0xfd && magic[1] == 0x37 && magic[2] == 0x7a && magic[3] == 0x58:
-		// xz decompression via xz command
-		xzCmd := exec.Command("xz", "-dc")
-		xzCmd.Stdin = f
-		var xzOut bytes.Buffer
-		xzCmd.Stdout = &xzOut
-		if err := xzCmd.Run(); err != nil {
-			return fmt.Errorf("tar: xz decompression failed: %w", err)
+		// HIGH-2: stream xz through a pipe instead of buffering the entire
+		// decompressed stream in RAM (a few-GB layer would OOM the daemon).
+		r, cleanup, err := streamDecompress("xz", f)
+		if err != nil {
+			return err
 		}
-		decompressed = &xzOut
+		decompressCleanup = append(decompressCleanup, cleanup)
+		decompressed = r
 	case n >= 4 && magic[0] == 0x28 && magic[1] == 0xb5 && magic[2] == 0x2f && magic[3] == 0xfd:
-		// zstd decompression via zstd command
-		zstdCmd := exec.Command("zstd", "-dc")
-		zstdCmd.Stdin = f
-		var zstdOut bytes.Buffer
-		zstdCmd.Stdout = &zstdOut
-		if err := zstdCmd.Run(); err != nil {
-			return fmt.Errorf("tar: zstd decompression failed: %w", err)
+		// HIGH-2: stream zstd through a pipe (see xz note above).
+		r, cleanup, err := streamDecompress("zstd", f)
+		if err != nil {
+			return err
 		}
-		decompressed = &zstdOut
+		decompressCleanup = append(decompressCleanup, cleanup)
+		decompressed = r
 	default:
 		decompressed = f
 	}
+
+	// HIGH-2: bound total uncompressed bytes and entry count to defeat
+	// decompression bombs (a tiny gzip that expands to TB, or millions of
+	// entries exhausting inodes).
+	decompressed = io.LimitReader(decompressed, maxLayerUncompressedBytes+1)
+	var bytesExtracted int64
+	var entryCount int64
 
 	tr := tar.NewReader(decompressed)
 	for {
@@ -452,6 +496,16 @@ func extractTarGz(tarPath, dest string) error {
 		}
 		if err != nil {
 			return err
+		}
+		entryCount++
+		if entryCount > maxLayerEntries {
+			return fmt.Errorf("tar: too many entries (>%d): possible decompression bomb", maxLayerEntries)
+		}
+		if hdr.Size > 0 {
+			bytesExtracted += hdr.Size
+			if bytesExtracted > maxLayerUncompressedBytes {
+				return fmt.Errorf("tar: uncompressed size exceeds limit (%d bytes): possible decompression bomb", maxLayerUncompressedBytes)
+			}
 		}
 
 		// Path traversal protection (CWE-22, CWE-59).

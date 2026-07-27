@@ -148,8 +148,20 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 		return nil, fmt.Errorf("parse image ref: %w", err)
 	}
 
-	// AG4: Check manifest cache (5-minute TTL).
-	cacheKey := ref.Registry + "/" + ref.Name + ":" + ref.Tag
+	// HIGH-1: honor digest pins (img@sha256:...). When a digest is present it is
+	// the authoritative reference: resolve by digest and verify, so a pin
+	// actually protects the user instead of silently fetching :latest.
+	reference := ref.Tag
+	if ref.Digest != "" {
+		if err := common.ValidateDigest(ref.Digest); err != nil {
+			return nil, fmt.Errorf("pinned digest: %w", err)
+		}
+		reference = ref.Digest
+	}
+
+	// AG4: Check manifest cache (5-minute TTL). The key includes the digest so a
+	// pin is never served a tag-cached manifest.
+	cacheKey := ref.Registry + "/" + ref.Name + ":" + reference
 	s.cacheMu.RLock()
 	if entry, ok := s.manifestCache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
 		manifest, mediaType := entry.manifest, entry.mediaType
@@ -172,7 +184,7 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 	s.cacheMu.RUnlock()
 
 	// Download manifest and config (no lock needed - network I/O).
-	manifest, mediaType, err := s.registry.ResolveManifest(ref.Registry, ref.Name, ref.Tag)
+	manifest, mediaType, err := s.registry.ResolveManifest(ref.Registry, ref.Name, reference)
 	if err != nil {
 		return nil, fmt.Errorf("get manifest: %w", err)
 	}
