@@ -113,12 +113,13 @@ func (s *Scheduler) scheduleOne(pod *k8s.Pod) error {
 		return fmt.Errorf("no nodes available")
 	}
 
-	feasible := s.filter(pod, nodes)
+	committed := s.committedRequests()
+	feasible := s.filter(pod, nodes, committed)
 	if len(feasible) == 0 {
 		return fmt.Errorf("no feasible nodes for pod %s/%s", pod.Namespace, pod.Name)
 	}
 
-	best := s.score(pod, feasible)
+	best := s.score(pod, feasible, committed)
 
 	pod.Spec.NodeName = best.Name
 	data, err := json.Marshal(pod)
@@ -151,15 +152,130 @@ func (s *Scheduler) getNodes() []k8s.Node {
 	return nodes
 }
 
-func (s *Scheduler) filter(pod *k8s.Pod, nodes []k8s.Node) []k8s.Node {
+func (s *Scheduler) filter(pod *k8s.Pod, nodes []k8s.Node, committed map[string]resourceRequest) []k8s.Node {
+	want := podRequests(pod)
 	feasible := make([]k8s.Node, 0)
 	for _, node := range nodes {
 		if s.filterNodeSelector(pod, node) &&
-			s.filterTolerations(pod, node) {
+			s.filterTolerations(pod, node) &&
+			s.filterResourceFit(want, node, committed[node.Name]) {
 			feasible = append(feasible, node)
 		}
 	}
 	return feasible
+}
+
+// resourceRequest is a normalized compute request: CPU in millicores, memory
+// in bytes. Normalizing at parse time is what stops "100m" and "1" from being
+// compared as if they were the same unit.
+type resourceRequest struct {
+	cpuMilli int64
+	memBytes int64
+}
+
+func (r resourceRequest) add(o resourceRequest) resourceRequest {
+	return resourceRequest{cpuMilli: r.cpuMilli + o.cpuMilli, memBytes: r.memBytes + o.memBytes}
+}
+
+func (r resourceRequest) max(o resourceRequest) resourceRequest {
+	out := r
+	if o.cpuMilli > out.cpuMilli {
+		out.cpuMilli = o.cpuMilli
+	}
+	if o.memBytes > out.memBytes {
+		out.memBytes = o.memBytes
+	}
+	return out
+}
+
+// requestsOf reads cpu/memory out of a ResourceList, preferring requests and
+// falling back to limits (Kubernetes defaults requests to limits when only
+// limits are given).
+func requestsOf(req, lim k8s.ResourceList) resourceRequest {
+	var out resourceRequest
+	pick := func(name string) string {
+		if v, ok := req[name]; ok && v != "" {
+			return v
+		}
+		return lim[name]
+	}
+	if v := pick("cpu"); v != "" {
+		if n, err := parseCPUMilli(v); err == nil {
+			out.cpuMilli = n
+		}
+	}
+	if v := pick("memory"); v != "" {
+		if n, err := parseMemoryBytes(v); err == nil {
+			out.memBytes = n
+		}
+	}
+	return out
+}
+
+// podRequests computes the effective resource request of a pod: the sum of its
+// regular containers, floored by the largest single init container (init
+// containers run sequentially, so they never stack with each other).
+func podRequests(pod *k8s.Pod) resourceRequest {
+	var sum resourceRequest
+	for _, c := range pod.Spec.Containers {
+		sum = sum.add(requestsOf(c.Resources.Requests, c.Resources.Limits))
+	}
+	var initMax resourceRequest
+	for _, c := range pod.Spec.InitContainers {
+		initMax = initMax.max(requestsOf(c.Resources.Requests, c.Resources.Limits))
+	}
+	return sum.max(initMax)
+}
+
+// committedRequests sums the requests of every pod already bound to a node and
+// not yet terminal, keyed by node name. Without this the scheduler would
+// compare each new pod against the node's full capacity and happily overcommit
+// it a hundred times over.
+func (s *Scheduler) committedRequests() map[string]resourceRequest {
+	out := make(map[string]resourceRequest)
+	objects, err := s.store.List(store.KeyFor("", "pods", "", ""))
+	if err != nil {
+		return out
+	}
+	for _, obj := range objects {
+		var p k8s.Pod
+		if err := json.Unmarshal(obj.Value, &p); err != nil {
+			continue
+		}
+		if p.Spec.NodeName == "" {
+			continue
+		}
+		if p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
+			continue
+		}
+		out[p.Spec.NodeName] = out[p.Spec.NodeName].add(podRequests(&p))
+	}
+	return out
+}
+
+// filterResourceFit is the hard predicate K16 asks for: a pod that requests
+// more than a node has left is infeasible, not merely low-scoring. Nodes that
+// do not publish allocatable resources are treated as unconstrained, since
+// rejecting them would break single-node setups that never fill the field.
+func (s *Scheduler) filterResourceFit(want resourceRequest, node k8s.Node, used resourceRequest) bool {
+	if want.cpuMilli == 0 && want.memBytes == 0 {
+		return true
+	}
+	if v, ok := node.Status.Allocatable["cpu"]; ok && v != "" && want.cpuMilli > 0 {
+		if capacity, err := parseCPUMilli(v); err == nil {
+			if used.cpuMilli+want.cpuMilli > capacity {
+				return false
+			}
+		}
+	}
+	if v, ok := node.Status.Allocatable["memory"]; ok && v != "" && want.memBytes > 0 {
+		if capacity, err := parseMemoryBytes(v); err == nil {
+			if used.memBytes+want.memBytes > capacity {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *Scheduler) filterNodeSelector(pod *k8s.Pod, node k8s.Node) bool {
@@ -194,7 +310,7 @@ func (s *Scheduler) filterTolerations(pod *k8s.Pod, node k8s.Node) bool {
 	return true
 }
 
-func (s *Scheduler) score(pod *k8s.Pod, nodes []k8s.Node) k8s.Node {
+func (s *Scheduler) score(pod *k8s.Pod, nodes []k8s.Node, committed map[string]resourceRequest) k8s.Node {
 	type scored struct {
 		node  k8s.Node
 		score int64
@@ -204,7 +320,7 @@ func (s *Scheduler) score(pod *k8s.Pod, nodes []k8s.Node) k8s.Node {
 	for _, node := range nodes {
 		score := int64(0)
 		score += s.scoreImageLocality(pod, node)
-		score += s.scoreLeastRequested(pod, node)
+		score += s.scoreLeastRequested(pod, node, committed[node.Name])
 		scores = append(scores, scored{node: node, score: score})
 	}
 
@@ -237,59 +353,81 @@ func (s *Scheduler) scoreImageLocality(pod *k8s.Pod, node k8s.Node) int64 {
 	return score
 }
 
-// scoreLeastRequested scores nodes based on resource availability.
-// Nodes with more available CPU and memory get higher scores.
-func (s *Scheduler) scoreLeastRequested(pod *k8s.Pod, node k8s.Node) int64 {
-	cpuScore := int64(0)
-	memScore := int64(0)
-	for _, addr := range node.Status.Addresses {
-		_ = addr
-	}
-	// Parse capacity and allocatable from node status.
-	for resourceName, qty := range node.Status.Allocatable {
-		switch resourceName {
-		case "cpu":
-			n, _ := parseQuantity(qty)
-			cpuScore = n
-		case "memory":
-			n, _ := parseQuantity(qty)
-			memScore = n / (1024 * 1024)
+// scoreLeastRequested prefers the node with the most headroom left after the
+// pods already bound to it, rather than the one with the largest raw capacity.
+func (s *Scheduler) scoreLeastRequested(pod *k8s.Pod, node k8s.Node, used resourceRequest) int64 {
+	var cpuFree, memFreeMiB int64
+	if v, ok := node.Status.Allocatable["cpu"]; ok {
+		if n, err := parseCPUMilli(v); err == nil {
+			cpuFree = n - used.cpuMilli
 		}
 	}
-	// Prefer nodes with more available resources.
-	return cpuScore*100 + memScore/100
+	if v, ok := node.Status.Allocatable["memory"]; ok {
+		if n, err := parseMemoryBytes(v); err == nil {
+			memFreeMiB = (n - used.memBytes) / (1024 * 1024)
+		}
+	}
+	if cpuFree < 0 {
+		cpuFree = 0
+	}
+	if memFreeMiB < 0 {
+		memFreeMiB = 0
+	}
+	return cpuFree/10 + memFreeMiB/100
 }
 
-// parseQuantity parses a Kubernetes resource quantity string (e.g.,
-// "4", "8Gi", "512Mi") into an int64 value.
-func parseQuantity(q string) (int64, error) {
+// parseCPUMilli parses a Kubernetes CPU quantity into millicores. "1" is 1000,
+// "500m" is 500, "0.5" is 500. The previous parser stripped the "m" suffix and
+// applied a multiplier of 1, so "100m" read as 100 CPUs — a 1000x overcount
+// that made every CPU comparison meaningless.
+func parseCPUMilli(q string) (int64, error) {
+	q = strings.TrimSpace(q)
 	if q == "" {
 		return 0, fmt.Errorf("empty quantity")
 	}
-	// Strip suffixes.
-	multiplier := int64(1)
-	switch {
-	case strings.HasSuffix(q, "Ki"):
-		multiplier = 1024
-		q = q[:len(q)-2]
-	case strings.HasSuffix(q, "Mi"):
-		multiplier = 1024 * 1024
-		q = q[:len(q)-2]
-	case strings.HasSuffix(q, "Gi"):
-		multiplier = 1024 * 1024 * 1024
-		q = q[:len(q)-2]
-	case strings.HasSuffix(q, "Ti"):
-		multiplier = 1024 * 1024 * 1024 * 1024
-		q = q[:len(q)-2]
-	case strings.HasSuffix(q, "m"):
-		multiplier = 1
-		q = q[:len(q)-1]
+	if strings.HasSuffix(q, "m") {
+		n, err := strconv.ParseInt(strings.TrimSuffix(q, "m"), 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return n, nil
 	}
-	n, err := strconv.ParseInt(q, 10, 64)
+	cores, err := strconv.ParseFloat(q, 64)
 	if err != nil {
 		return 0, err
 	}
-	return n * multiplier, nil
+	return int64(cores * 1000), nil
+}
+
+// parseMemoryBytes parses a Kubernetes memory quantity into bytes, accepting
+// both binary (Ki/Mi/Gi/Ti/Pi) and decimal (k/M/G/T/P) suffixes as the
+// Kubernetes quantity format defines them.
+func parseMemoryBytes(q string) (int64, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return 0, fmt.Errorf("empty quantity")
+	}
+	suffixes := []struct {
+		suffix     string
+		multiplier int64
+	}{
+		{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}, {"Pi", 1 << 50},
+		{"k", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12}, {"P", 1e15},
+	}
+	for _, s := range suffixes {
+		if strings.HasSuffix(q, s.suffix) {
+			n, err := strconv.ParseFloat(strings.TrimSuffix(q, s.suffix), 64)
+			if err != nil {
+				return 0, err
+			}
+			return int64(n * float64(s.multiplier)), nil
+		}
+	}
+	n, err := strconv.ParseFloat(q, 64)
+	if err != nil {
+		return 0, err
+	}
+	return int64(n), nil
 }
 
 func (q *SchedulingQueue) Add(pod *k8s.Pod) {

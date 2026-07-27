@@ -1947,7 +1947,11 @@ func (rt *Runtime) UpdateResources(id string, res *LinuxResources) error {
 		return err
 	}
 	if !rt.cgMgr.IsAvailable() {
-		return nil // best-effort on non-cgroup hosts
+		// Non-cgroup host (Termux/Android, BSD, cgroup v1 only). Callers that
+		// need to report this to a user must consult CgroupsAvailable first;
+		// staying silent here would make every CRI update a hidden no-op.
+		slog.Warn("resource update requested but cgroup v2 is unavailable; limits not enforced", "id", id)
+		return nil
 	}
 	cfg := &cgroups.Config{
 		CPUShares:        res.CPUShares,
@@ -1966,25 +1970,32 @@ func (rt *Runtime) UpdateResources(id string, res *LinuxResources) error {
 	return rt.cgMgr.Update(id, cfg)
 }
 
+// CgroupsAvailable reports whether cgroup v2 limits can actually be enforced
+// on this host. Handlers use it to warn instead of silently accepting resource
+// changes that will never take effect.
+func (rt *Runtime) CgroupsAvailable() bool {
+	return rt.cgMgr != nil && rt.cgMgr.IsAvailable()
+}
+
 // ContainerStatsData is a portable, CRI-agnostic stats payload
 // suitable for translation to v1.ContainerStats by the CRI server.
 type ContainerStatsData struct {
-	ID           string
-	CPUUsageNS   uint64
-	CPUUserNS    uint64
-	CPUKernelNS  uint64
-	MemoryBytes  uint64
-	MemoryLimit  uint64
-	PidsCurrent  uint64
-	PidsLimit    uint64
-	BlockIORB    uint64
-	BlockIOWB    uint64
-	BlockIORIOs  uint64
-	BlockIOWIOs  uint64
-	CPUSomePSI   float64
+	ID            string
+	CPUUsageNS    uint64
+	CPUUserNS     uint64
+	CPUKernelNS   uint64
+	MemoryBytes   uint64
+	MemoryLimit   uint64
+	PidsCurrent   uint64
+	PidsLimit     uint64
+	BlockIORB     uint64
+	BlockIOWB     uint64
+	BlockIORIOs   uint64
+	BlockIOWIOs   uint64
+	CPUSomePSI    float64
 	MemorySomePSI float64
-	IOSomePSI    float64
-	Timestamp    int64
+	IOSomePSI     float64
+	Timestamp     int64
 }
 
 // ContainerStats returns a portable stats payload for a single
@@ -2029,7 +2040,6 @@ func (rt *Runtime) ContainerStats(id string) (*ContainerStatsData, error) {
 	}
 	return out, nil
 }
-
 
 func getNetworkStats() map[string]uint64 {
 	data, err := os.ReadFile("/proc/net/dev")

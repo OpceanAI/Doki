@@ -1670,11 +1670,11 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	// Parse stream selection.
-	_ = r.URL.Query().Get("stream")   // "true" (default) | "false"
-	_ = r.URL.Query().Get("logs")     // "true" replay history
-	_ = r.URL.Query().Get("stdin")    // accept stdin
-	_ = r.URL.Query().Get("stdout")   // forward stdout
-	_ = r.URL.Query().Get("stderr")   // forward stderr
+	_ = r.URL.Query().Get("stream") // "true" (default) | "false"
+	_ = r.URL.Query().Get("logs")   // "true" replay history
+	_ = r.URL.Query().Get("stdin")  // accept stdin
+	_ = r.URL.Query().Get("stdout") // forward stdout
+	_ = r.URL.Query().Get("stderr") // forward stderr
 
 	// Stream stdin/stdout/stderr via raw TCP hijack with stdcopy
 	// framing (multiplexed when Tty=false, raw when Tty=true).
@@ -1938,10 +1938,18 @@ func (s *Server) handleContainerExport(w http.ResponseWriter, _ *http.Request, i
 
 func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, id string) {
 	var req struct {
-		Memory        int64 `json:"Memory"`
-		MemorySwap    int64 `json:"MemorySwap"`
-		NanoCpus      int64 `json:"NanoCpus"`
-		RestartPolicy struct {
+		CPUShares         int64  `json:"CpuShares"`
+		Memory            int64  `json:"Memory"`
+		MemorySwap        int64  `json:"MemorySwap"`
+		MemoryReservation int64  `json:"MemoryReservation"`
+		NanoCpus          int64  `json:"NanoCpus"`
+		CPUPeriod         int64  `json:"CpuPeriod"`
+		CPUQuota          int64  `json:"CpuQuota"`
+		CpusetCpus        string `json:"CpusetCpus"`
+		CpusetMems        string `json:"CpusetMems"`
+		PidsLimit         int64  `json:"PidsLimit"`
+		BlkioWeight       uint16 `json:"BlkioWeight"`
+		RestartPolicy     struct {
 			Name string `json:"Name"`
 		} `json:"RestartPolicy"`
 	}
@@ -1954,27 +1962,78 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if state.Config != nil {
-		if state.Config.Resources == nil {
-			state.Config.Resources = &dokiruntime.Resources{}
-		}
-		if req.Memory > 0 {
-			state.Config.Resources.Memory = req.Memory
-		}
-		if req.NanoCpus > 0 {
-			state.Config.Resources.NanoCpus = req.NanoCpus
-		}
-		if req.RestartPolicy.Name != "" {
-			state.Config.RestartPolicy = common.RestartPolicy(req.RestartPolicy.Name)
-		}
+	if state.Config == nil {
+		s.writeError(w, http.StatusInternalServerError, "container has no config")
+		return
+	}
+	if state.Config.Resources == nil {
+		state.Config.Resources = &dokiruntime.Resources{}
+	}
+	res := state.Config.Resources
+	if req.CPUShares > 0 {
+		res.CPUShares = req.CPUShares
+	}
+	if req.Memory > 0 {
+		res.Memory = req.Memory
+	}
+	if req.MemorySwap != 0 {
+		res.MemorySwap = req.MemorySwap
+	}
+	if req.NanoCpus > 0 {
+		res.NanoCpus = req.NanoCpus
+	}
+	if req.CPUPeriod > 0 {
+		res.CPUPeriod = req.CPUPeriod
+	}
+	if req.CPUQuota != 0 {
+		res.CPUQuota = req.CPUQuota
+	}
+	if req.CpusetCpus != "" {
+		res.CpusetCpus = req.CpusetCpus
+	}
+	if req.CpusetMems != "" {
+		res.CpusetMems = req.CpusetMems
+	}
+	if req.PidsLimit != 0 {
+		res.PidsLimit = req.PidsLimit
+	}
+	if req.BlkioWeight > 0 {
+		res.BlkioWeight = req.BlkioWeight
+	}
+	if req.RestartPolicy.Name != "" {
+		state.Config.RestartPolicy = common.RestartPolicy(req.RestartPolicy.Name)
+	}
 
-		// Persist changes
-		if err := s.runtime.SaveState(state); err != nil {
-			s.writeError(w, http.StatusInternalServerError, "failed to save state: "+err.Error())
+	// Apply to the live cgroup BEFORE persisting: a stored limit that was never
+	// enforced is worse than an error, because the client builds on the lie.
+	warnings := []string{}
+	if state.Status == common.StateRunning || state.Status == common.StatePaused {
+		if !s.runtime.CgroupsAvailable() {
+			warnings = append(warnings,
+				"cgroup v2 is not available on this host; resource limits were recorded but are NOT enforced")
+		} else if err := s.runtime.UpdateResources(id, &dokiruntime.LinuxResources{
+			CPUShares:   common.SafeUint64FromInt64(res.CPUShares),
+			CPUQuota:    res.CPUQuota,
+			CPUPeriod:   common.SafeUint64FromInt64(res.CPUPeriod),
+			NanoCPUs:    res.NanoCpus,
+			CpusetCpus:  res.CpusetCpus,
+			CpusetMems:  res.CpusetMems,
+			Memory:      res.Memory,
+			MemorySwap:  res.MemorySwap,
+			PidsLimit:   res.PidsLimit,
+			BlkioWeight: res.BlkioWeight,
+		}); err != nil {
+			slog.Error("apply container resource update", "id", id, "err", err)
+			s.writeError(w, http.StatusInternalServerError, "failed to apply resource limits")
 			return
 		}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{"Warnings": []string{}})
+
+	if err := s.runtime.SaveState(state); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to save state: "+err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{"Warnings": warnings})
 }
 
 func getRootfsChanges(rootfsDir string) []map[string]string {
@@ -2109,10 +2168,10 @@ func (s *Server) handleExecDispatch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleExecStart(w http.ResponseWriter, r *http.Request, execID string) {
 	// Detach mode: just mark as running and return 200 empty.
 	var startReq struct {
-		Detach bool   `json:"Detach"`
-		Tty    bool   `json:"Tty"`
-		Height int    `json:"h,omitempty"`
-		Width  int    `json:"w,omitempty"`
+		Detach bool `json:"Detach"`
+		Tty    bool `json:"Tty"`
+		Height int  `json:"h,omitempty"`
+		Width  int  `json:"w,omitempty"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&startReq)
 
@@ -3105,7 +3164,6 @@ func (s *Server) handleKubePlay(w http.ResponseWriter, r *http.Request) {
 		"containers": containers,
 	})
 }
-
 
 // kubeManifest and friends model the subset of Kubernetes YAML that `kube play`
 // understands. Parsed with a real YAML decoder (yaml.v3) rather than a
