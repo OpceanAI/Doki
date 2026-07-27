@@ -13,6 +13,9 @@ cmd/doki-init-rust/target/
 /doki-init
 /doki-kube
 /doki-kubectl
+/critest
+/dokitest
+/regtest
 .idea/
 *.swp
 *.swo
