@@ -151,45 +151,20 @@ func (m *DistroManager) extractRootfs(img interface{}, target string) error {
 			return fmt.Errorf("no layers found for image %s", record.ID)
 		}
 
-		sem := make(chan struct{}, 3)
-		errCh := make(chan error, len(layers))
-		var wg sync.WaitGroup
-		extracted := make([]string, 0, len(layers))
-		var mu sync.Mutex
-
+		// HIGH-6: OCI layers MUST be applied sequentially and in order.
+		// Parallel extraction (a) races whiteouts/overrides so files that should
+		// be deleted survive, and (b) reintroduces the symlink TOCTOU that the
+		// single-threaded SecureJoin(parent)->create pattern defends against
+		// (CVE-2018-15664 / CVE-2025-45582 class). Match runtime.extractLayers.
 		cleanTarget := filepath.Clean(target)
-
 		for i, layerPath := range layers {
 			if !common.PathExists(layerPath) {
 				continue
 			}
-			wg.Add(1)
-			go func(idx int, lp string) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				if err := extractLayerNative(lp, cleanTarget); err != nil {
-					errCh <- fmt.Errorf("layer %d (%s): %w", idx, filepath.Base(lp), err)
-					return
-				}
-				mu.Lock()
-				extracted = append(extracted, lp)
-				mu.Unlock()
-			}(i, layerPath)
-		}
-		wg.Wait()
-		close(errCh)
-
-		var firstErr error
-		for err := range errCh {
-			if firstErr == nil {
-				firstErr = err
+			if err := extractLayerNative(layerPath, cleanTarget); err != nil {
+				_ = os.RemoveAll(target)
+				return fmt.Errorf("layer %d (%s): %w", i, filepath.Base(layerPath), err)
 			}
-		}
-		if firstErr != nil {
-			_ = os.RemoveAll(target)
-			return firstErr
 		}
 		return nil
 	}
@@ -312,7 +287,8 @@ func extractLayerNative(tarPath, dest string) error {
 				return err
 			}
 			_ = out.Close()
-			_ = os.Chmod(target, os.FileMode(hdr.Mode))
+			// Use SafeFileMode: never honor setuid/setgid/sticky from untrusted layers.
+			_ = os.Chmod(target, common.SafeFileMode(hdr.Mode))
 			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 		case tar.TypeSymlink:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
@@ -352,20 +328,9 @@ func extractLayerNative(tarPath, dest string) error {
 				}
 			}
 		case tar.TypeBlock, tar.TypeChar:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
-			}
-			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-			dev := int(hdr.Devmajor)<<8 | int(hdr.Devminor)
-			mode := syscall.S_IFBLK
-			if hdr.Typeflag == tar.TypeChar {
-				mode = syscall.S_IFCHR
-			}
-			if err := syscall.Mknod(target, uint32(mode)|uint32(hdr.Mode&0777), dev); err != nil {
-				return err
-			}
+			// HIGH-5: never create real device nodes from untrusted image layers
+			// (e.g. /dev/mem, /dev/sda). Devices come only from the runtime spec.
+			continue
 		case tar.TypeFifo:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err

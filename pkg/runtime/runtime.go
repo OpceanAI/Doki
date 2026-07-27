@@ -658,32 +658,14 @@ func extractTarGz(tarPath, dest string) error {
 			}
 			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
-		case tar.TypeBlock:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
-			}
-			_ = os.Remove(target)
-			dev := int(hdr.Devmajor)<<8 | int(hdr.Devminor)
-			if err := syscall.Mknod(target, syscall.S_IFBLK|uint32(hdr.Mode&0777), dev); err != nil {
-				return fmt.Errorf("tar: mknod block device %s: %w", hdr.Name, err)
-			}
-			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
-				logChownError("chown block device", target, err)
-			}
-			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
-		case tar.TypeChar:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
-			}
-			_ = os.Remove(target)
-			dev := int(hdr.Devmajor)<<8 | int(hdr.Devminor)
-			if err := syscall.Mknod(target, syscall.S_IFCHR|uint32(hdr.Mode&0777), dev); err != nil {
-				return fmt.Errorf("tar: mknod char device %s: %w", hdr.Name, err)
-			}
-			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
-				logChownError("chown char device", target, err)
-			}
-			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
+		case tar.TypeBlock, tar.TypeChar:
+			// HIGH-5: never create real device nodes from untrusted image layers.
+			// In native/proot mode the rootfs is a real host directory, so a
+			// layer containing /dev/mem, /dev/kmem or /dev/sda would grant raw
+			// disk/memory access on the host. Devices must come only from the OCI
+			// runtime spec (linux.devices), not from image content. Skip silently.
+			slog.Warn("skipping device node from image layer", "name", hdr.Name)
+			continue
 		case tar.TypeFifo:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
@@ -741,6 +723,14 @@ func extractXattrs(hdr *tar.Header, target string) {
 	for key, value := range hdr.PAXRecords {
 		if strings.HasPrefix(key, "SCHILY.xattr.") {
 			attrName := strings.TrimPrefix(key, "SCHILY.xattr.")
+			// HIGH-4: only restore user.* xattrs from untrusted images. A
+			// malicious layer could otherwise set security.capability (e.g.
+			// cap_setuid+ep) on a binary — a setuid-root equivalent — or plant
+			// security.selinux/ima/evm labels. Drop everything outside user.*.
+			if !strings.HasPrefix(attrName, "user.") {
+				slog.Warn("dropping non-user xattr from image layer", "target", target, "attr", attrName)
+				continue
+			}
 			if err := syscall.Setxattr(target, attrName, []byte(value), 0); err != nil {
 				slog.Warn("Setxattr failed", "target", target, "attr", attrName, "error", err)
 			}
