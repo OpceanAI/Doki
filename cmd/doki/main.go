@@ -512,11 +512,16 @@ Rename a container.`,
 
 Update configuration of one or more containers.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			if len(args) > 0 {
-				_, _, f := cli.ParseRunFlags(args[1:])
-				return c.Update(args[0], f)
+			// Docker order is `update [OPTIONS] CONTAINER`, so the flags come
+			// before the container. Reuse the run-flag parser (which treats the
+			// first non-flag token as the positional) instead of assuming the
+			// container is args[0] — that made `update --memory 64m CID` try to
+			// operate on a container literally named "--memory".
+			container, _, f := cli.ParseRunFlags(args)
+			if container == "" {
+				return fmt.Errorf("update requires a container")
 			}
-			return nil
+			return c.Update(container, f)
 		},
 	},
 	"wait": {
