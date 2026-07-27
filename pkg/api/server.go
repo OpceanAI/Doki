@@ -707,10 +707,12 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleSwarmNoop answers swarm/secrets/configs/plugins probes. D7: returning
+// 200 made `docker info` and compose detect swarm as AVAILABLE and then build
+// on a feature that does not exist. Doki has no swarm, so it now returns the
+// same 503 Docker itself returns on a non-manager node.
 func (s *Server) handleSwarmNoop(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": "Swarm mode not available in Doki",
-	})
+	s.writeError(w, http.StatusServiceUnavailable, "this node is not a swarm manager")
 }
 
 func (s *Server) handleContainersList(w http.ResponseWriter, r *http.Request) {
@@ -3089,6 +3091,14 @@ func (s *Server) handleVolumeDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeJSON(w, http.StatusOK, vol)
 	case r.Method == "DELETE":
+		// D6: refuse to remove a volume still mounted by a container unless
+		// ?force=true. Silently removing an in-use volume corrupts the running
+		// containers that depend on it.
+		force := r.URL.Query().Get("force") == "true" || r.URL.Query().Get("force") == "1"
+		if !force && s.volumeInUse(name) {
+			s.writeError(w, http.StatusConflict, "volume is in use")
+			return
+		}
 		if err := s.volumes.Remove(name); err != nil {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -3097,6 +3107,25 @@ func (s *Server) handleVolumeDispatch(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.writeError(w, http.StatusNotFound, "no such volume action")
 	}
+}
+
+// volumeInUse reports whether any container currently mounts the named volume.
+func (s *Server) volumeInUse(name string) bool {
+	states, err := s.runtime.List()
+	if err != nil {
+		return false
+	}
+	for _, st := range states {
+		if st.Config == nil {
+			continue
+		}
+		for _, m := range st.Config.Mounts {
+			if m.Type == common.MountVolume && m.Source == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) stateToInfo(state *dokiruntime.ContainerState) *common.ContainerInfo {

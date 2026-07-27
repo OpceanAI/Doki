@@ -647,10 +647,10 @@ func containerConfig(pod *k8s.Pod, c k8s.Container, mounts []*v1.Mount) *v1.Cont
 }
 
 // criMounts resolves a pod's VolumeMounts into CRI Mount entries using the
-// pod's declared Volumes. HostPath volumes map to their host path; EmptyDir
-// volumes map to a per-pod directory under /var/lib/doki/emptydir. Other
-// volume types are skipped (the kubelet caller is responsible for
-// projecting ConfigMap/Secret content).
+// pod's declared Volumes. HostPath maps to its host path; EmptyDir to a per-pod
+// directory; PVC to its bound PV; and ConfigMap/Secret are projected to files
+// on disk (K12) — previously these were skipped, so a container that mounted
+// its config as a volume started and then misbehaved silently.
 func (k *Kubelet) criMounts(pod *k8s.Pod) []*v1.Mount {
 	hostPaths := make(map[string]string, len(pod.Spec.Volumes))
 	for _, vol := range pod.Spec.Volumes {
@@ -672,6 +672,14 @@ func (k *Kubelet) criMounts(pod *k8s.Pod) []*v1.Mount {
 			} else {
 				k.logger.Info("PVC not bound yet; pod volume deferred", "pod", pod.Name, "claim", vol.PersistentVolumeClaim.ClaimName)
 			}
+		case vol.ConfigMap != nil:
+			if dir := k.projectConfigMap(pod, vol); dir != "" {
+				hostPaths[vol.Name] = dir
+			}
+		case vol.Secret != nil:
+			if dir := k.projectSecret(pod, vol); dir != "" {
+				hostPaths[vol.Name] = dir
+			}
 		}
 	}
 
@@ -690,6 +698,100 @@ func (k *Kubelet) criMounts(pod *k8s.Pod) []*v1.Mount {
 		}
 	}
 	return mounts
+}
+
+// projectConfigMap materializes a ConfigMap volume as a directory of files on
+// disk (one file per data key), returning the directory to bind into the
+// container. Honors an explicit items[] mapping and the volume's optional flag.
+func (k *Kubelet) projectConfigMap(pod *k8s.Pod, vol k8s.Volume) string {
+	src := vol.ConfigMap
+	obj, err := k.store.Get(store.KeyFor("", "configmaps", pod.Namespace, src.Name))
+	if err != nil || obj == nil {
+		if src.Optional == nil || !*src.Optional {
+			k.logger.Warn("configMap volume not found", "pod", pod.Name, "configMap", src.Name)
+		}
+		return ""
+	}
+	var cm k8s.ConfigMap
+	if json.Unmarshal(obj.Value, &cm) != nil {
+		return ""
+	}
+	files := map[string][]byte{}
+	for key, val := range cm.Data {
+		files[key] = []byte(val)
+	}
+	for key, val := range cm.BinaryData {
+		files[key] = val
+	}
+	return k.writeProjectedFiles(pod, vol.Name, files, src.Items)
+}
+
+// projectSecret materializes a Secret volume as a directory of files on disk.
+// Secret Data is base64-decoded by the JSON unmarshal into []byte; StringData
+// is written verbatim.
+func (k *Kubelet) projectSecret(pod *k8s.Pod, vol k8s.Volume) string {
+	src := vol.Secret
+	obj, err := k.store.Get(store.KeyFor("", "secrets", pod.Namespace, src.SecretName))
+	if err != nil || obj == nil {
+		if src.Optional == nil || !*src.Optional {
+			k.logger.Warn("secret volume not found", "pod", pod.Name, "secret", src.SecretName)
+		}
+		return ""
+	}
+	var sec k8s.Secret
+	if json.Unmarshal(obj.Value, &sec) != nil {
+		return ""
+	}
+	files := map[string][]byte{}
+	for key, val := range sec.Data {
+		files[key] = val
+	}
+	for key, val := range sec.StringData {
+		files[key] = []byte(val)
+	}
+	return k.writeProjectedFiles(pod, vol.Name, files, src.Items)
+}
+
+// writeProjectedFiles writes the given key/value pairs as files under a per-pod
+// volume directory and returns that directory. An items[] mapping, when
+// present, restricts and renames the projected keys the way Kubernetes does.
+func (k *Kubelet) writeProjectedFiles(pod *k8s.Pod, volName string, data map[string][]byte, items []k8s.KeyToPath) string {
+	dir := filepath.Join(common.AppDataDir(), "projected", pod.UID, volName)
+	// Rebuild from scratch each reconcile so removed keys do not linger.
+	_ = os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		k.logger.Warn("projected volume mkdir", "pod", pod.Name, "vol", volName, "err", err)
+		return ""
+	}
+
+	write := func(relPath string, content []byte) {
+		full := filepath.Join(dir, filepath.Clean("/"+relPath))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			k.logger.Warn("projected volume subdir", "pod", pod.Name, "path", relPath, "err", err)
+			return
+		}
+		if err := os.WriteFile(full, content, 0o644); err != nil {
+			k.logger.Warn("projected volume write", "pod", pod.Name, "path", relPath, "err", err)
+		}
+	}
+
+	if len(items) > 0 {
+		// Explicit selection: only the named keys, at their mapped paths.
+		for _, it := range items {
+			if content, ok := data[it.Key]; ok {
+				dest := it.Path
+				if dest == "" {
+					dest = it.Key
+				}
+				write(dest, content)
+			}
+		}
+	} else {
+		for key, content := range data {
+			write(key, content)
+		}
+	}
+	return dir
 }
 
 // resolvePVCHostPath resolves a PVC name to the host directory of its bound PV
