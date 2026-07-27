@@ -50,6 +50,12 @@ type Kubelet struct {
 	conn        *grpc.ClientConn
 	criClient   v1.RuntimeServiceClient
 	imageClient v1.ImageServiceClient
+
+	// lastRestart rate-limits container restarts (K14) so a crash-looping
+	// container does not get recreated on every watch-driven reconcile. Keyed
+	// by "<podKey>/<container>".
+	restartMu   sync.Mutex
+	lastRestart map[string]time.Time
 }
 
 // NewKubelet returns a Kubelet without a CRI connection. It preserves the
@@ -62,8 +68,9 @@ func NewKubelet(nodeName string, s store.Store, logger *slog.Logger) *Kubelet {
 		pods:      make(map[string]*k8s.Pod),
 		running:   make(map[string]bool),
 		logger:    logger,
-		nodeIP:    detectNodeIP(),
-		criSocket: defaultCRISocket(),
+		nodeIP:      detectNodeIP(),
+		criSocket:   defaultCRISocket(),
+		lastRestart: make(map[string]time.Time),
 	}
 }
 
@@ -93,6 +100,7 @@ func NewKubeletWithCRI(ctx context.Context, nodeName string, s store.Store, logg
 		conn:        conn,
 		criClient:   v1.NewRuntimeServiceClient(conn),
 		imageClient: v1.NewImageServiceClient(conn),
+		lastRestart: make(map[string]time.Time),
 	}, nil
 }
 
@@ -322,9 +330,39 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 		}
 	}
 
+	// Carry each container's restart count forward from the last-written status
+	// so it survives across reconciles (K14). RestartCount was previously
+	// hardcoded to 0.
+	restartCounts := map[string]int32{}
+	for _, cs := range pod.Status.ContainerStatuses {
+		restartCounts[cs.Name] = cs.RestartCount
+	}
+	policy := podRestartPolicy(pod)
+
 	mounts := k.criMounts(pod)
 	for _, c := range pod.Spec.Containers {
 		containerID, ok := existing[c.Name]
+
+		// K14: an already-created container that has EXITED may need to be
+		// restarted per the pod's restartPolicy. Remove the dead container and
+		// fall through to recreate it, rate-limited so a crash loop does not
+		// spin.
+		if ok {
+			if st, serr := k.criClient.ContainerStatus(ctx, &v1.ContainerStatusRequest{ContainerId: containerID}); serr == nil {
+				cst := st.GetStatus()
+				if cst.GetState() == v1.ContainerState_CONTAINER_EXITED &&
+					shouldRestart(policy, cst.GetExitCode()) &&
+					k.restartBackoffElapsed(podKey, c.Name, restartCounts[c.Name]) {
+					_, _ = k.criClient.RemoveContainer(ctx, &v1.RemoveContainerRequest{ContainerId: containerID})
+					delete(existing, c.Name)
+					ok = false
+					restartCounts[c.Name]++
+					k.markRestart(podKey, c.Name)
+					k.logger.Info("restarting exited container", "pod", podKey, "container", c.Name, "restartCount", restartCounts[c.Name], "policy", policy)
+				}
+			}
+		}
+
 		if !ok {
 			createResp, err := k.criClient.CreateContainer(ctx, &v1.CreateContainerRequest{
 				PodSandboxId:  sandboxID,
@@ -336,6 +374,7 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 				continue
 			}
 			containerID = createResp.GetContainerId()
+			existing[c.Name] = containerID
 		}
 
 		// Only start containers that haven't been started yet. We fetch
