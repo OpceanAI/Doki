@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -174,6 +176,7 @@ type Builder struct {
 	envMap       map[string]string
 	argDefaults  map[string]string
 	cacheDir     string
+	contextDir   string
 	secrets      map[string]string
 	dockerignore *Dockerignore
 	noCache      bool
@@ -540,10 +543,60 @@ func (b *Builder) saveLayer(rootDir string, _ string) (string, int64, error) {
 func (b *Builder) instructionHash(inst *Instruction, envMap map[string]string) string {
 	h := sha256.New()
 	h.Write([]byte(inst.Raw))
-	for k, v := range envMap {
-		h.Write([]byte(k + "=" + v))
+	// HIGH-10: deterministic env contribution (map iteration order is random,
+	// which otherwise makes the cache key unstable).
+	keys := make([]string, 0, len(envMap))
+	for k := range envMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.Write([]byte(k + "=" + envMap[k] + "\x00"))
+	}
+	// HIGH-10: bind the key to this build context's identity so unrelated
+	// builds that share an instruction (e.g. `RUN make`, `COPY . /app`) cannot
+	// collide and hand one build another's cached layer.
+	h.Write([]byte("\x00ctx=" + b.contextDir + "\x00"))
+	// HIGH-10: for COPY/ADD, fold in the CONTENT of the sources so a changed
+	// file invalidates the cache instead of reusing a stale layer.
+	if up := strings.ToUpper(inst.Type); up == "COPY" || up == "ADD" {
+		b.hashInstructionSources(h, inst)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// hashInstructionSources mixes the content of local COPY/ADD sources into h.
+// Remote URLs and --from stage copies are folded in by reference only.
+func (b *Builder) hashInstructionSources(h io.Writer, inst *Instruction) {
+	for _, a := range inst.Args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if strings.HasPrefix(a, "http://") || strings.HasPrefix(a, "https://") {
+			_, _ = io.WriteString(h, "url="+a+"\x00")
+			continue
+		}
+		src := filepath.Join(b.contextDir, a)
+		matches, err := filepath.Glob(src)
+		if err != nil || len(matches) == 0 {
+			matches = []string{src}
+		}
+		for _, m := range matches {
+			_ = filepath.Walk(m, func(p string, fi os.FileInfo, werr error) error {
+				if werr != nil || fi.IsDir() {
+					return nil
+				}
+				if rel, rerr := filepath.Rel(b.contextDir, p); rerr == nil {
+					_, _ = io.WriteString(h, "f="+rel+"\x00")
+				}
+				if f, oerr := os.Open(p); oerr == nil {
+					_, _ = io.Copy(h, f)
+					_ = f.Close()
+				}
+				return nil
+			})
+		}
+	}
 }
 
 func (b *Builder) checkCache(inst *Instruction, envMap map[string]string) (string, bool) {
@@ -668,6 +721,7 @@ func (b *Builder) Build(cfg *BuildConfig) error {
 		}
 		contextDir = tmpDir
 	}
+	b.contextDir = contextDir
 
 	// Read Dokifile
 	dokifilePath := cfg.Dokifile

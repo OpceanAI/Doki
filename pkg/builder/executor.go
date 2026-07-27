@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/OpceanAI/Doki/internal/proot"
@@ -500,6 +501,17 @@ func (b *Builder) executeAdd(stage *Stage, inst *Instruction, ctxDir, rootDir st
 		}
 
 		for _, match := range matches {
+			// HIGH-8: like COPY, verify the resolved source stays inside the build
+			// context. Without this, `ADD ../../etc/shadow` or a symlink pointing
+			// outside the context reads arbitrary host files into the image.
+			resolved, rerr := filepath.EvalSymlinks(match)
+			if rerr != nil {
+				continue
+			}
+			if !strings.HasPrefix(resolved, filepath.Clean(sourceDir)+string(os.PathSeparator)) &&
+				resolved != filepath.Clean(sourceDir) {
+				return fmt.Errorf("add source %s resolves outside build context", src)
+			}
 			fi, err := os.Stat(match)
 			if err != nil {
 				continue
@@ -998,10 +1010,21 @@ func ExtractTar(r io.Reader, dest string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Clean(filepath.Join(dest, hdr.Name))
-		if hdr.Name == "." || hdr.Name == "./" || target == cleanDest {
+		lexical := filepath.Clean(filepath.Join(dest, hdr.Name))
+		if hdr.Name == "." || hdr.Name == "./" || lexical == cleanDest {
 			continue
 		}
+		if !strings.HasPrefix(lexical, cleanDest+string(os.PathSeparator)) && lexical != cleanDest {
+			return fmt.Errorf("tar: path traversal attempt: %s", hdr.Name)
+		}
+		// HIGH-9: resolve the parent directory with symlink semantics clamped to
+		// dest, so a prior entry like "evil -> /" cannot make a later
+		// "evil/etc/cron.d/x" write through the symlink onto the host.
+		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(hdr.Name))
+		if perr != nil {
+			return fmt.Errorf("tar: resolve %s: %w", hdr.Name, perr)
+		}
+		target := filepath.Join(parent, filepath.Base(hdr.Name))
 		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s", hdr.Name)
 		}
@@ -1015,7 +1038,11 @@ func ExtractTar(r io.Reader, dest string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			f, err := os.Create(target)
+			// Replace an existing symlink at the leaf instead of writing through it.
+			if fi, lerr := os.Lstat(target); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+				_ = os.Remove(target)
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
 			if err != nil {
 				return err
 			}
