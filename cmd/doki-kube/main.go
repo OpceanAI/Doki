@@ -73,7 +73,7 @@ func main() {
 
 	switch *mode {
 	case "apiserver":
-		api := apiserver.NewAPIServer(*apiAddr, s)
+		api := apiserver.NewAPIServerWithCRI(*apiAddr, s, *criSocket)
 		logger.Info("apiserver listening", "addr", *apiAddr)
 		if err := api.Start(); err != nil {
 			logger.Error("apiserver failed", "error", err)
@@ -116,7 +116,7 @@ func main() {
 		}
 
 	case "all":
-		api := apiserver.NewAPIServer(*apiAddr, s)
+		api := apiserver.NewAPIServerWithCRI(*apiAddr, s, *criSocket)
 		go func() {
 			logger.Info("apiserver listening", "addr", *apiAddr)
 			_ = api.Start()
