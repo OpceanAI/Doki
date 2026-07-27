@@ -13,19 +13,63 @@ import (
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
+	"github.com/OpceanAI/Doki/pkg/events"
+	"github.com/OpceanAI/Doki/pkg/image"
+	"github.com/OpceanAI/Doki/pkg/network"
+	dokiruntime "github.com/OpceanAI/Doki/pkg/runtime"
 )
 
 // maxPodmanJSONBody caps JSON request bodies for the podman shim endpoints to
 // bound memory against an oversized body (small configs only).
 const maxPodmanJSONBody = 4 << 20
 
+// VolumeStore is the slice of the daemon's volume manager that the libpod
+// surface needs. It is an interface rather than the concrete type because the
+// manager lives in pkg/api, which imports this package.
+type VolumeStore interface {
+	Create(name string, driver string, opts map[string]string, labels map[string]string) (*common.VolumeInfo, error)
+	Get(name string) (*common.VolumeInfo, error)
+	List() []*common.VolumeInfo
+	Remove(name string) error
+	Prune(referencedVolumes map[string]bool) ([]string, error)
+}
+
+// Deps carries the real engine components the libpod endpoints operate on.
+// Before these were injected, PodmanServer held only its own metadata stores,
+// so every container, image, volume and network endpoint had nothing to talk
+// to and could only return fiction.
+type Deps struct {
+	Runtime *dokiruntime.Runtime
+	Images  *image.Store
+	Network *network.Manager
+	Volumes VolumeStore
+	Events  *events.Bus
+
+	// Build, PlayKube and GenerateKube reuse the daemon's own handlers rather
+	// than reimplementing them here (P6/P7). They are function values because
+	// those handlers live in pkg/api, which imports this package.
+	Build        http.HandlerFunc
+	PlayKube     http.HandlerFunc
+	GenerateKube http.HandlerFunc
+}
+
 type PodmanServer struct {
 	podMgr      *PodManager
 	secretMgr   *SecretManager
 	manifestMgr *ManifestManager
+
+	runtime *dokiruntime.Runtime
+	images  *image.Store
+	network *network.Manager
+	volumes VolumeStore
+	events  *events.Bus
+
+	build        http.HandlerFunc
+	playKube     http.HandlerFunc
+	generateKube http.HandlerFunc
 }
 
-func NewPodmanServer(root string) (*PodmanServer, error) {
+func NewPodmanServer(root string, deps Deps) (*PodmanServer, error) {
 	pm, err := NewPodManager(root)
 	if err != nil {
 		return nil, err
@@ -42,7 +86,35 @@ func NewPodmanServer(root string) (*PodmanServer, error) {
 		podMgr:      pm,
 		secretMgr:   sm,
 		manifestMgr: mm,
+		runtime:     deps.Runtime,
+		images:      deps.Images,
+		network:     deps.Network,
+		volumes:     deps.Volumes,
+		events:      deps.Events,
+
+		build:        deps.Build,
+		playKube:     deps.PlayKube,
+		generateKube: deps.GenerateKube,
 	}, nil
+}
+
+// requireRuntime reports whether the container engine was wired in. A libpod
+// server built without it must say so rather than return an empty list that
+// reads as "no containers".
+func (s *PodmanServer) requireRuntime(w http.ResponseWriter) bool {
+	if s.runtime == nil {
+		writeError(w, http.StatusServiceUnavailable, "container engine not available in this build")
+		return false
+	}
+	return true
+}
+
+func (s *PodmanServer) requireImages(w http.ResponseWriter) bool {
+	if s.images == nil {
+		writeError(w, http.StatusServiceUnavailable, "image store not available in this build")
+		return false
+	}
+	return true
 }
 
 func (s *PodmanServer) RegisterRoutes(mux *http.ServeMux) {
@@ -343,28 +415,6 @@ func (s *PodmanServer) handlePodAction(w http.ResponseWriter, nameOrID, action s
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *PodmanServer) handleContainerAction(w http.ResponseWriter, nameOrID, action string, r *http.Request) {
-	switch action {
-	case "start", "stop", "kill", "restart", "pause", "unpause":
-		if s.podMgr.Exists(nameOrID) {
-			s.handlePodAction(w, nameOrID, action, r)
-			return
-		}
-		writeError(w, http.StatusNotImplemented, "container lifecycle actions not yet supported by this build")
-	default:
-		writeError(w, http.StatusNotFound, "unsupported container action: "+action)
-	}
-}
-
-func (s *PodmanServer) handleImageAction(w http.ResponseWriter, _, action string, _ *http.Request) {
-	switch action {
-	case "tag", "untag", "push", "save":
-		writeError(w, http.StatusNotImplemented, "image action "+action+" not yet supported by this build")
-	default:
-		writeError(w, http.StatusNotFound, "unsupported image action: "+action)
-	}
-}
-
 func (s *PodmanServer) handleManifestAction(w http.ResponseWriter, name, action string, r *http.Request) {
 	switch action {
 	case "add":
@@ -428,82 +478,6 @@ func (s *PodmanServer) handleSecretAction(w http.ResponseWriter, nameOrID, actio
 	}
 }
 
-func (s *PodmanServer) handleVolumeAction(w http.ResponseWriter, nameOrID, action string, _ *http.Request) {
-	switch action {
-	case "inspect":
-		writeJSON(w, http.StatusOK, map[string]interface{}{"Name": nameOrID})
-	default:
-		writeError(w, http.StatusNotFound, "unsupported volume action: "+action)
-	}
-}
-
-func (s *PodmanServer) handleNetworkAction(w http.ResponseWriter, nameOrID, action string, _ *http.Request) {
-	switch action {
-	case "inspect":
-		writeJSON(w, http.StatusOK, map[string]interface{}{"name": nameOrID})
-	default:
-		writeError(w, http.StatusNotFound, "unsupported network action: "+action)
-	}
-}
-
-func (s *PodmanServer) handleContainersList(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, []interface{}{})
-}
-
-func (s *PodmanServer) handleContainersCreate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	var cfg map[string]interface{}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&cfg); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	name, _ := cfg["name"].(string)
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "container name is required")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"Id":       common.ContainerID(),
-		"Warnings": []string{},
-	})
-}
-
-func (s *PodmanServer) handleContainersPrune(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{"Id": []string{}, "SpaceReclaimed": 0})
-}
-
-func (s *PodmanServer) handleContainersDispatch(w http.ResponseWriter, r *http.Request) {
-	id, action, ok := parseDispatch("/libpod/containers/", r.URL.Path)
-	if !ok {
-		writeError(w, http.StatusNotFound, "container not found")
-		return
-	}
-	if action == "" {
-		switch r.Method {
-		case http.MethodGet:
-			pod, err := s.podMgr.GetPod(id)
-			if err != nil {
-				writeError(w, http.StatusNotFound, "no such container")
-				return
-			}
-			writeJSON(w, http.StatusOK, pod)
-		case http.MethodDelete:
-			if !s.podMgr.Exists(id) {
-				writeError(w, http.StatusNotFound, "no such container")
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-		return
-	}
-	s.handleContainerAction(w, id, action, r)
-}
-
 func (s *PodmanServer) handlePodsCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
@@ -560,48 +534,6 @@ func (s *PodmanServer) handlePodsDispatch(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.handlePodAction(w, id, action, r)
-}
-
-func (s *PodmanServer) handleImagesList(w http.ResponseWriter, _ *http.Request) {
-	// TODO(P4.2): integrate with image store to return actual images.
-	writeJSON(w, http.StatusOK, []interface{}{})
-}
-
-func (s *PodmanServer) handleImagesPull(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "pulling"})
-}
-
-func (s *PodmanServer) handleImagesPrune(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{"Id": []string{}, "SpaceReclaimed": 0})
-}
-
-func (s *PodmanServer) handleImagesSearch(w http.ResponseWriter, r *http.Request) {
-	_ = r.URL.Query().Get("term")
-	writeJSON(w, http.StatusOK, []interface{}{})
-}
-
-func (s *PodmanServer) handleImagesDispatch(w http.ResponseWriter, r *http.Request) {
-	id, action, ok := parseDispatch("/libpod/images/", r.URL.Path)
-	if !ok {
-		writeError(w, http.StatusNotFound, "image not found")
-		return
-	}
-	if action == "" {
-		switch r.Method {
-		case http.MethodGet:
-			writeJSON(w, http.StatusOK, map[string]interface{}{"Id": id})
-		case http.MethodDelete:
-			writeJSON(w, http.StatusOK, map[string]interface{}{})
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-		return
-	}
-	s.handleImageAction(w, id, action, r)
 }
 
 func (s *PodmanServer) handleManifestsCreate(w http.ResponseWriter, r *http.Request) {
@@ -711,118 +643,44 @@ func (s *PodmanServer) handleSecretsDispatch(w http.ResponseWriter, r *http.Requ
 	s.handleSecretAction(w, nameOrID, action, r)
 }
 
-func (s *PodmanServer) handleVolumesList(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{"Volumes": []interface{}{}, "Warnings": []string{}})
-}
-
-func (s *PodmanServer) handleVolumesCreate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	var body struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if body.Name == "" {
-		writeError(w, http.StatusBadRequest, "volume name is required")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]interface{}{"Name": body.Name})
-}
-
-func (s *PodmanServer) handleVolumesPrune(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{"VolumesDeleted": []string{}, "SpaceReclaimed": 0})
-}
-
-func (s *PodmanServer) handleVolumesDispatch(w http.ResponseWriter, r *http.Request) {
-	id, action, ok := parseDispatch("/libpod/volumes/", r.URL.Path)
-	if !ok {
-		writeError(w, http.StatusNotFound, "volume not found")
-		return
-	}
-	if action == "" {
-		switch r.Method {
-		case http.MethodGet:
-			writeJSON(w, http.StatusOK, map[string]interface{}{"Name": id})
-		case http.MethodDelete:
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-		return
-	}
-	s.handleVolumeAction(w, id, action, r)
-}
-
-func (s *PodmanServer) handleNetworksList(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, []interface{}{})
-}
-
-func (s *PodmanServer) handleNetworksCreate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	var body map[string]interface{}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	name, _ := body["name"].(string)
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "network name is required")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]interface{}{"name": name})
-}
-
-func (s *PodmanServer) handleNetworksPrune(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{"NetworksDeleted": []string{}})
-}
-
-func (s *PodmanServer) handleNetworksDispatch(w http.ResponseWriter, r *http.Request) {
-	id, action, ok := parseDispatch("/libpod/networks/", r.URL.Path)
-	if !ok {
-		writeError(w, http.StatusNotFound, "network not found")
-		return
-	}
-	if action == "" {
-		switch r.Method {
-		case http.MethodGet:
-			writeJSON(w, http.StatusOK, map[string]interface{}{"name": id})
-		case http.MethodDelete:
-			writeJSON(w, http.StatusOK, map[string]interface{}{})
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-		return
-	}
-	s.handleNetworkAction(w, id, action, r)
-}
-
+// handleGenerate delegates to the daemon's own kube generator (P6). It used to
+// return an empty object, which reads as "this resource generates nothing"
+// rather than "this endpoint is not wired up".
 func (s *PodmanServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/libpod/generate/")
-	if rest == "" || strings.Contains(rest, "/") {
+	if rest == "" {
 		writeError(w, http.StatusNotFound, "unsupported generate target")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{})
+	if !strings.HasSuffix(rest, "kube") && rest != "kube" {
+		writeError(w, http.StatusNotImplemented, "only generate/kube is supported")
+		return
+	}
+	if s.generateKube == nil {
+		writeError(w, http.StatusServiceUnavailable, "kube generator not available in this build")
+		return
+	}
+	s.generateKube(w, r)
 }
 
+// handlePlayKube delegates to the daemon's real kube-play handler (P6) instead
+// of returning an empty report that makes an unapplied manifest look applied.
 func (s *PodmanServer) handlePlayKube(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"PlayKubeReport": []interface{}{}})
+	if s.playKube == nil {
+		writeError(w, http.StatusServiceUnavailable, "kube play not available in this build")
+		return
+	}
+	s.playKube(w, r)
 }
 
+// handleAutoUpdate is deliberately out of scope (P8). An empty Results array
+// reads as "checked, nothing to update", which is a lie; say so instead.
 func (s *PodmanServer) handleAutoUpdate(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{"Results": []interface{}{}})
+	writeError(w, http.StatusNotImplemented, "auto-update is not implemented")
 }
 
 func (s *PodmanServer) handleSystemInfo(w http.ResponseWriter, _ *http.Request) {
@@ -867,55 +725,6 @@ func (s *PodmanServer) handlePing(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprint(w, "OK")
 }
 
-func (s *PodmanServer) handleEvents(w http.ResponseWriter, r *http.Request) {
-	// Real event streaming requires runtime integration to observe
-	// container/pod lifecycle transitions. Until then, we send periodic
-	// ping events to keep the SSE connection alive.
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming unsupported")
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
-
-	interval := 5 * time.Second
-	if v := r.URL.Query().Get("interval"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			interval = d
-		}
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	ctx := r.Context()
-	if err := writeEvent(w, map[string]interface{}{"status": "connected", "time": time.Now().Unix()}); err != nil {
-		return
-	}
-	flusher.Flush()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case t := <-ticker.C:
-			event := map[string]interface{}{
-				"Time":   t.Unix(),
-				"Type":   "ping",
-				"Status": "ok",
-			}
-			if err := writeEvent(w, event); err != nil {
-				return
-			}
-			flusher.Flush()
-		}
-	}
-}
-
 func writeEvent(w http.ResponseWriter, data interface{}) error {
 	payload, err := json.Marshal(data)
 	if err != nil {
@@ -927,50 +736,91 @@ func writeEvent(w http.ResponseWriter, data interface{}) error {
 	return nil
 }
 
-func (s *PodmanServer) handleSystemDf(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"Images":     []interface{}{},
-		"Containers": []interface{}{},
-		"Volumes":    []interface{}{},
-	})
-}
-
+// handleSystemPrune runs the real prune across containers, images, volumes and
+// networks. Reporting a hardcoded zero reclaimed made a working prune look
+// like a no-op and a broken one look successful.
 func (s *PodmanServer) handleSystemPrune(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{"SpaceReclaimed": 0})
+	report := map[string]interface{}{
+		"ContainerPruneReports": []interface{}{},
+		"ImagePruneReports":     []interface{}{},
+		"VolumePruneReports":    []interface{}{},
+		"NetworkPruneReports":   []interface{}{},
+		"ReclaimedSpace":        0,
+	}
+	if s.runtime != nil {
+		removed := []map[string]interface{}{}
+		if states, err := s.runtime.List(); err == nil {
+			for _, st := range states {
+				if st.Status != common.StateExited && st.Status != common.StateCreated {
+					continue
+				}
+				if err := s.runtime.Delete(st.ID, false); err == nil {
+					removed = append(removed, map[string]interface{}{"Id": st.ID})
+					s.publish("remove", st.ID, containerName(st))
+				}
+			}
+		}
+		report["ContainerPruneReports"] = removed
+	}
+	if s.images != nil {
+		removed := []map[string]interface{}{}
+		if ids, err := s.images.Prune(); err == nil {
+			for _, id := range ids {
+				removed = append(removed, map[string]interface{}{"Id": id})
+			}
+		}
+		report["ImagePruneReports"] = removed
+	}
+	if s.volumes != nil {
+		removed := []map[string]interface{}{}
+		if names, err := s.volumes.Prune(s.referencedVolumes()); err == nil {
+			for _, n := range names {
+				removed = append(removed, map[string]interface{}{"Id": n})
+			}
+		}
+		report["VolumePruneReports"] = removed
+	}
+	if s.network != nil {
+		removed := []map[string]interface{}{}
+		if names, err := s.network.Prune(); err == nil {
+			for _, n := range names {
+				removed = append(removed, map[string]interface{}{"Name": n})
+			}
+		}
+		report["NetworkPruneReports"] = removed
+	}
+	writeJSON(w, http.StatusOK, report)
 }
 
 func (s *PodmanServer) handleSystemCheck(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"Status": "ok"})
 }
 
+// handleBuild routes to the daemon's builder (P7). Returning 200 with a
+// "not implemented" string in the stream, as this used to, makes the client
+// believe the build succeeded.
 func (s *PodmanServer) handleBuild(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"stream": "build not implemented in this build"})
-}
-
-func (s *PodmanServer) handleQuadlets(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/libpod/quadlets/")
-	switch {
-	case rest == "" || rest == "json":
-		writeJSON(w, http.StatusOK, []Quadlet{})
-	case strings.HasSuffix(rest, "/status"):
-		name := strings.TrimSuffix(rest, "/status")
-		writeJSON(w, http.StatusOK, []map[string]string{{"name": name, "status": "unknown"}})
-	default:
-		writeJSON(w, http.StatusOK, []interface{}{})
-	}
-}
-
-func (s *PodmanServer) handleArtifacts(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/libpod/artifacts/")
-	if rest == "" {
-		writeJSON(w, http.StatusOK, []Artifact{})
+	if s.build == nil {
+		writeError(w, http.StatusServiceUnavailable, "builder not available in this build")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"name": rest})
+	s.build(w, r)
+}
+
+// handleQuadlets is deliberately out of scope (P8): Doki has no systemd unit
+// generator. An empty list would read as "you have no quadlets".
+func (s *PodmanServer) handleQuadlets(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "quadlets are not implemented")
+}
+
+// handleArtifacts is deliberately out of scope (P8): there is no OCI artifact
+// store behind it, so echoing the requested name back would be fiction.
+func (s *PodmanServer) handleArtifacts(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "OCI artifacts are not implemented")
 }
 
 func detectKernel() string {

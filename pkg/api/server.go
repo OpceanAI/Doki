@@ -302,7 +302,19 @@ func NewServer(config *common.DokiConfig, rt *dokiruntime.Runtime, img *image.St
 	}
 	s.registerRoutes()
 
-	podmanSrv, err := podman.NewPodmanServer(filepath.Join(config.DataDir, "podman"))
+	// P1: hand the libpod surface the same engine the Docker handlers use.
+	// Without these it can only echo back what it was sent.
+	podmanSrv, err := podman.NewPodmanServer(filepath.Join(config.DataDir, "podman"), podman.Deps{
+		Runtime: s.runtime,
+		Images:  s.image,
+		Network: s.network,
+		Volumes: s.volumes,
+		Events:  s.events,
+
+		Build:        s.handleBuild,
+		PlayKube:     s.handleKubePlay,
+		GenerateKube: s.handleGenerateKube,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("podman shim: %w", err)
 	}
@@ -438,23 +450,11 @@ func detectSecurityOptions() []string {
 }
 
 // isSensitiveBindSource reports whether a host path is too dangerous to expose
-// as a container bind mount source (HIGH-12). Mounting the host root or a
-// system directory read-write is effectively a host takeover.
+// as a container bind mount source (HIGH-12). The rule lives in pkg/common so
+// the Docker and libpod surfaces share one implementation; a duplicated
+// security check is one that eventually drifts.
 func isSensitiveBindSource(source string) bool {
-	clean := filepath.Clean(source)
-	if clean == "/" {
-		return true
-	}
-	sensitive := []string{
-		"/etc", "/boot", "/proc", "/sys", "/dev",
-		"/root", "/var/run", "/run",
-	}
-	for _, s := range sensitive {
-		if clean == s || strings.HasPrefix(clean, s+"/") {
-			return true
-		}
-	}
-	return false
+	return common.IsSensitiveBindSource(source)
 }
 
 // Shutdown stops the API server.
@@ -865,40 +865,17 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 
 	containerID := common.GenerateID(64)
 
-	// Use image's default Cmd/Entrypoint if none provided.
-	// G15: Use req.Entrypoint if provided (override image entrypoint).
-	cmd := req.Cmd
-	entrypoint := req.Entrypoint
-
-	if len(entrypoint) == 0 && imgRecord.Config != nil {
-		entrypoint = imgRecord.Config.Config.Entrypoint
-	}
-
-	// G16: Detect shell-form entrypoint strings and wrap them.
-	if len(entrypoint) > 0 && len(entrypoint[0]) > 0 && !strings.HasPrefix(entrypoint[0], "[") {
-		// If the first entrypoint element looks like a shell command string (not JSON),
-		// it's shell-form: wrap as ["/bin/sh", "-c", "..."].
-		if strings.ContainsAny(entrypoint[0], " \t") || strings.Contains(entrypoint[0], "&&") || strings.Contains(entrypoint[0], ";") {
-			shell := "/bin/sh"
-			if imgRecord.Config != nil && len(imgRecord.Config.Config.Shell) > 0 {
-				shell = imgRecord.Config.Config.Shell[0]
-			}
-			entrypoint = []string{shell, "-c", entrypoint[0]}
+	// G15/G16: entrypoint/cmd resolution is shared with the libpod surface so
+	// the two APIs can never resolve the same image to different commands.
+	var imgOCI *dokiruntime.ImageOCIConfig
+	if imgRecord.Config != nil {
+		imgOCI = &dokiruntime.ImageOCIConfig{
+			Entrypoint: imgRecord.Config.Config.Entrypoint,
+			Cmd:        imgRecord.Config.Config.Cmd,
+			Shell:      imgRecord.Config.Config.Shell,
 		}
 	}
-
-	if len(entrypoint) > 0 {
-		cmd = append(entrypoint, cmd...)
-	}
-	if len(cmd) == 0 && imgRecord.Config != nil {
-		if len(imgRecord.Config.Config.Cmd) > 0 {
-			cmd = append(cmd, imgRecord.Config.Config.Cmd...)
-		}
-	}
-	// Fallback for images without CMD.
-	if len(cmd) == 0 {
-		cmd = []string{"/bin/sh"}
-	}
+	cmd := dokiruntime.BuildCommand(req.Entrypoint, req.Cmd, imgOCI)
 
 	cfg := &dokiruntime.Config{
 		ID:          containerID,

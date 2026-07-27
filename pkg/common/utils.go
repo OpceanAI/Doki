@@ -556,3 +556,24 @@ func SafeUint32FromInt64(v int64) uint32 {
 func SafeFileMode(v int64) os.FileMode {
 	return os.FileMode(SafeUint32FromInt64(v))
 }
+
+// IsSensitiveBindSource reports whether a host path is too dangerous to expose
+// as a container bind mount source (HIGH-12). Mounting the host root or a
+// system directory read-write is effectively a host takeover, so every API
+// surface that accepts a bind must run its source through this one check.
+func IsSensitiveBindSource(source string) bool {
+	clean := filepath.Clean(source)
+	if clean == "/" {
+		return true
+	}
+	sensitive := []string{
+		"/etc", "/boot", "/proc", "/sys", "/dev",
+		"/root", "/var/run", "/run",
+	}
+	for _, s := range sensitive {
+		if clean == s || strings.HasPrefix(clean, s+"/") {
+			return true
+		}
+	}
+	return false
+}
