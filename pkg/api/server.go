@@ -436,17 +436,39 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 }
 
 // detectSecurityOptions reports the isolation features actually enforced,
-// honestly (C1). It never claims seccomp/apparmor while those remain no-ops, so
-// clients (and `doki info`) are not misled about the real security posture.
-func detectSecurityOptions() []string {
+// honestly (C1). It reflects the runtime's real execution mode and never claims
+// seccomp/apparmor/userns unless that mode actually applies them, so clients
+// (and `doki info`) are not misled about the real security posture.
+func detectSecurityOptions(mode dokiruntime.ExecutionMode) []string {
 	var opts []string
 	if os.Geteuid() != 0 {
 		opts = append(opts, "name=rootless")
 	}
-	if common.IsTermux() {
-		opts = append(opts, "name=proot")
+	switch mode {
+	case dokiruntime.ModeProot:
+		// proot is a ptrace-based userspace filesystem sandbox — no namespaces,
+		// no seccomp, no capability dropping.
+		opts = append(opts, "name=userspace-fs")
+	case dokiruntime.ModeNamespaces:
+		opts = append(opts, "name=namespaces")
+		if seccompEnforced(mode) {
+			opts = append(opts, "name=seccomp,profile=builtin")
+		}
+	case dokiruntime.ModeMicroVM:
+		opts = append(opts, "name=microvm")
+	case dokiruntime.ModeNative:
+		// native = the process runs directly on the host with no confinement;
+		// say nothing rather than imply isolation.
 	}
 	return opts
+}
+
+// seccompEnforced reports whether the seccomp/capability shim is actually
+// active for the given mode. It mirrors the gate in the runtime: enforcement
+// only happens as real root (not Termux) in namespaces mode. Kept here so /info
+// never claims seccomp that the runtime does not install.
+func seccompEnforced(mode dokiruntime.ExecutionMode) bool {
+	return mode == dokiruntime.ModeNamespaces && os.Geteuid() == 0 && !common.IsTermux()
 }
 
 // isSensitiveBindSource reports whether a host path is too dangerous to expose
@@ -511,7 +533,7 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, _ *http.Request) {
 		ContainersStopped: stopped,
 		Images:            len(images),
 		DockerRootDir:     s.config.DataDir,
-		SecurityOptions:   detectSecurityOptions(),
+		SecurityOptions:   detectSecurityOptions(s.runtime.Mode()),
 	}
 
 	s.writeJSON(w, http.StatusOK, info)
@@ -959,6 +981,14 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		cfg.RestartMaxRetries = req.HostConfig.RestartPolicy.MaximumRetryCount
 		cfg.ReadOnly = req.HostConfig.ReadonlyRootfs
 
+		// Carry the security intent into the config so the runtime can enforce
+		// it where the mode supports it (C2). Previously these were dropped
+		// silently, so `--cap-drop` did nothing and nobody was told.
+		cfg.Privileged = req.HostConfig.Privileged
+		cfg.CapAdd = req.HostConfig.CapAdd
+		cfg.CapDrop = req.HostConfig.CapDrop
+		cfg.SecurityOpt = req.HostConfig.SecurityOpt
+
 		if req.HostConfig.ShmSize > 0 {
 			if cfg.Resources == nil {
 				cfg.Resources = &dokiruntime.Resources{}
@@ -1054,11 +1084,36 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C1 honesty: if the caller asked for confinement the current mode cannot
+	// enforce, say so in the create warnings instead of silently accepting it.
+	warnings := []string{}
+	if !seccompEnforced(s.runtime.Mode()) {
+		if len(cfg.CapDrop) > 0 || len(cfg.CapAdd) > 0 {
+			warnings = append(warnings,
+				"capability changes (--cap-add/--cap-drop) are not enforced in this runtime mode; the container inherits the daemon's capabilities")
+		}
+		if hasSeccompProfile(cfg.SecurityOpt) {
+			warnings = append(warnings,
+				"seccomp profile is not enforced in this runtime mode; no syscall filter is installed")
+		}
+	}
+
 	s.writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"Id":       containerID,
-		"Warnings": []string{},
+		"Warnings": warnings,
 	})
 
+}
+
+// hasSeccompProfile reports whether the security options request a seccomp
+// profile other than "unconfined".
+func hasSeccompProfile(opts []string) bool {
+	for _, o := range opts {
+		if strings.HasPrefix(o, "seccomp=") && o != "seccomp=unconfined" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleContainerDispatch(w http.ResponseWriter, r *http.Request) {

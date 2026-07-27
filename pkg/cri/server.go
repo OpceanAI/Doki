@@ -464,15 +464,20 @@ func (s *CRIServer) Status(ctx context.Context, req *v1.StatusRequest) (*v1.Stat
 		cgroupDriver = "systemd"
 	}
 
-	// Build a list of RuntimeHandlers. Each Doki execution mode is
-	// exposed as a handler so pod specs can pin a specific dokiruntime.
+	// Advertise handler features honestly (C1): only the real Linux-namespaces
+	// mode can create user namespaces or enforce recursive read-only mounts.
+	// proot/native cannot, so claiming those features there would mislead the
+	// kubelet into scheduling workloads that silently lose their isolation.
+	realNS := s.plugin.runtime != nil && s.plugin.runtime.Mode() == dokiruntime.ModeNamespaces
+
 	handlers := make([]*v1.RuntimeHandler, 0)
 	for _, mode := range []string{"doki", "doki-rootless", "doki-fex", "doki-sysbox", "doki-vm"} {
+		userns := realNS && mode == "doki-rootless"
 		handlers = append(handlers, &v1.RuntimeHandler{
 			Name: mode,
 			Features: &v1.RuntimeHandlerFeatures{
-				RecursiveReadOnlyMounts: true,
-				UserNamespaces:          mode == "doki-rootless",
+				RecursiveReadOnlyMounts: realNS,
+				UserNamespaces:          userns,
 			},
 		})
 	}
@@ -486,7 +491,8 @@ func (s *CRIServer) Status(ctx context.Context, req *v1.StatusRequest) (*v1.Stat
 		},
 		RuntimeHandlers: handlers,
 		Features: &v1.RuntimeFeatures{
-			SupplementalGroupsPolicy:  true,
+			// Doki does not implement SupplementalGroupsPolicy; do not claim it.
+			SupplementalGroupsPolicy:  false,
 			UserNamespacesHostNetwork: false,
 		},
 		Info: map[string]string{
