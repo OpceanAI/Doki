@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -34,6 +35,7 @@ type Client struct {
 	basicUser  string
 	basicPass  string
 	tokens     map[string]*tokenCache
+	insecure   bool
 	mu         sync.RWMutex
 }
 
@@ -77,6 +79,7 @@ func NewClient(insecure bool) *Client {
 		},
 		userAgent: common.UserAgent(),
 		tokens:    make(map[string]*tokenCache),
+		insecure:  insecure,
 	}
 }
 
@@ -208,6 +211,15 @@ func (c *Client) getToken(realm, service, scope string) (string, error) {
 		service = AuthService
 	}
 
+	// HIGH-3: the realm comes from the registry's WWW-Authenticate header and is
+	// otherwise fetched verbatim. A malicious registry could point it at
+	// http://169.254.169.254/... (cloud metadata) or an internal service (SSRF).
+	// Require https and reject loopback/link-local/private targets unless the
+	// client was explicitly configured to allow insecure registries.
+	if err := c.validateAuthURL(realm); err != nil {
+		return "", err
+	}
+
 	tokenURL, _ := url.Parse(realm)
 	q := tokenURL.Query()
 	q.Set("service", service)
@@ -326,6 +338,61 @@ func (c *Client) doAuthRequest(ctx context.Context, method, urlStr string, heade
 	}
 
 	return resp, nil
+}
+
+// validateAuthURL guards against SSRF via a malicious auth realm. It requires
+// https and rejects hosts that resolve to loopback, link-local, or private
+// ranges (which is where cloud metadata and internal services live).
+func (c *Client) validateAuthURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid auth realm: %w", err)
+	}
+	if u.Scheme != "https" && !c.insecure {
+		return fmt.Errorf("auth realm must use https, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("auth realm has no host")
+	}
+	if c.insecure {
+		return nil
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		// Cannot resolve: be conservative but allow (network may resolve later);
+		// only block when we positively identify an internal address.
+		return nil
+	}
+	for _, ip := range ips {
+		if isInternalIP(ip) {
+			return fmt.Errorf("auth realm host %q resolves to a disallowed internal address %s", host, ip)
+		}
+	}
+	return nil
+}
+
+// isInternalIP reports whether ip is loopback, link-local, or in an RFC1918/
+// unique-local private range — the addresses SSRF typically targets.
+func isInternalIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		switch {
+		case ip4[0] == 10:
+			return true
+		case ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31:
+			return true
+		case ip4[0] == 192 && ip4[1] == 168:
+			return true
+		case ip4[0] == 169 && ip4[1] == 254:
+			return true
+		}
+		return false
+	}
+	// IPv6 unique local fc00::/7.
+	return len(ip) == net.IPv6len && ip[0]&0xfe == 0xfc
 }
 
 func parseWwwAuthenticate(header string) (realm, service, scope string) {

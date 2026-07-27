@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,7 +217,26 @@ func (f *FirewallManager) ensureChains() error {
 	return nil
 }
 
+// validatePortRuleInputs rejects protocols and IPs that are not on a strict
+// allow-list before they are used to build nft/iptables rules. nft re-parses
+// its argv as a script, so an unvalidated proto like "tcp dport 80 accept"
+// could inject arbitrary firewall rules (HIGH-13).
+func validatePortRuleInputs(containerIP, proto string) error {
+	switch proto {
+	case "tcp", "udp", "sctp":
+	default:
+		return fmt.Errorf("invalid protocol %q", proto)
+	}
+	if net.ParseIP(containerIP) == nil {
+		return fmt.Errorf("invalid container IP %q", containerIP)
+	}
+	return nil
+}
+
 func (f *FirewallManager) addNftablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
+	if err := validatePortRuleInputs(containerIP, proto); err != nil {
+		return err
+	}
 	args := []string{
 		"add", "rule", "ip", "nat", "DOKI",
 		proto, "dport", fmt.Sprintf("%d", hostPort),
@@ -234,6 +254,9 @@ func (f *FirewallManager) addNftablesPortMapping(containerIP string, hostPort, c
 }
 
 func (f *FirewallManager) addIptablesPortMapping(containerIP string, hostPort, containerPort int, proto string) error {
+	if err := validatePortRuleInputs(containerIP, proto); err != nil {
+		return err
+	}
 	cmd := exec.Command("iptables",
 		"-t", "nat", "-A", "DOKI",
 		"-p", proto, "--dport", fmt.Sprintf("%d", hostPort),
@@ -251,6 +274,9 @@ func (f *FirewallManager) RemovePortMapping(containerIP string, hostPort, contai
 }
 
 func (f *FirewallManager) removeNftablesPortMapping(containerIP string, hostPort, _ int, proto string) error {
+	if err := validatePortRuleInputs(containerIP, proto); err != nil {
+		return err
+	}
 	// Find the rule handle by listing rules and matching
 	listCmd := exec.Command("nft", "-a", "list", "chain", "ip", "nat", "DOKI")
 	output, err := listCmd.Output()
