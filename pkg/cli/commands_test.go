@@ -362,3 +362,34 @@ func TestParseRunFlagsCombinedShort(t *testing.T) {
 		t.Errorf("expandBoolShortFlags(-it) = %v, %v", out, ok)
 	}
 }
+
+// The --key=value form must parse like Docker's, not leak into the container's
+// command. Both --cap-drop ALL and --cap-drop=ALL must set CapDrop.
+func TestParseRunFlagsEqualsForm(t *testing.T) {
+	image, cmd, flags := ParseRunFlags([]string{"--cap-drop=ALL", "busybox", "echo", "hi"})
+	if image != "busybox" {
+		t.Errorf("image = %q, want busybox", image)
+	}
+	if len(cmd) != 2 || cmd[0] != "echo" || cmd[1] != "hi" {
+		t.Errorf("cmd = %v, want [echo hi]", cmd)
+	}
+	if len(flags.CapDrop) != 1 || flags.CapDrop[0] != "ALL" {
+		t.Errorf("CapDrop = %v, want [ALL]", flags.CapDrop)
+	}
+
+	// Space form parses identically.
+	_, _, flags = ParseRunFlags([]string{"--cap-drop", "ALL", "busybox"})
+	if len(flags.CapDrop) != 1 || flags.CapDrop[0] != "ALL" {
+		t.Errorf("space-form CapDrop = %v, want [ALL]", flags.CapDrop)
+	}
+
+	// Boolean flag in =value form.
+	_, _, flags = ParseRunFlags([]string{"--rm=false", "busybox"})
+	if flags.RM {
+		t.Error("--rm=false should leave RM unset")
+	}
+	_, _, flags = ParseRunFlags([]string{"--rm=true", "busybox"})
+	if !flags.RM {
+		t.Error("--rm=true should set RM")
+	}
+}

@@ -2884,6 +2884,23 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 			}
 		}
 
+		// The --key=value form: Docker accepts both `--cap-drop ALL` and
+		// `--cap-drop=ALL`, but the parser only understood the space form, so
+		// `--cap-drop=ALL` leaked into the container's command and broke the run.
+		// Split it into two tokens, except for boolean flags where the value is
+		// the boolean itself.
+		if !imageFound && strings.HasPrefix(arg, "--") && strings.Contains(arg, "=") {
+			key, val, _ := strings.Cut(arg, "=")
+			if boolLongFlags[key] {
+				// --rm=false etc.: apply the boolean and move on.
+				setBoolFlag(flags, key, val != "false" && val != "0")
+				i++
+				continue
+			}
+			args = append(args[:i], append([]string{key, val}, args[i+1:]...)...)
+			continue
+		}
+
 		switch arg {
 		case "-d", "--detach":
 			flags.Detach = true
@@ -3297,6 +3314,38 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 	}
 
 	return image, cmd, flags
+}
+
+// boolLongFlags is the set of long flags that take no value, so a
+// `--flag=value` token means "boolean flag with an explicit true/false".
+var boolLongFlags = map[string]bool{
+	"--detach": true, "--interactive": true, "--tty": true, "--rm": true,
+	"--privileged": true, "--read-only": true, "--init": true,
+	"--publish-all": true, "--oom-kill-disable": true,
+}
+
+// setBoolFlag applies a boolean long flag by name.
+func setBoolFlag(flags *RunFlags, key string, val bool) {
+	switch key {
+	case "--detach":
+		flags.Detach = val
+	case "--interactive":
+		flags.Interactive = val
+	case "--tty":
+		flags.TTY = val
+	case "--rm":
+		flags.RM = val
+	case "--privileged":
+		flags.Privileged = val
+	case "--read-only":
+		flags.ReadOnly = val
+	case "--init":
+		flags.Init = val
+	case "--publish-all":
+		flags.PublishAll = val
+	case "--oom-kill-disable":
+		flags.OOMKillDisable = val
+	}
 }
 
 // expandBoolShortFlags turns a bundled short-flag token like "-it" into
