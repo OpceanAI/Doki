@@ -517,6 +517,10 @@ type SystemInfo struct {
 	ContainersRunning int         `json:"ContainersRunning"`
 	ContainersPaused  int         `json:"ContainersPaused"`
 	ContainersStopped int         `json:"ContainersStopped"`
+	// SecurityOptions lists the isolation features actually enforced by this
+	// daemon. Populated honestly (C1): features that are currently no-ops (e.g.
+	// seccomp/apparmor in rootless/proot mode) are NOT reported as active.
+	SecurityOptions []string `json:"SecurityOptions,omitempty"`
 }
 
 // ContainerJSON holds full container information.

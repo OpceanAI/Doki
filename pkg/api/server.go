@@ -423,6 +423,20 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	s.writeJSON(w, status, map[string]string{"message": message})
 }
 
+// detectSecurityOptions reports the isolation features actually enforced,
+// honestly (C1). It never claims seccomp/apparmor while those remain no-ops, so
+// clients (and `doki info`) are not misled about the real security posture.
+func detectSecurityOptions() []string {
+	var opts []string
+	if os.Geteuid() != 0 {
+		opts = append(opts, "name=rootless")
+	}
+	if common.IsTermux() {
+		opts = append(opts, "name=proot")
+	}
+	return opts
+}
+
 // isSensitiveBindSource reports whether a host path is too dangerous to expose
 // as a container bind mount source (HIGH-12). Mounting the host root or a
 // system directory read-write is effectively a host takeover.
@@ -497,6 +511,7 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, _ *http.Request) {
 		ContainersStopped: stopped,
 		Images:            len(images),
 		DockerRootDir:     s.config.DataDir,
+		SecurityOptions:   detectSecurityOptions(),
 	}
 
 	s.writeJSON(w, http.StatusOK, info)
