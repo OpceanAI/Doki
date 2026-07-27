@@ -34,7 +34,7 @@ import (
 // and portforward operations. Each call to Reserve picks an available port,
 // starts a one-shot HTTP server, and returns the allocated port number.
 type Streamer interface {
-	Reserve(ctx context.Context, op, resourceID string, params map[string]string) (int, error)
+	Reserve(ctx context.Context, req StreamRequest) (token string, err error)
 	Addr() (host string, port int)
 }
 
@@ -54,9 +54,23 @@ type CRIServer struct {
 	streamer Streamer
 }
 
-// NewCRIServer creates a new CRIServer backed by the given CRIPlugin.
+// NewCRIServer creates a new CRIServer backed by the given CRIPlugin. It wires
+// up the built-in WebSocket streamer so Exec/Attach actually stream, instead of
+// returning codes.Unimplemented as they did while the streamer was dead code.
 func NewCRIServer(plugin *CRIPlugin) *CRIServer {
-	return &CRIServer{plugin: plugin}
+	s := &CRIServer{plugin: plugin}
+	if plugin != nil && plugin.runtime != nil {
+		streamer := newDefaultStreamer(plugin.runtime)
+		if err := streamer.start(); err != nil {
+			// Streaming is best-effort: if the ephemeral listener can't bind,
+			// Exec/Attach fall back to reporting Unimplemented rather than
+			// crashing the daemon.
+			slog.Warn("CRI streamer failed to start; exec/attach disabled", "err", err)
+		} else {
+			s.streamer = streamer
+		}
+	}
+	return s
 }
 
 // ListenAndServe creates a Unix socket listener at socketPath, registers the
@@ -458,7 +472,7 @@ func (s *CRIServer) Status(ctx context.Context, req *v1.StatusRequest) (*v1.Stat
 			Name: mode,
 			Features: &v1.RuntimeHandlerFeatures{
 				RecursiveReadOnlyMounts: true,
-				UserNamespaces:           mode == "doki-rootless",
+				UserNamespaces:          mode == "doki-rootless",
 			},
 		})
 	}
@@ -472,14 +486,14 @@ func (s *CRIServer) Status(ctx context.Context, req *v1.StatusRequest) (*v1.Stat
 		},
 		RuntimeHandlers: handlers,
 		Features: &v1.RuntimeFeatures{
-			SupplementalGroupsPolicy: true,
+			SupplementalGroupsPolicy:  true,
 			UserNamespacesHostNetwork: false,
 		},
 		Info: map[string]string{
-			"doki_version": common.Version,
+			"doki_version":  common.Version,
 			"cgroup_driver": cgroupDriver,
-			"cgroup_v2":    boolStr(s.plugin.cgroupV2Available()),
-			"network_dns":  s.plugin.dnsMode(),
+			"cgroup_v2":     boolStr(s.plugin.cgroupV2Available()),
+			"network_dns":   s.plugin.dnsMode(),
 		},
 	}
 	return resp, nil
@@ -681,12 +695,14 @@ func (s *CRIServer) Exec(ctx context.Context, req *v1.ExecRequest) (*v1.ExecResp
 	if _, err := s.plugin.GetContainer(containerID); err != nil {
 		return nil, notFoundErr("container", containerID, err)
 	}
-	url, err := s.streamingURL(ctx, "exec", containerID, map[string]string{
-		"cmd":     strings.Join(req.GetCmd(), " "),
-		"tty":     boolStr(req.GetTty()),
-		"stdin":   boolStr(req.GetStdin()),
-		"stdout":  boolStr(req.GetStdout()),
-		"stderr":  boolStr(req.GetStderr()),
+	url, err := s.streamingURL(ctx, StreamRequest{
+		Op:         "exec",
+		ResourceID: containerID,
+		Cmd:        req.GetCmd(),
+		Tty:        req.GetTty(),
+		Stdin:      req.GetStdin(),
+		Stdout:     req.GetStdout(),
+		Stderr:     req.GetStderr(),
 	})
 	if err != nil {
 		return nil, err
@@ -706,11 +722,13 @@ func (s *CRIServer) Attach(ctx context.Context, req *v1.AttachRequest) (*v1.Atta
 	if _, err := s.plugin.GetContainer(containerID); err != nil {
 		return nil, notFoundErr("container", containerID, err)
 	}
-	url, err := s.streamingURL(ctx, "attach", containerID, map[string]string{
-		"tty":    boolStr(req.GetTty()),
-		"stdin":  boolStr(req.GetStdin()),
-		"stdout": boolStr(req.GetStdout()),
-		"stderr": boolStr(req.GetStderr()),
+	url, err := s.streamingURL(ctx, StreamRequest{
+		Op:         "attach",
+		ResourceID: containerID,
+		Tty:        req.GetTty(),
+		Stdin:      req.GetStdin(),
+		Stdout:     req.GetStdout(),
+		Stderr:     req.GetStderr(),
 	})
 	if err != nil {
 		return nil, err
@@ -730,12 +748,10 @@ func (s *CRIServer) PortForward(ctx context.Context, req *v1.PortForwardRequest)
 	if _, err := s.plugin.PodSandboxStatus(podID); err != nil {
 		return nil, notFoundErr("pod sandbox", podID, err)
 	}
-	ports := make([]string, 0, len(req.GetPort()))
-	for _, p := range req.GetPort() {
-		ports = append(ports, strconv.FormatInt(int64(p), 10))
-	}
-	url, err := s.streamingURL(ctx, "portforward", podID, map[string]string{
-		"ports": strings.Join(ports, ","),
+	url, err := s.streamingURL(ctx, StreamRequest{
+		Op:         "portforward",
+		ResourceID: podID,
+		Ports:      req.GetPort(),
 	})
 	if err != nil {
 		return nil, err
@@ -748,18 +764,20 @@ func (s *CRIServer) PortForward(ctx context.Context, req *v1.PortForwardRequest)
 // to the caller. The server runs until the stream is closed.
 //
 // The URL format matches the upstream CRI contract:
-//   http://<host>:<port>/<token>
+//
+//	http://<host>:<port>/<token>
+//
 // with the operation encoded in the path of the listening server.
-func (s *CRIServer) streamingURL(ctx context.Context, op, resourceID string, params map[string]string) (string, error) {
+func (s *CRIServer) streamingURL(ctx context.Context, req StreamRequest) (string, error) {
 	if s.streamer == nil {
 		return "", status.Errorf(codes.Unimplemented, "streaming not configured")
 	}
-	port, err := s.streamer.Reserve(ctx, op, resourceID, params)
+	token, err := s.streamer.Reserve(ctx, req)
 	if err != nil {
-		return "", status.Errorf(codes.Internal, "reserve stream port: %v", err)
+		return "", status.Errorf(codes.Internal, "reserve stream: %v", err)
 	}
-	host, _ := s.streamer.Addr()
-	return fmt.Sprintf("http://%s:%d/%s", host, port, op), nil
+	host, port := s.streamer.Addr()
+	return fmt.Sprintf("http://%s:%d/%s/%s", host, port, req.Op, token), nil
 }
 
 // ContainerStats returns stats of the container.
