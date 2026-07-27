@@ -177,6 +177,14 @@ func (s *Store) Pull(imageRef string) (*ImageRecord, error) {
 		return nil, fmt.Errorf("get manifest: %w", err)
 	}
 
+	// CRIT-1: validate every digest in the manifest before any of them can
+	// reach filepath.Join. A malicious registry can otherwise set a layer or
+	// config digest to "../../etc/.." and turn a pull into arbitrary host
+	// writes (write-what-where).
+	if err := validateManifestDigests(manifest); err != nil {
+		return nil, err
+	}
+
 	// AG4: Cache the manifest for 5 minutes.
 	s.cacheMu.Lock()
 	s.manifestCache[cacheKey] = &manifestCacheEntry{
@@ -227,6 +235,9 @@ func (s *Store) downloadLayersParallel(registryHost, name string, layers []regis
 	var wg sync.WaitGroup
 
 	for i, layer := range layers {
+		if err := common.ValidateDigest(layer.Digest); err != nil {
+			return nil, fmt.Errorf("layer %d: %w", i, err)
+		}
 		layerPath := s.layerPath(layer.Digest)
 		if common.PathExists(layerPath) {
 			results <- result{index: i, digest: layer.Digest, err: nil}
@@ -274,7 +285,31 @@ func normalizeRepoTag(ref string) string {
 	return ref
 }
 
+// validateManifestDigests rejects any manifest whose config or layer digests
+// are not strictly formed. Must be called on every pull path before the
+// digests are used to build filesystem paths (CRIT-1).
+func validateManifestDigests(manifest *registry.ManifestV2) error {
+	if manifest == nil {
+		return fmt.Errorf("nil manifest")
+	}
+	if err := common.ValidateDigest(manifest.Config.Digest); err != nil {
+		return fmt.Errorf("config digest: %w", err)
+	}
+	for i, l := range manifest.Layers {
+		if err := common.ValidateDigest(l.Digest); err != nil {
+			return fmt.Errorf("layer %d digest: %w", i, err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) saveImageRecord(imageRef string, _ *registry.ImageRef, manifest *registry.ManifestV2, mediaType string, config *Config, layers []string) (*ImageRecord, error) {
+	// CRIT-1: defense in depth — never persist a record whose digests were
+	// not validated (e.g. via the manifest cache fast path).
+	if err := validateManifestDigests(manifest); err != nil {
+		return nil, err
+	}
+
 	// Create and save record (lock for state modification).
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -302,17 +337,42 @@ func (s *Store) saveImageRecord(imageRef string, _ *registry.ImageRef, manifest 
 }
 
 func (s *Store) downloadLayer(registryHost, name string, layer registry.ManifestBlob, targetPath string) error {
+	// CRIT-1: never let an unvalidated digest reach the filesystem.
+	if err := common.ValidateDigest(layer.Digest); err != nil {
+		return err
+	}
 	if err := common.EnsureDir(filepath.Dir(targetPath)); err != nil {
 		return fmt.Errorf("ensure dir for layer: %w", err)
 	}
 
-	f, err := os.Create(targetPath)
+	// CRIT-2: download to a temp file, verify (DownloadBlob checks the digest),
+	// then rename atomically. On ANY error the partial/poisoned file is
+	// removed so a corrupt blob can never poison the content-addressable cache
+	// and be trusted forever on the next pull.
+	tmp, err := os.CreateTemp(filepath.Dir(targetPath), ".dl-*")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		_ = tmp.Close()
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
-	return s.registry.DownloadBlob(registryHost, name, layer.Digest, f)
+	if err := s.registry.DownloadBlob(registryHost, name, layer.Digest, tmp); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func (s *Store) layerPath(digest string) string {

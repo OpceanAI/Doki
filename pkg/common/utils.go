@@ -15,6 +15,23 @@ import (
 	"time"
 )
 
+// digestRe matches a well-formed content-addressable digest of a supported
+// algorithm, e.g. "sha256:<64 hex>" or "sha512:<128 hex>". This is the ONLY
+// shape a registry-supplied digest may take before it is allowed anywhere near
+// filepath.Join — a digest with "../" or other path separators is a
+// write-what-where primitive (CRIT-1).
+var digestRe = regexp.MustCompile(`^(sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
+
+// ValidateDigest reports an error unless d is a strictly formed digest of a
+// supported algorithm. Callers MUST validate every digest that originates from
+// a registry manifest before using it as (part of) a filesystem path.
+func ValidateDigest(d string) error {
+	if !digestRe.MatchString(d) {
+		return fmt.Errorf("invalid digest %q: must be sha256:<64hex> or sha512:<128hex>", d)
+	}
+	return nil
+}
+
 // GenerateID generates a random hex ID of the given length.
 func GenerateID(length int) string {
 	b := make([]byte, length/2)

@@ -113,13 +113,28 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 		}
 		secretFiles = append(secretFiles, destPath)
 	}
-	defer func() {
+	// CRIT-4: build secrets must NEVER end up in the committed layer or the
+	// build cache. cleanupSecrets removes every mounted secret and the
+	// /run/secrets directory. It is called explicitly BEFORE saveLayer/saveCache
+	// (Docker keeps secrets in a tmpfs that is never committed); the defer is a
+	// best-effort safety net for early-return error paths.
+	cleanedUp := false
+	cleanupSecrets := func() {
+		if cleanedUp {
+			return
+		}
+		cleanedUp = true
 		for _, f := range secretFiles {
 			if err := os.RemoveAll(f); err != nil {
 				slog.Warn("remove secret failed", "path", f, "error", err)
 			}
 		}
-	}()
+		// Remove the now-empty /run/secrets dir so it is not committed either.
+		if len(secretFiles) > 0 {
+			_ = os.RemoveAll(filepath.Join(rootDir, "run", "secrets"))
+		}
+	}
+	defer cleanupSecrets()
 
 	// Build environment for the command.
 	// Clear LD_PRELOAD family in the parent process so exec.Command does not
@@ -158,10 +173,11 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 		cmd = exec.Command(prootBin, prootArgs...)
 		cmd.Dir = "/"
 	} else {
-		// Fallback: run directly on host (works for native/namespace modes)
-		args := append(shell, cmdStr)
-		cmd = exec.Command(args[0], args[1:]...)
-		cmd.Dir = workDir
+		// CRIT-5: fail closed. Without an isolation backend (proot / user
+		// namespaces) a RUN instruction would execute attacker-controlled
+		// Dokifile commands directly on the host as the daemon user. Treat RUN
+		// as untrusted code: refuse to build rather than run it unsandboxed.
+		return fmt.Errorf("RUN requires an isolation backend (proot not found); refusing to execute build commands directly on the host")
 	}
 	cmd.Env = env
 	// Discard stdin to prevent proot from blocking on input
@@ -178,6 +194,9 @@ func (b *Builder) executeRun(stage *Stage, inst *Instruction, rootDir, workDir s
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("run command: %w", err)
 	}
+
+	// CRIT-4: strip secrets BEFORE the layer/cache are created.
+	cleanupSecrets()
 
 	// Create layer tar from the entire root directory
 	digest, _, err := b.saveLayer(rootDir, inst.Raw)

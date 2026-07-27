@@ -59,6 +59,12 @@ func (s *Server) handleContainerArchive(w http.ResponseWriter, r *http.Request, 
 	if rootfs == "" && state.Bundle != "" {
 		rootfs = filepath.Join(state.Bundle, "rootfs")
 	}
+	// MED-1: without a rootfs, resolveContainerPath would operate on the host
+	// root ("/etc/shadow" → the real host file). Fail closed.
+	if rootfs == "" {
+		s.writeError(w, http.StatusInternalServerError, "container rootfs not available")
+		return
+	}
 
 	q := r.URL.Query()
 	path := q.Get("path")
@@ -67,8 +73,15 @@ func (s *Server) handleContainerArchive(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Resolve path inside container rootfs.
-	containerPath := resolveContainerPath(rootfs, path)
+	// CRIT-3: resolve the requested path with symlink semantics clamped to the
+	// container rootfs. A plain Clean+Join follows a symlink planted inside the
+	// rootfs (e.g. "/escape -> /") and turns docker cp into arbitrary host
+	// read/write → RCE.
+	containerPath, err := resolveContainerPath(rootfs, path)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
 	endsWithSlash := strings.HasSuffix(path, "/")
 
 	switch r.Method {
@@ -255,14 +268,15 @@ func (s *Server) handleExecResize(w http.ResponseWriter, r *http.Request, _ stri
 
 // Helper functions.
 
-func resolveContainerPath(rootfs, path string) string {
-	// Clean the path.
-	path = filepath.Clean(path)
-	// Make it absolute relative to container root.
-	if !filepath.IsAbs(path) {
-		path = "/" + path
+// resolveContainerPath maps a client-supplied path to a real path beneath the
+// container rootfs, following symlink components but clamping every result to
+// rootfs (chroot semantics). This is the CRIT-3 fix: never let a symlink inside
+// the rootfs redirect docker cp onto the host filesystem.
+func resolveContainerPath(rootfs, path string) (string, error) {
+	if rootfs == "" {
+		return "", fmt.Errorf("empty rootfs")
 	}
-	return filepath.Join(rootfs, path)
+	return common.SecureJoin(rootfs, path)
 }
 
 func encodePathStat(info os.FileInfo) string {

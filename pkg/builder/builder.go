@@ -509,6 +509,9 @@ func (b *Builder) ensureCacheDir() string {
 	if err := common.EnsureDir(b.cacheDir); err != nil {
 		b.log.Warn("failed to create cache dir", "path", b.cacheDir, "err", err)
 	}
+	// CRIT-4: the build cache may contain layer tars; keep it private to the
+	// owner so a local user cannot read (or pre-seed) cached layers.
+	_ = os.Chmod(b.cacheDir, 0700)
 	return b.cacheDir
 }
 
@@ -560,7 +563,8 @@ func (b *Builder) saveCache(inst *Instruction, envMap map[string]string, tarData
 	hash := b.instructionHash(inst, envMap)
 	cacheDir := b.ensureCacheDir()
 	cachePath := filepath.Join(cacheDir, hash+".tar")
-	return os.WriteFile(cachePath, tarData, 0644)
+	// CRIT-4: 0600 — cached layers are owner-only, never world-readable.
+	return os.WriteFile(cachePath, tarData, 0600)
 }
 
 func parseChown(s string) (string, string) {
