@@ -16,7 +16,33 @@ import (
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
+	"golang.org/x/sys/unix"
 )
+
+// mountSafe performs a mount whose TARGET is opened with O_NOFOLLOW and then
+// mounted via /proc/self/fd/N, so a symlink planted by a malicious image at the
+// mount point (e.g. rootfs/proc -> /proc on the host) cannot redirect the mount
+// onto a host-controlled destination (HIGH-7, runc CVE-2025-31133/52565/52881
+// class). The leaf target must be a real directory, not a symlink.
+func mountSafe(source, fstype, target string, flags uintptr, data string) error {
+	if err := common.EnsureDir(target); err != nil {
+		return err
+	}
+	// Reject a symlink at the leaf outright.
+	if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to mount over symlink target %s", target)
+	}
+	fd, err := unix.Open(target, unix.O_PATH|unix.O_NOFOLLOW|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open mount target %s: %w", target, err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	fdPath := fmt.Sprintf("/proc/self/fd/%d", fd)
+	if err := syscall.Mount(source, fdPath, fstype, flags, data); err != nil {
+		return fmt.Errorf("mount %s -> %s: %w", source, target, err)
+	}
+	return nil
+}
 
 // OverlayFS implements a rootless overlay filesystem using fuse-overlayfs.
 type OverlayFS struct {
@@ -359,12 +385,13 @@ func BindMount(source, target string, readOnly bool) error {
 		return err
 	}
 	flags := uintptr(syscall.MS_BIND)
-	if err := syscall.Mount(source, target, "", flags, ""); err != nil {
-		return fmt.Errorf("bind mount %s -> %s: %w", source, target, err)
+	// HIGH-7: mount over an O_NOFOLLOW fd so a symlinked target cannot escape.
+	if err := mountSafe(source, "", target, flags, ""); err != nil {
+		return err
 	}
 	if readOnly {
 		remountFlags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY)
-		if err := syscall.Mount("", target, "", remountFlags, ""); err != nil {
+		if err := mountSafe("", "", target, remountFlags, ""); err != nil {
 			return fmt.Errorf("remount read-only %s: %w", target, err)
 		}
 	}
@@ -391,56 +418,36 @@ func TmpfsMount(target string, sizeBytes int64, mode uint32) error {
 
 // ProcMount mounts /proc inside a container.
 func ProcMount(target string) error {
-	if err := common.EnsureDir(target); err != nil {
-		return err
-	}
-	return syscall.Mount("proc", target, "proc", 0, "")
+	return mountSafe("proc", "proc", target, 0, "")
 }
 
 // SysMount mounts /sys inside a container.
 func SysMount(target string) error {
-	if err := common.EnsureDir(target); err != nil {
-		return err
-	}
-	return syscall.Mount("none", target, "sysfs", syscall.MS_NOSUID|syscall.MS_NOEXEC|syscall.MS_NODEV, "")
+	return mountSafe("none", "sysfs", target, syscall.MS_NOSUID|syscall.MS_NOEXEC|syscall.MS_NODEV, "")
 }
 
 // DevMount mounts /dev inside a container (tmpfs-based).
 func DevMount(target string) error {
-	if err := common.EnsureDir(target); err != nil {
-		return err
-	}
-	return syscall.Mount("tmpfs", target, "tmpfs", syscall.MS_NOSUID|syscall.MS_NOEXEC, "size=65536k,mode=755")
+	return mountSafe("tmpfs", "tmpfs", target, syscall.MS_NOSUID|syscall.MS_NOEXEC, "size=65536k,mode=755")
 }
 
 // DevPtsMount mounts /dev/pts inside a container.
 func DevPtsMount(target string) error {
-	if err := common.EnsureDir(target); err != nil {
-		return err
-	}
-
-	if err := syscall.Mount("devpts", target, "devpts", syscall.MS_NOSUID|syscall.MS_NOEXEC, "newinstance,ptmxmode=0666,mode=0620,gid=5"); err != nil {
+	if err := mountSafe("devpts", "devpts", target, syscall.MS_NOSUID|syscall.MS_NOEXEC, "newinstance,ptmxmode=0666,mode=0620,gid=5"); err != nil {
 		return fmt.Errorf("mount devpts: %w", err)
 	}
-
 	return nil
 }
 
 // ShmMount mounts /dev/shm inside a container.
 func ShmMount(target string, sizeBytes int64) error {
-	if err := common.EnsureDir(target); err != nil {
-		return err
-	}
 	opts := fmt.Sprintf("size=%d,nosuid,nodev,noexec", sizeBytes)
-	return syscall.Mount("none", target, "tmpfs", syscall.MS_NOSUID|syscall.MS_NOEXEC, opts)
+	return mountSafe("none", "tmpfs", target, syscall.MS_NOSUID|syscall.MS_NOEXEC, opts)
 }
 
 // MqueueMount mounts /dev/mqueue inside a container.
 func MqueueMount(target string) error {
-	if err := common.EnsureDir(target); err != nil {
-		return err
-	}
-	return syscall.Mount("mqueue", target, "mqueue", 0, "")
+	return mountSafe("mqueue", "mqueue", target, 0, "")
 }
 
 // EnsureMountedDir ensures a directory is mounted.
