@@ -362,13 +362,32 @@ func (c *DokiCLI) Run(args []string) error {
 		return nil
 	}
 
-	sleepDuration := 500 * time.Millisecond
-	_ = sleepDuration
-	if !flags.Interactive {
+	if flags.Interactive || flags.TTY {
+		// Interactive: hijack the container's live stdio the same way `exec`
+		// does, so keystrokes reach the process and output streams back live.
+		// This replaces the old behaviour of skipping the wait and dumping the
+		// log once (which never delivered stdin).
+		//
+		// logs=1 replays whatever the container printed between start and this
+		// attach, closing the race where a short-lived command exits before the
+		// attach lands. The server replays the log BEFORE registering the live
+		// sink, so nothing is double-printed.
+		path := "/containers/" + containerID + "/attach?stream=1&stdout=1&stderr=1&logs=1"
+		if flags.Interactive {
+			path += "&stdin=1"
+		}
+		conn, br, err := c.hijackAPI("POST", path, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "attach: %v\n", err)
+		} else {
+			streamHijack(conn, br, flags.TTY, flags.Interactive)
+			_ = conn.Close()
+		}
+	} else {
 		c.waitContainer(containerID)
+		_ = c.logs(containerID, false, 0, false)
+		fmt.Println() // Add trailing newline after logs
 	}
-	_ = c.logs(containerID, false, 0, false)
-	fmt.Println() // Add trailing newline after logs
 
 	exitCode, _ := c.Wait(containerID)
 
@@ -2853,6 +2872,18 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 			continue
 		}
 
+		// Combined boolean short flags: -it, -ti, -itd, -id, ... Docker's most
+		// common invocation is `run -it`, but the parser only knew `-i` and
+		// `-t` separately, so `-it` fell through to the command args and the
+		// interactive path never fired. Expand only when every character is a
+		// known boolean short flag so value-taking flags stay unambiguous.
+		if !imageFound && len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
+			if expanded, ok := expandBoolShortFlags(arg); ok {
+				args = append(args[:i], append(expanded, args[i+1:]...)...)
+				continue
+			}
+		}
+
 		switch arg {
 		case "-d", "--detach":
 			flags.Detach = true
@@ -3266,6 +3297,28 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 	}
 
 	return image, cmd, flags
+}
+
+// expandBoolShortFlags turns a bundled short-flag token like "-it" into
+// ["-i", "-t"], but only when every character maps to a known boolean short
+// flag. It returns ok=false for anything ambiguous (a value-taking short flag,
+// or an unknown letter) so the caller leaves the token untouched.
+func expandBoolShortFlags(arg string) ([]string, bool) {
+	boolShort := map[byte]string{
+		'i': "-i",
+		't': "-t",
+		'd': "-d",
+		'P': "-P",
+	}
+	out := make([]string, 0, len(arg)-1)
+	for j := 1; j < len(arg); j++ {
+		flag, ok := boolShort[arg[j]]
+		if !ok {
+			return nil, false
+		}
+		out = append(out, flag)
+	}
+	return out, true
 }
 
 func parseMemory(s string) int64 {

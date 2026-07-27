@@ -331,3 +331,34 @@ func TestNewDokiCLIDefault(t *testing.T) {
 		t.Error("socket should not be empty")
 	}
 }
+
+// Combined boolean short flags (-it, -ti, -itd) are the most common way to run
+// an interactive container. The parser used to drop them into the container's
+// command args, so `run -it` never set the interactive/tty flags and stdin was
+// never wired to the process.
+func TestParseRunFlagsCombinedShort(t *testing.T) {
+	image, cmd, flags := ParseRunFlags([]string{"-it", "busybox", "sh"})
+	if image != "busybox" {
+		t.Errorf("image = %q, want busybox", image)
+	}
+	if len(cmd) != 1 || cmd[0] != "sh" {
+		t.Errorf("cmd = %v, want [sh]", cmd)
+	}
+	if !flags.Interactive || !flags.TTY {
+		t.Errorf("-it should set Interactive and TTY, got i=%v t=%v", flags.Interactive, flags.TTY)
+	}
+
+	_, _, flags = ParseRunFlags([]string{"-itd", "busybox"})
+	if !flags.Interactive || !flags.TTY || !flags.Detach {
+		t.Errorf("-itd should set i, t and d, got i=%v t=%v d=%v", flags.Interactive, flags.TTY, flags.Detach)
+	}
+
+	// A bundle containing an unknown/value flag must be left untouched, not
+	// silently mis-split.
+	if out, ok := expandBoolShortFlags("-ex"); ok {
+		t.Errorf("-ex should not expand (x is not a bool short flag), got %v", out)
+	}
+	if out, ok := expandBoolShortFlags("-it"); !ok || len(out) != 2 || out[0] != "-i" || out[1] != "-t" {
+		t.Errorf("expandBoolShortFlags(-it) = %v, %v", out, ok)
+	}
+}

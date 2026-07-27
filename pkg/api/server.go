@@ -789,6 +789,7 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		Env           []string           `json:"Env"`
 		Tty           bool               `json:"Tty"`
 		OpenStdin     bool               `json:"OpenStdin"`
+		AttachStdin   bool               `json:"AttachStdin"`
 		WorkingDir    string             `json:"WorkingDir"`
 		Hostname      string             `json:"Hostname"`
 		Domainname    string             `json:"Domainname"`
@@ -878,10 +879,15 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 	cmd := dokiruntime.BuildCommand(req.Entrypoint, req.Cmd, imgOCI)
 
 	cfg := &dokiruntime.Config{
-		ID:          containerID,
-		Args:        cmd,
-		Env:         req.Env,
-		Tty:         req.Tty,
+		ID:   containerID,
+		Args: cmd,
+		Env:  req.Env,
+		Tty:  req.Tty,
+		// Interactive means "keep stdin open and wire a live path to it" — for a
+		// TTY that is the pty, otherwise a stdin pipe. Persisting this is what
+		// lets `run -it`/`run -i` attach to the process instead of tailing the
+		// log and discarding stdin.
+		Interactive: req.OpenStdin || req.AttachStdin,
 		ImageRef:    req.Image,
 		ImageDigest: imgRecord.ID,
 		Hostname:    req.Hostname,
@@ -1642,16 +1648,10 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if state.Status != common.StateRunning {
-		s.writeError(w, http.StatusBadRequest, "container not running")
-		return
-	}
-	// Parse stream selection.
-	_ = r.URL.Query().Get("stream") // "true" (default) | "false"
-	_ = r.URL.Query().Get("logs")   // "true" replay history
-	_ = r.URL.Query().Get("stdin")  // accept stdin
-	_ = r.URL.Query().Get("stdout") // forward stdout
-	_ = r.URL.Query().Get("stderr") // forward stderr
+	// A container is NOT rejected for having already exited: a short-lived
+	// `run -it` command can finish before the client's attach lands, and its
+	// output still lives in the log. We serve that log and return rather than
+	// 400, so no output is lost to the start→attach race.
 
 	// Stream stdin/stdout/stderr via raw TCP hijack with stdcopy
 	// framing (multiplexed when Tty=false, raw when Tty=true).
@@ -1666,40 +1666,193 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 	}
 	defer func() { _ = conn.Close() }()
 
+	tty := state.Config != nil && state.Config.Tty
 	contentType := "application/vnd.docker.multiplexed-stream"
-	if state.Config != nil && state.Config.Tty {
+	if tty {
 		contentType = "application/vnd.docker.raw-stream"
 	}
 	_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n\r\n", contentType)
 
-	// Read existing log contents.
-	if state.LogPath != "" {
+	wantStdin := r.URL.Query().Get("stdin") == "1" || r.URL.Query().Get("stdin") == "true"
+	replayLogs := r.URL.Query().Get("logs") == "1" || r.URL.Query().Get("logs") == "true"
+
+	// The broker is keyed by the container's full ID; the request may address
+	// it by name or a prefix, so resolve through the loaded state.
+	realID := state.ID
+	interactive := s.runtime.IsInteractive(realID)
+
+	// Replay history first (either explicitly requested, or — matching Docker —
+	// so an attaching client sees what the container already printed).
+	if state.LogPath != "" && (replayLogs || !interactive) {
 		if data, err := os.ReadFile(state.LogPath); err == nil && len(data) > 0 {
-			if contentType == "application/vnd.docker.multiplexed-stream" {
-				_, _ = stdcopy.WriteFrame(conn, stdcopy.StreamStdout, data)
-			} else {
+			if tty {
 				_, _ = conn.Write(data)
+			} else {
+				_, _ = stdcopy.WriteFrame(conn, stdcopy.StreamStdout, data)
 			}
 		}
 	}
 
-	// Follow new log contents in a goroutine.
-	// HIGH-11: stop when the client disconnects (ctx done) or a write to conn
-	// fails, otherwise every attach leaks a goroutine + open *os.File and
-	// repeated attaches exhaust fds/goroutines (DoS).
-	ctx := r.Context()
+	// A hijacked connection's r.Context() is NOT cancelled when the client
+	// disconnects (Go stops managing it once hijacked), so watching ctx.Done()
+	// alone would leave the follower/pumps spinning forever — the HIGH-11 leak.
+	// Derive a context that a conn-close watcher cancels.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Interactive container: broker its live stdio bidirectionally, the same
+	// way exec does. This is what finally delivers the client's stdin to the
+	// container's main process.
+	if interactive {
+		sess, err := s.runtime.AttachStreams(realID)
+		if err == nil {
+			s.streamAttachSession(ctx, cancel, conn, sess, tty, wantStdin)
+			return
+		}
+		// Fell through (container exited between the checks): drop to the log
+		// follower below.
+	}
+
+	// The container already exited: the replay above delivered its full log, so
+	// there is nothing left to stream. Return instead of tailing a file that
+	// will never grow.
+	if state.Status != common.StateRunning {
+		return
+	}
+
+	// Non-interactive, still-running container: follow the log file, cancelling
+	// when the client disconnects (detected by the input drain returning).
+	s.followLog(ctx, conn, state.LogPath, tty)
 	go func() {
-		// MED-14: this goroutine runs outside the Recovery middleware, so a
-		// panic here would crash the whole daemon. Contain it.
+		_, _ = io.Copy(io.Discard, conn)
+		cancel()
+	}()
+	<-ctx.Done()
+}
+
+// streamAttachSession pumps a container's live stdio session onto a hijacked
+// connection: raw bytes for a TTY, stdcopy-multiplexed frames otherwise. Stdin
+// from the client is always raw. It returns when the process output ends or the
+// client disconnects, and always detaches the session.
+func (s *Server) streamAttachSession(ctx context.Context, cancel context.CancelFunc, conn net.Conn, sess *dokiruntime.AttachSession, tty, wantStdin bool) {
+	defer sess.Detach()
+
+	done := make(chan struct{})
+	var once sync.Once
+	finish := func() { once.Do(func() { close(done) }) }
+
+	// Output: container -> client. Finishing this is what completes the session
+	// (the process exited, or a write failed because the client is gone).
+	go func() {
+		defer finish()
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic in attach output pump", "err", rec)
+			}
+		}()
+		if tty {
+			_, _ = io.Copy(conn, sess.Stdout)
+			return
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); copyFrames(conn, sess.Stdout, stdcopy.StreamStdout) }()
+		go func() {
+			defer wg.Done()
+			if sess.Stderr != nil {
+				copyFrames(conn, sess.Stderr, stdcopy.StreamStderr)
+			}
+		}()
+		wg.Wait()
+	}()
+
+	// Input: client -> container.
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic in attach input pump", "err", rec)
+			}
+		}()
+		if wantStdin && sess.Stdin != nil {
+			_, _ = io.Copy(sess.Stdin, conn)
+			// EOF on the client's stdin closes the container's stdin so filters
+			// like `cat` terminate.
+			_ = sess.Stdin.Close()
+		} else {
+			_, _ = io.Copy(io.Discard, conn)
+		}
+		// For a TTY, a real terminal never half-closes stdin — reaching EOF here
+		// means the client actually disconnected, so tear the session down. For
+		// a non-TTY, EOF just means "stdin finished"; the process may still be
+		// producing output, so let the output pump decide when we are done.
+		if tty {
+			cancel()
+		}
+	}()
+
+	// Disconnect detection for a still-running, silent, non-TTY container: the
+	// output pump only notices a dead client when it tries to write, and a
+	// silent container gives it nothing to write. A periodic empty stdcopy
+	// frame is a harmless keepalive (the client demuxer ignores a zero-length
+	// frame) whose write error reveals the disconnect. Not used for TTY, where
+	// injected bytes would corrupt the raw terminal stream.
+	if !tty {
+		go func() {
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-done:
+					return
+				case <-ticker.C:
+					if _, err := stdcopy.WriteFrame(conn, stdcopy.StreamStdout, nil); err != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-done:
+	}
+}
+
+// copyFrames copies a stream into stdcopy frames tagged with the given stream
+// id, stopping on any read or write error.
+func copyFrames(conn net.Conn, src io.Reader, stream stdcopy.StreamType) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if _, werr := stdcopy.WriteFrame(conn, stream, buf[:n]); werr != nil {
+				return
+			}
+		}
+		if rerr != nil {
+			return
+		}
+	}
+}
+
+// followLog tails a container's log file onto conn until the context is done or
+// a write fails. Used only for non-interactive containers, where there is no
+// live stdio path to attach to.
+func (s *Server) followLog(ctx context.Context, conn net.Conn, logPath string, tty bool) {
+	if logPath == "" {
+		return
+	}
+	go func() {
 		defer func() {
 			if rec := recover(); rec != nil {
 				slog.Error("panic in attach follow goroutine", "err", rec)
 			}
 		}()
-		if state.LogPath == "" {
-			return
-		}
-		file, err := os.Open(state.LogPath)
+		file, err := os.Open(logPath)
 		if err != nil {
 			return
 		}
@@ -1715,10 +1868,10 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 			n, rerr := file.Read(buf)
 			if n > 0 {
 				var werr error
-				if contentType == "application/vnd.docker.multiplexed-stream" {
-					_, werr = stdcopy.WriteFrame(conn, stdcopy.StreamStdout, buf[:n])
-				} else {
+				if tty {
 					_, werr = conn.Write(buf[:n])
+				} else {
+					_, werr = stdcopy.WriteFrame(conn, stdcopy.StreamStdout, buf[:n])
 				}
 				if werr != nil {
 					return
@@ -1733,10 +1886,6 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 			}
 		}
 	}()
-
-	// Keep connection alive by reading (and discarding) client data
-	// until the client closes.
-	_, _ = io.Copy(io.Discard, conn)
 }
 
 // handleContainerAttachWS upgrades to WebSocket and frames
@@ -1797,8 +1946,15 @@ func (s *Server) handleContainerAttachWS(w http.ResponseWriter, r *http.Request,
 	}
 	defer func() { _ = file.Close() }()
 	_, _ = file.Seek(0, io.SeekEnd)
-	// HIGH-11: abort the follow loop on client disconnect or write error.
-	ctx := r.Context()
+	// HIGH-11: abort the follow loop on client disconnect or write error. A
+	// hijacked conn's r.Context() never fires on disconnect, so watch the conn
+	// itself and cancel when the client's read half closes.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		cancel()
+	}()
 	buf := make([]byte, 4096)
 	for {
 		select {

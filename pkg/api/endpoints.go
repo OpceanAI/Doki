@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,7 +39,14 @@ func (s *Server) handleContainerResize(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	// Resize is a no-op for non-TTY containers, but we return success.
+	// Apply the new window size to the container's pty when it has one. For a
+	// non-TTY (or non-interactive) container this is a genuine no-op, which is
+	// why ResizeTTY returns nil rather than an error there.
+	if err := s.runtime.ResizeTTY(state.ID, uint16(height), uint16(width)); err != nil {
+		// Only a hard failure (bad ioctl) reaches here; a missing pty is not an
+		// error. Report success to keep Docker clients happy but log the cause.
+		slog.Debug("tty resize", "id", id, "err", err)
+	}
 	s.writeJSON(w, http.StatusOK, map[string]string{})
 }
 

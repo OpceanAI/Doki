@@ -85,6 +85,12 @@ type Runtime struct {
 
 	hcMu           sync.Mutex
 	healthCheckers map[string]*HealthChecker
+
+	// brokers holds live interactive stdio brokers keyed by container ID.
+	// State is reloaded from disk on every call, so the broker (like Cmd)
+	// cannot ride on ContainerState across calls; it lives here instead.
+	ioMu    sync.Mutex
+	brokers map[string]*stdioBroker
 }
 
 // LinuxResources is a portable representation of cgroup resource
@@ -215,6 +221,10 @@ type ContainerState struct {
 	HealthStatus *common.HealthStatus  `json:"healthStatus,omitempty"`
 	ExitChan     chan struct{}         `json:"-"`
 	Cmd          *exec.Cmd             `json:"-"`
+	// io brokers live interactive stdio (pty or pipes) for `run -it`/`run -i`.
+	// Like Cmd it is never persisted: it only exists while the process is a
+	// child of this daemon instance.
+	io *stdioBroker `json:"-"`
 }
 
 // RuntimeOption is a functional option for NewRuntime.
@@ -243,6 +253,7 @@ func NewRuntime(root string, store *storage.Manager, opts ...RuntimeOption) *Run
 		cgMgr:    cgroups.NewManager("/sys/fs/cgroup/doki"),
 		prootMgr: proot.NewManager(root),
 		rootless: namespaces.IsRootless(),
+		brokers:  make(map[string]*stdioBroker),
 	}
 	for _, opt := range opts {
 		opt(rt)
@@ -830,8 +841,15 @@ func (rt *Runtime) Start(id string) error {
 		return err
 	}
 
-	// Monitor process exit.
-	go rt.monitorProcess(state, logFile)
+	// Monitor process exit. If an interactive broker took ownership of the log
+	// file, it closes the file once its pumps drain, so we must not close it
+	// here as well.
+	logFileForMonitor := logFile
+	if rt.broker(cfg.ID) != nil {
+		state.io = rt.broker(cfg.ID)
+		logFileForMonitor = nil
+	}
+	go rt.monitorProcess(state, logFileForMonitor)
 
 	// G2: Start healthcheck if configured.
 	if cfg.HealthCheck != nil && len(cfg.HealthCheck.Test) > 0 {
@@ -1002,9 +1020,6 @@ func (rt *Runtime) startNative(cfg *Config, rootfsDir string, logFile *os.File) 
 	if cfg.Cwd != "" {
 		cmd.Dir = filepath.Join(rootfsDir, cfg.Cwd)
 	}
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.Stdin = os.Stdin
 	cmd.Env = cfg.Env
 
 	if cfg.User != "" {
@@ -1019,8 +1034,24 @@ func (rt *Runtime) startNative(cfg *Config, rootfsDir string, logFile *os.File) 
 		}
 	}
 
+	// Interactive containers get a pty (Tty) or pipes (stdin open); everything
+	// else keeps the default log-file wiring untouched.
+	broker, err := rt.setupStdio(cmd, cfg, logFile)
+	if err != nil {
+		return 0, nil, err
+	}
+	if broker == nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		cmd.Stdin = os.Stdin
+	}
+
 	if err := cmd.Start(); err != nil {
 		return 0, nil, err
+	}
+	if broker != nil {
+		broker.afterStart()
+		rt.registerBroker(cfg.ID, broker)
 	}
 	return cmd.Process.Pid, cmd, nil
 }
@@ -1141,12 +1172,7 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	// self-referential path ("<rootfs>/./.") and emits a chdir warning. Use
 	// a neutral host directory instead.
 	cmd.Dir = "/"
-	cmd.Stdout = logFile
-	cmd.Stdin = os.Stdin
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
 
 	// 2) Build a clean guest env: StripHostEnv (17-var deny-list) + AndroidEnv
 	//    defaults + image env + user env.
@@ -1157,14 +1183,38 @@ func (rt *Runtime) startWithProot(cfg *Config, rootfsDir string, logFile *os.Fil
 	validEnv := common.ValidateEnv(cfg.Env)
 	cmd.Env = proot.BuildEnv(validEnv, imageEnv)
 
+	// Interactive containers get a pty/pipes via the broker. In that case the
+	// buffered-stderr ENOSYS fast path is skipped: proot's own error text
+	// reaches the user's terminal through the broker instead.
+	broker, err := rt.setupStdio(cmd, cfg, logFile)
+	if err != nil {
+		return 0, nil, err
+	}
+	var stderrBuf bytes.Buffer
+	if broker == nil {
+		cmd.Stdout = logFile
+		cmd.Stdin = os.Stdin
+		cmd.Stderr = &stderrBuf
+	}
+
 	if err := cmd.Start(); err != nil {
 		return 0, nil, fmt.Errorf("proot start: %w", err)
+	}
+	if broker != nil {
+		broker.afterStart()
+		rt.registerBroker(cfg.ID, broker)
 	}
 
 	// Wait 100ms to detect immediate startup failures (e.g., ENOSYS).
 	// We use a non-blocking check instead of cmd.Wait() to avoid race with monitorProcess.
 	time.Sleep(100 * time.Millisecond)
 	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		if broker != nil {
+			// The broker already surfaced proot's stderr to the terminal; just
+			// reap and report so `doki run` doesn't hang.
+			_, _ = cmd.Process.Wait()
+			return 0, nil, fmt.Errorf("proot exited immediately")
+		}
 		// Process died immediately - try to get the error
 		stderrStr := stderrBuf.String()
 		if stderrStr != "" {
@@ -1258,9 +1308,6 @@ func (rt *Runtime) startWithNamespaces(cfg *Config, rootfsDir string, logFile *o
 	allArgs := append([]string{"/bin/sh", "-c", pivotScript, "doki-init"}, args...)
 	cmd := exec.Command(allArgs[0], allArgs[1:]...)
 	cmd.Dir = rootfsDir
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.Stdin = os.Stdin
 	cmd.Env = cfg.Env
 
 	cloneFlags := syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS |
@@ -1279,8 +1326,25 @@ func (rt *Runtime) startWithNamespaces(cfg *Config, rootfsDir string, logFile *o
 		Cloneflags: uintptr(cloneFlags),
 	}
 
+	// Interactive containers get a pty/pipes; the default path keeps the
+	// existing log-file wiring. setupStdio merges Setsid/Setctty into the
+	// already-populated SysProcAttr, so the clone flags above are preserved.
+	broker, err := rt.setupStdio(cmd, cfg, logFile)
+	if err != nil {
+		return 0, nil, err
+	}
+	if broker == nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		cmd.Stdin = os.Stdin
+	}
+
 	if err := cmd.Start(); err != nil {
 		return 0, nil, err
+	}
+	if broker != nil {
+		broker.afterStart()
+		rt.registerBroker(cfg.ID, broker)
 	}
 
 	// I2 + I3: Write UID/GID mappings for user namespaces.
