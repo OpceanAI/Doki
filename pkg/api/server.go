@@ -1110,7 +1110,7 @@ func (s *Server) handleContainerDispatch(w http.ResponseWriter, r *http.Request)
 		s.handleContainerChanges(w, r, containerID)
 	case action == "export" && r.Method == "GET":
 		s.handleContainerExport(w, r, containerID)
-	case action == "archive" && (r.Method == "GET" || r.Method == "PUT"):
+	case action == "archive" && (r.Method == "GET" || r.Method == "PUT" || r.Method == "HEAD"):
 		s.handleContainerArchive(w, r, containerID)
 	case action == "resize" && r.Method == "POST":
 		s.handleContainerResize(w, r, containerID)
@@ -1697,6 +1697,13 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 	// repeated attaches exhaust fds/goroutines (DoS).
 	ctx := r.Context()
 	go func() {
+		// MED-14: this goroutine runs outside the Recovery middleware, so a
+		// panic here would crash the whole daemon. Contain it.
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic in attach follow goroutine", "err", rec)
+			}
+		}()
 		if state.LogPath == "" {
 			return
 		}
@@ -2593,6 +2600,9 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleImageLoad(w http.ResponseWriter, r *http.Request) {
+	// MED-2: cap the uploaded image tar to a sane maximum (defends against a
+	// decompression/upload bomb filling memory or disk).
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<30)
 	_, err := s.image.Import(r.Body)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "import: "+err.Error())
@@ -3327,6 +3337,8 @@ func (s *Server) handleAutoUpdate(w http.ResponseWriter, _ *http.Request) {
 
 // handleApply applies configuration changes to running containers.
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
+	// MED-2: bound the request body (a manifest is only a few KiB).
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "read body: "+err.Error())

@@ -85,6 +85,15 @@ func (s *Server) handleContainerArchive(w http.ResponseWriter, r *http.Request, 
 	endsWithSlash := strings.HasSuffix(path, "/")
 
 	switch r.Method {
+	case "HEAD":
+		// MED-13: docker cp issues a HEAD to stat the path before copying.
+		info, err := os.Stat(containerPath)
+		if err != nil {
+			s.writeError(w, http.StatusNotFound, "path not found in container")
+			return
+		}
+		w.Header().Set("Container-Path-Stat", encodePathStat(info))
+		w.WriteHeader(http.StatusOK)
 	case "GET":
 		s.handleArchiveGet(w, r, rootfs, containerPath)
 	case "PUT":

@@ -197,6 +197,10 @@ func (d *VFSDriver) Name() string { return "vfs" }
 
 // Get returns the filesystem path for the given layer id.
 func (d *VFSDriver) Get(id, _ string) (string, error) {
+	// MED-3: validate the id so "../../.." cannot address paths outside root.
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	path := filepath.Join(d.root, id)
 	if !common.PathExists(path) {
 		return "", common.NewErrNotFound("layer", id)
@@ -206,16 +210,26 @@ func (d *VFSDriver) Get(id, _ string) (string, error) {
 
 // Put returns the filesystem path for the given layer id.
 func (d *VFSDriver) Put(id, _ string) (string, error) {
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	return filepath.Join(d.root, id), nil
 }
 
 // Exists checks whether the directory for the given layer id exists.
 func (d *VFSDriver) Exists(id string) bool {
+	if err := validateLayerID(id); err != nil {
+		return false
+	}
 	return common.PathExists(filepath.Join(d.root, id))
 }
 
 // Remove deletes the directory for the given layer id.
 func (d *VFSDriver) Remove(id string) error {
+	// MED-3: without validation, id="../../.." would RemoveAll host dirs.
+	if err := validateLayerID(id); err != nil {
+		return err
+	}
 	return os.RemoveAll(filepath.Join(d.root, id))
 }
 

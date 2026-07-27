@@ -217,6 +217,10 @@ func (d *FuseOverlayFSDriver) Name() string {
 }
 
 func (d *FuseOverlayFSDriver) Get(id, _ string) (string, error) {
+	// MED-3: validate id before it is interpolated into paths and mount options.
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	layerPath := filepath.Join(d.layerDir, id)
 	if !common.PathExists(layerPath) {
 		return "", common.NewErrNotFound("layer", id)
@@ -261,6 +265,9 @@ func (d *FuseOverlayFSDriver) Get(id, _ string) (string, error) {
 }
 
 func (d *FuseOverlayFSDriver) Put(id, _ string) (string, error) {
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	mergePath := filepath.Join(d.mergeDir, id)
 	if common.PathExists(mergePath) {
 		_ = unmountOverlay(mergePath)
@@ -269,11 +276,17 @@ func (d *FuseOverlayFSDriver) Put(id, _ string) (string, error) {
 }
 
 func (d *FuseOverlayFSDriver) Exists(id string) bool {
+	if err := validateLayerID(id); err != nil {
+		return false
+	}
 	layerPath := filepath.Join(d.layerDir, id)
 	return common.PathExists(layerPath)
 }
 
 func (d *FuseOverlayFSDriver) Remove(id string) error {
+	if err := validateLayerID(id); err != nil {
+		return err
+	}
 	var errs []error
 	for _, dir := range []string{
 		filepath.Join(d.layerDir, id),
@@ -330,6 +343,12 @@ func (d *FuseOverlayFSDriver) getLowerDirs(id string) ([]string, error) {
 	parents := strings.Fields(string(data))
 	var lowerDirs []string
 	for _, parent := range parents {
+		// MED-3: the parent file content is not otherwise trusted; a token
+		// containing ',', ':' or a newline would inject overlay mount options,
+		// and '..' would escape layerDir. Validate each entry.
+		if err := validateLayerID(parent); err != nil {
+			return nil, err
+		}
 		lowerDirs = append(lowerDirs, filepath.Join(d.layerDir, parent))
 		parentLowerDirs, err := d.getLowerDirs(parent)
 		if err != nil {
@@ -374,6 +393,9 @@ func (d *Overlay2Driver) Name() string {
 }
 
 func (d *Overlay2Driver) Get(id, _ string) (string, error) {
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	lowerDir := filepath.Join(d.layerDir, id)
 	// BUG fix: check that the layer exists before attempting to mount.
 	// Without this check, the mount fails with a confusing kernel error.
@@ -398,6 +420,9 @@ func (d *Overlay2Driver) Get(id, _ string) (string, error) {
 }
 
 func (d *Overlay2Driver) Put(id, _ string) (string, error) {
+	if err := validateLayerID(id); err != nil {
+		return "", err
+	}
 	mergeDir := filepath.Join(d.mergeDir, id)
 	if err := syscall.Unmount(mergeDir, 0); err != nil {
 		return "", fmt.Errorf("overlay unmount: %w", err)
@@ -406,11 +431,17 @@ func (d *Overlay2Driver) Put(id, _ string) (string, error) {
 }
 
 func (d *Overlay2Driver) Exists(id string) bool {
+	if err := validateLayerID(id); err != nil {
+		return false
+	}
 	layerPath := filepath.Join(d.layerDir, id)
 	return common.PathExists(layerPath)
 }
 
 func (d *Overlay2Driver) Remove(id string) error {
+	if err := validateLayerID(id); err != nil {
+		return err
+	}
 	var errs []error
 	for _, dir := range []string{
 		filepath.Join(d.layerDir, id),
