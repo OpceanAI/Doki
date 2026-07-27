@@ -105,15 +105,19 @@ func (m *nftManager) Apply(ctx context.Context, r Rule) error {
 	}
 
 	dnatExpr := fmt.Sprintf("dnat to %s:%d", r.ContainerIP, r.ContainerPort)
+	args := []string{"add", "rule", family, table, "prerouting"}
+	// When a specific host IP is published, match it; when it is empty the
+	// publish applies to any destination, so the `ip daddr` clause must be
+	// omitted entirely — emitting `ip daddr ""` produced a malformed rule that
+	// nft rejected (or that matched nothing).
 	if r.HostIP != "" {
-		dnatExpr = fmt.Sprintf("dnat to %s:%d", r.ContainerIP, r.ContainerPort)
+		args = append(args, "ip", "daddr", r.HostIP)
 	}
-	args := []string{
-		"add", "rule", family, table, "prerouting",
-		"ip", "daddr", r.HostIP, protoL4(proto), "dport", fmt.Sprint(r.HostPort),
+	args = append(args,
+		protoL4(proto), "dport", fmt.Sprint(r.HostPort),
 		dnatExpr,
 		"comment", fmt.Sprintf("doki:%s", ruleKey(r)),
-	}
+	)
 	_, _, err := execCmd(ctx, "nft", args...)
 	if err != nil {
 		return fmt.Errorf("nft dnat: %w", err)
