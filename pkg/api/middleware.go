@@ -70,14 +70,26 @@ func (m *Middleware) Recovery(next http.Handler) http.Handler {
 	})
 }
 
-// CORS adds CORS headers.
+// CORS sets version headers and enforces a same-origin policy suitable for a
+// control API. HIGH-12: it deliberately does NOT emit "Access-Control-Allow-
+// Origin: *". A wildcard ACAO on a control socket lets any web page the operator
+// visits read API responses; combined with the default no-auth model and binds
+// like "/:/host" that is a full host takeover. We instead reject cross-origin,
+// state-changing requests that carry a browser Origin header (CLI/API clients
+// don't send one).
 func (m *Middleware) CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,HEAD,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Registry-Auth")
 		w.Header().Set("Api-Version", common.DokiAPIVersion)
 		w.Header().Set("Server", "Doki/"+common.Version)
+		if origin := r.Header.Get("Origin"); origin != "" {
+			switch r.Method {
+			case http.MethodGet, http.MethodHead, http.MethodOptions:
+				// Safe methods: allowed, but never grant read access via ACAO.
+			default:
+				http.Error(w, `{"message":"cross-origin request forbidden"}`, http.StatusForbidden)
+				return
+			}
+		}
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return

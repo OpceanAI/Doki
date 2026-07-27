@@ -423,6 +423,26 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	s.writeJSON(w, status, map[string]string{"message": message})
 }
 
+// isSensitiveBindSource reports whether a host path is too dangerous to expose
+// as a container bind mount source (HIGH-12). Mounting the host root or a
+// system directory read-write is effectively a host takeover.
+func isSensitiveBindSource(source string) bool {
+	clean := filepath.Clean(source)
+	if clean == "/" {
+		return true
+	}
+	sensitive := []string{
+		"/etc", "/boot", "/proc", "/sys", "/dev",
+		"/root", "/var/run", "/run",
+	}
+	for _, s := range sensitive {
+		if clean == s || strings.HasPrefix(clean, s+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // Shutdown stops the API server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.server != nil {
@@ -964,6 +984,13 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 				// Validate bind mount source: must be absolute and clean (no path traversal).
 				if !filepath.IsAbs(source) || filepath.Clean(source) != source {
 					s.writeError(w, http.StatusBadRequest, "invalid bind mount source: must be an absolute path without traversal")
+					return
+				}
+				// HIGH-12: refuse to bind-mount the host root or sensitive system
+				// directories into a container. "-v /:/host" would otherwise give
+				// full host read/write — a trivial escape / host takeover.
+				if isSensitiveBindSource(source) {
+					s.writeError(w, http.StatusForbidden, "bind mount source not allowed: "+source)
 					return
 				}
 				cfg.Mounts = append(cfg.Mounts, common.Mount{
@@ -1665,6 +1692,10 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 	}
 
 	// Follow new log contents in a goroutine.
+	// HIGH-11: stop when the client disconnects (ctx done) or a write to conn
+	// fails, otherwise every attach leaks a goroutine + open *os.File and
+	// repeated attaches exhaust fds/goroutines (DoS).
+	ctx := r.Context()
 	go func() {
 		if state.LogPath == "" {
 			return
@@ -1677,16 +1708,29 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 		_, _ = file.Seek(0, io.SeekEnd)
 		buf := make([]byte, 4096)
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			n, rerr := file.Read(buf)
 			if n > 0 {
+				var werr error
 				if contentType == "application/vnd.docker.multiplexed-stream" {
-					_, _ = stdcopy.WriteFrame(conn, stdcopy.StreamStdout, buf[:n])
+					_, werr = stdcopy.WriteFrame(conn, stdcopy.StreamStdout, buf[:n])
 				} else {
-					_, _ = conn.Write(buf[:n])
+					_, werr = conn.Write(buf[:n])
+				}
+				if werr != nil {
+					return
 				}
 			}
 			if rerr != nil {
-				time.Sleep(100 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
 			}
 		}
 	}()
@@ -1745,7 +1789,7 @@ func (s *Server) handleContainerAttachWS(w http.ResponseWriter, r *http.Request,
 	}
 	// Read existing contents.
 	if data, err := os.ReadFile(state.LogPath); err == nil && len(data) > 0 {
-		writeWSFrame(conn, data)
+		_ = writeWSFrame(conn, data)
 	}
 	// Follow.
 	file, err := os.Open(state.LogPath)
@@ -1754,21 +1798,34 @@ func (s *Server) handleContainerAttachWS(w http.ResponseWriter, r *http.Request,
 	}
 	defer func() { _ = file.Close() }()
 	_, _ = file.Seek(0, io.SeekEnd)
+	// HIGH-11: abort the follow loop on client disconnect or write error.
+	ctx := r.Context()
 	buf := make([]byte, 4096)
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		n, rerr := file.Read(buf)
 		if n > 0 {
-			writeWSFrame(conn, buf[:n])
+			if err := writeWSFrame(conn, buf[:n]); err != nil {
+				return
+			}
 		}
 		if rerr != nil {
-			time.Sleep(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
 		}
 	}
 }
 
 // writeWSFrame writes a single unmasked client-style WebSocket
 // binary frame. Used for the /attach/ws endpoint.
-func writeWSFrame(w io.Writer, payload []byte) {
+func writeWSFrame(w io.Writer, payload []byte) error {
 	header := []byte{0x82} // FIN + BINARY
 	switch {
 	case len(payload) < 126:
@@ -1780,8 +1837,11 @@ func writeWSFrame(w io.Writer, payload []byte) {
 			byte(len(payload)>>24), byte(len(payload)>>16),
 			byte(len(payload)>>8), byte(len(payload)))
 	}
-	_, _ = w.Write(header)
-	_, _ = w.Write(payload)
+	if _, err := w.Write(header); err != nil {
+		return err
+	}
+	_, err := w.Write(payload)
+	return err
 }
 
 // G5: handleContainerHealth returns health status for a container.
