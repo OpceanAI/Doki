@@ -399,7 +399,9 @@ func (rt *Runtime) extractLayers(rootfsDir string, layers []string) error {
 const (
 	// maxLayerUncompressedBytes bounds total uncompressed output of a single
 	// layer (a tiny gzip can otherwise expand to terabytes and fill the disk).
-	maxLayerUncompressedBytes = 16 << 30 // 16 GiB
+	// Typed int64 so it does not overflow the default int on 32-bit targets
+	// (e.g. android/linux armv7) when passed to fmt or compared.
+	maxLayerUncompressedBytes int64 = 16 << 30 // 16 GiB
 	// maxLayerEntries bounds the number of tar entries (inode exhaustion).
 	maxLayerEntries = 2_000_000
 )
