@@ -1003,6 +1003,65 @@ Doki/
 
 ## 新特性
 
+### v0.12.0 (2026 年 7 月)
+
+Doki 0.12 是运行时保真度版本:真实的交互式 I/O、真正的 Kubernetes exec/attach 流式传输、连接到实际引擎的 Podman API、k4s 的重启/就绪语义,以及一次大规模的安全加固。相较 v0.11.1,79 个文件变更,+13,786 / -1,256 行。
+
+#### 交互式容器 -- `run -it`、`attach`、`exec -it`
+
+- **`pkg/runtime/stdio.go` + `internal/pty/pty_linux.go`**:真正的 stdio broker。TTY 会话获得 PTY(行规程、`Ctrl-D` EOF、通过 `TIOCSWINSZ` 调整窗口大小);非 TTY 交互会话使用三条管道和 Docker 风格的多路复用流。
+- **`doki run -it`、`doki attach`、`doki exec -it`** 现在实时连接到进程,并将 stdin/stdout/stderr 正确扇出到多个客户端(有界队列、丢弃慢客户端)。
+- 控制终端设置(`setsid`/`TIOCSCTTY`)仅在 namespaces 模式下运行;proot 的行规程无需它即可工作。
+- 测试:`stdio_test.go`、`exec_stdin_test.go`。
+
+#### 真实的 CRI Exec/Attach 流式传输
+
+- **`pkg/cri/wsstream.go`**:手写的 RFC 6455 WebSocket 服务器,加上 Kubernetes `remotecommand` 通道协议(`v5.channel.k8s.io`,回退到 `v4`,通道 0-5:stdin/stdout/stderr/error/resize/close)。
+- **`pkg/cri/streamer.go`**:`Reserve()` 签发流式令牌;`kubectl exec`/`attach` 桥接到真实的容器进程,并返回 `metav1.Status` 退出码。
+- 测试:`wsstream_test.go`。
+
+#### Podman API 连接到真实引擎 (P1-P7)
+
+- **`pkg/podman/containers.go`、`resources.go`、`api.go`**:libpod 端点现在通过注入的 `Deps` 结构委托给真实的 runtime、镜像、网络和卷存储 -- 真实的 create/start/stop/kill/logs/stats/exec、build、`play`/`generate kube` 以及卷 CRUD。
+- 诚实的状态码:子系统不可用时返回 `503`,真正推迟的端点返回 `501`(不再有静默的存根)。
+- 测试:`api_test.go`。
+
+#### k4s 运行时保真度
+
+- **重启策略 (K14)**:`Always` / `OnFailure` / `Never`,带指数退避和 Pod 状态中真实的 `RestartCount`(`pkg/kubelet/probe.go`)。
+- **就绪探针 (K13)**:`exec`、`tcpSocket` 和 `httpGet` 探针,遵循 `initialDelaySeconds`/`timeoutSeconds`;Pod 的 `Ready` 条件反映真实的探针结果。
+- **ConfigMap/Secret 卷投影**:键写入磁盘并挂载到容器中。
+- **apiserver**:可写的 `scale`/`status` 子资源、标签选择器、JSON-patch、真实的容器 logs/exec、正确的 `delete` 响应形态。
+- 测试:`probe_test.go`、`projection_test.go`。
+
+#### 容器资源更新 + 调度器资源适配
+
+- **`doki update`** 将 cgroup v2 的 CPU/内存限制应用到运行中的容器 (D1)。
+- **调度器 (K16)**:在评分前,根据 CPU/内存 requests 与已提交的 Pod 对节点进行过滤(`pkg/scheduler/scheduler.go`)。
+- 测试:`scheduler_test.go`。
+
+#### 安全加固
+
+- **五个关键修复**:digest write-what-where、镜像缓存投毒、`docker cp` 路径穿越、build secret 泄露,以及无沙箱的 `RUN`。
+- **CVE-2018-15664 类 symlink 逃逸**:tar 提取经过 `SecureJoin`,bind mount 在 `O_NOFOLLOW` fd 上打开,以击败掩码路径的 symlink 竞态 (HIGH-7)。
+- **解压炸弹边界**:单层限制为 16 GiB / 2,000,000 个条目。
+- 从镜像层中剥离危险的 xattr 和设备节点;registry auth realm 的 SSRF 防护;同源控制 API;有界的 JSON/镜像加载请求体;防火墙 proto/IP 校验。
+- 新的 `*_security_test.go` 套件:`archive_security_test.go`、`digest_security_test.go`、`securejoin_test.go`、`symlink_escape_test.go`。
+
+#### 诚实的安全姿态 (C1)
+
+- `/info` 和容器 inspect 报告活动运行时模式(native / proot / namespaces)的**真实** `SecurityOptions`,而非硬编码的声明;capabilities 警告显示在 CLI 中。
+
+#### 管道与 CLI
+
+- **`pkg/events/bus.go`**:真实的事件流。**`pkg/stdcopy/stdcopy.go`**:用于非 TTY attach/logs 的 Docker 多路复用流解复用。
+- CLI 正确性:组合布尔短标志(`-it`)、`--key=value` 解析、`doki update` 标志顺序(与 Docker 兼容),以及防火墙 `nft` 空 `daddr` 修复。
+- **32 位构建**:`maxLayerUncompressedBytes` 类型化为 `int64`,使 armv7(`GOOS=linux GOARCH=arm`)在不溢出的情况下构建。
+
+#### 文档
+
+- 新增中文 README;西班牙语 README 与英语 1:1 同步。
+
 ### v0.11.0 (2026 年 6 月)
 
 Doki 0.11 是网络和成熟度版本:完整 DokiLink Mesh,带 NAT 遍历和 DHT,macOS VZ cgo 后端,Kubernetes 100% 带真实 CRI,以及生产就绪的 Podman API。

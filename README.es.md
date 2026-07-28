@@ -1003,6 +1003,68 @@ Doki/
 
 ## Novedades
 
+### v0.12.0 (Julio 2026)
+
+Doki 0.12 es el release de fidelidad del runtime: I/O interactiva real, streaming
+genuino de exec/attach de Kubernetes, la API de Podman conectada al motor real,
+semántica de reinicio/readiness en k4s, y una amplia tanda de endurecimiento de
+seguridad. 79 archivos modificados, +13.786 / -1.256 líneas sobre v0.11.1.
+
+#### Contenedores interactivos -- `run -it`, `attach`, `exec -it`
+
+- **`pkg/runtime/stdio.go` + `internal/pty/pty_linux.go`**: un broker de stdio real. Las sesiones TTY obtienen una PTY (disciplina de línea, EOF con `Ctrl-D`, cambio de tamaño de ventana vía `TIOCSWINSZ`); las sesiones interactivas sin TTY usan tres tuberías con un stream multiplexado estilo Docker.
+- **`doki run -it`, `doki attach`, `doki exec -it`** ahora se conectan en vivo al proceso, con distribución correcta de stdin/stdout/stderr hacia múltiples clientes (colas acotadas, descarte del cliente lento).
+- La configuración de terminal de control (`setsid`/`TIOCSCTTY`) solo corre en modo namespaces; la disciplina de línea de proot funciona sin ella.
+- Tests: `stdio_test.go`, `exec_stdin_test.go`.
+
+#### Streaming real de Exec/Attach de CRI
+
+- **`pkg/cri/wsstream.go`**: un servidor WebSocket RFC 6455 hecho a mano más el protocolo de canales `remotecommand` de Kubernetes (`v5.channel.k8s.io` con fallback a `v4`, canales 0-5: stdin/stdout/stderr/error/resize/close).
+- **`pkg/cri/streamer.go`**: `Reserve()` emite tokens de streaming; `kubectl exec`/`attach` se conectan al proceso real del contenedor y devuelven un código de salida `metav1.Status`.
+- Tests: `wsstream_test.go`.
+
+#### API de Podman conectada al motor real (P1-P7)
+
+- **`pkg/podman/containers.go`, `resources.go`, `api.go`**: los endpoints de libpod ahora delegan en los stores reales de runtime, imagen, red y volumen mediante una struct `Deps` inyectada -- create/start/stop/kill/logs/stats/exec reales, build, `play`/`generate kube` y CRUD de volúmenes.
+- Códigos de estado honestos: `503` cuando un subsistema no está disponible, `501` para endpoints genuinamente diferidos (se acabaron los stubs silenciosos).
+- Tests: `api_test.go`.
+
+#### Fidelidad del runtime de k4s
+
+- **Política de reinicio (K14)**: `Always` / `OnFailure` / `Never` con backoff exponencial y un `RestartCount` real en el estado del pod (`pkg/kubelet/probe.go`).
+- **Readiness probes (K13)**: probes `exec`, `tcpSocket` y `httpGet` que respetan `initialDelaySeconds`/`timeoutSeconds`; la condición `Ready` del pod refleja el resultado real del probe.
+- **Proyección de volúmenes ConfigMap/Secret**: las claves se escriben a disco y se montan en el contenedor.
+- **apiserver**: subrecursos `scale`/`status` escribibles, selectores de etiqueta, JSON-patch, logs/exec reales del contenedor, forma de respuesta de `delete` correcta.
+- Tests: `probe_test.go`, `projection_test.go`.
+
+#### Actualización de recursos + ajuste de recursos del scheduler
+
+- **`doki update`** aplica límites de CPU/memoria de cgroup v2 a un contenedor en ejecución (D1).
+- **Scheduler (K16)**: los nodos se filtran por requests de CPU/memoria contra los pods ya comprometidos antes de puntuar (`pkg/scheduler/scheduler.go`).
+- Tests: `scheduler_test.go`.
+
+#### Endurecimiento de seguridad
+
+- **Cinco fixes críticos**: digest write-what-where, envenenamiento de la caché de imágenes, path traversal en `docker cp`, filtración de secretos de build y `RUN` sin sandbox.
+- **Escape por symlink clase CVE-2018-15664**: la extracción de tar pasa por `SecureJoin`, y los bind mounts se abren sobre un fd `O_NOFOLLOW` para vencer la carrera de symlink en rutas enmascaradas (HIGH-7).
+- **Límites contra bombas de descompresión**: una capa se acota a 16 GiB / 2.000.000 de entradas.
+- Se eliminan xattrs peligrosos y nodos de dispositivo de las capas de imagen; guarda SSRF en el realm de auth del registry; API de control con mismo origen; cuerpos de request de JSON/carga-de-imagen acotados; validación de proto/IP del firewall.
+- Nuevas suites `*_security_test.go`: `archive_security_test.go`, `digest_security_test.go`, `securejoin_test.go`, `symlink_escape_test.go`.
+
+#### Postura de seguridad honesta (C1)
+
+- `/info` y el inspect del contenedor reportan las `SecurityOptions` **reales** para el modo de runtime activo (native / proot / namespaces) en vez de afirmaciones fijas; las advertencias de capabilities aparecen en la CLI.
+
+#### Plomería y CLI
+
+- **`pkg/events/bus.go`**: un stream de eventos real. **`pkg/stdcopy/stdcopy.go`**: demux de stream multiplexado de Docker para attach/logs sin TTY.
+- Correcciones de CLI: flags cortas booleanas combinadas (`-it`), parseo de `--key=value`, orden de flags de `doki update` (compatible con Docker) y un fix del `daddr` vacío de `nft` en el firewall.
+- **Builds de 32 bits**: `maxLayerUncompressedBytes` tipado como `int64` para que armv7 (`GOOS=linux GOARCH=arm`) compile sin overflow.
+
+#### Documentación
+
+- Se agregó el README en chino; el README en español se sincronizó 1:1 con el inglés.
+
 ### v0.11.0 (Junio 2026)
 
 Doki 0.11 es el release de networking y madurez: DokiLink Mesh completo con NAT traversal y DHT, backend VZ cgo de macOS, Kubernetes 100% con CRI real, y API de Podman lista para produccion.
