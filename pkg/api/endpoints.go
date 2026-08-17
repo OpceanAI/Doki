@@ -175,12 +175,18 @@ func (s *Server) handleArchivePut(w http.ResponseWriter, r *http.Request, _ stri
 				s.writeError(w, http.StatusBadRequest, "invalid path in archive")
 				return
 			}
-			parent, perr := common.SecureJoin(containerPath, filepath.Dir(hdr.Name))
+			// tar names directories WITH a trailing slash, which filepath.Dir/Base do
+			// not strip -- Dir("a/b/") is "a/b" and Base("a/b/") is "b", so the entry
+			// lands at "a/b/b": one level too deep with its basename duplicated. Clean
+			// removes the slash. Same defect as pkg/runtime/runtime.go; see the longer
+			// note there.
+			entryName := filepath.Clean(hdr.Name)
+			parent, perr := common.SecureJoin(containerPath, filepath.Dir(entryName))
 			if perr != nil {
 				s.writeError(w, http.StatusBadRequest, "invalid path in archive")
 				return
 			}
-			target = filepath.Join(parent, filepath.Base(hdr.Name))
+			target = filepath.Join(parent, filepath.Base(entryName))
 		} else {
 			target = containerPath
 		}

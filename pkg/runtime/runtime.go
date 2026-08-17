@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"sort"
 	"time"
 
 	"github.com/OpceanAI/Doki/internal/cgroups"
@@ -378,6 +379,8 @@ func (rt *Runtime) extractLayers(rootfsDir string, layers []string) error {
 		return nil
 	}
 
+	var deferred []deferredDir
+
 	// Sequential extraction: OCI image layers must be applied in order.
 	// Later layers override earlier ones, so parallel extraction would
 	// produce non-deterministic rootfs contents.
@@ -385,11 +388,17 @@ func (rt *Runtime) extractLayers(rootfsDir string, layers []string) error {
 		if !common.PathExists(layerPath) {
 			continue
 		}
-		if err := extractTarGz(layerPath, rootfsDir); err != nil {
+		if err := extractTarGzInto(layerPath, rootfsDir, &deferred); err != nil {
 			// Rollback: clean up partial rootfs
 			_ = os.RemoveAll(rootfsDir)
 			return fmt.Errorf("layer %d (%s): %w", i, filepath.Base(layerPath), err)
 		}
+	}
+
+	// Once, after the LAST layer — see deferredDir for why per-layer is not enough.
+	if err := applyDeferredDirs(deferred); err != nil {
+		_ = os.RemoveAll(rootfsDir)
+		return err
 	}
 
 	return nil
@@ -429,7 +438,61 @@ func streamDecompress(tool string, src io.Reader) (io.Reader, func(), error) {
 	return stdout, cleanup, nil
 }
 
+// DIRECTORY MODES AND TIMES ARE APPLIED AFTER EVERY LAYER, NOT INLINE.
+//
+// A directory may legitimately be read-only — nix store paths are 0555 and
+// supabase/postgres is built from them. Applying that mode when the directory
+// entry is read makes every later entry inside it fail:
+//
+//	mkdir .../nix/store/…-nix-fetchers-2.26.2/lib: permission denied
+//
+// and it is not enough to defer only to the end of the CURRENT archive, because
+// layers are stacked into one rootfs here: layer 4 writes into directories layer
+// 3 created, so a mode applied at the end of layer 3 breaks layer 4 with
+//
+//	hardlink failed …: permission denied
+//
+// Docker and containerd sidestep this by giving each layer its own directory and
+// letting overlayfs merge them; stacking into a single tree means the fix-up must
+// happen once, after the last layer.
+//
+// Mtimes have the same problem more quietly: writing a child updates the parent's
+// mtime, so any time set before the tree is complete is immediately wrong.
+type deferredDir struct {
+	path  string
+	mode  os.FileMode
+	mtime time.Time
+}
+
+// applyDeferredDirs fixes up directory modes and times, deepest first — a parent
+// must not become read-only before its children are done, and touching a child
+// updates the parent's mtime, so parents have to come last.
+func applyDeferredDirs(dirs []deferredDir) error {
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i].path) > len(dirs[j].path) })
+	for _, d := range dirs {
+		if err := os.Chmod(d.path, d.mode); err != nil {
+			// Removed by a later whiteout; not an extraction failure.
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("tar: chmod dir %s: %w", d.path, err)
+			}
+			continue
+		}
+		_ = os.Chtimes(d.path, d.mtime, d.mtime)
+	}
+	return nil
+}
+
+// extractTarGz extracts a single archive and finalises directory metadata. Use
+// extractTarGzInto when stacking several archives into one tree.
 func extractTarGz(tarPath, dest string) error {
+	var deferred []deferredDir
+	if err := extractTarGzInto(tarPath, dest, &deferred); err != nil {
+		return err
+	}
+	return applyDeferredDirs(deferred)
+}
+
+func extractTarGzInto(tarPath, dest string, deferredDirs *[]deferredDir) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
 		return err
@@ -537,18 +600,40 @@ func extractTarGz(tarPath, dest string) error {
 		if !strings.HasPrefix(lexical, cleanDest+string(os.PathSeparator)) {
 			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, lexical)
 		}
+		// NORMALISE THE ENTRY NAME BEFORE SPLITTING IT.
+		//
+		// tar names a directory WITH a trailing slash ("usr/lib/gyp/"), and Go's
+		// filepath.Dir/Base do not strip it:
+		//     Dir("usr/lib/gyp/")  == "usr/lib/gyp"   <- the directory ITSELF
+		//     Base("usr/lib/gyp/") == "gyp"
+		//   -> join(...)           == "usr/lib/gyp/gyp"
+		// so every directory entry was extracted ONE LEVEL TOO DEEP with its own
+		// basename duplicated. Mostly that only littered the rootfs with unused
+		// nested directories, which is why common images appeared to work — but it
+		// also meant a directory's mode, owner, mtime and xattrs were applied to
+		// the wrong path, and a genuinely EMPTY directory never appeared at all.
+		//
+		// It turns fatal when a file shares its parent directory's name. npm ships
+		// exactly that: node-gyp/gyp/ (dir) containing gyp (file). The dir entry
+		// created .../gyp/gyp as a DIRECTORY, then the file entry resolved to the
+		// same path and os.Create returned EISDIR:
+		//     extract layers: open .../node-gyp/gyp/gyp: is a directory
+		//
+		// filepath.Clean removes the trailing slash, so Dir/Base split correctly.
+		entryName := filepath.Clean(hdr.Name)
 		// Then resolve the parent with symlink semantics clamped to root.
-		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(hdr.Name))
+		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(entryName))
 		if perr != nil {
 			return fmt.Errorf("tar: resolve %s: %w", hdr.Name, perr)
 		}
-		target := filepath.Clean(filepath.Join(parent, filepath.Base(hdr.Name)))
+		target := filepath.Clean(filepath.Join(parent, filepath.Base(entryName)))
 		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, target)
 		}
 
 		// C1: Whiteout files - OCI layers use .wh.<filename> to mark deleted files.
-		baseName := filepath.Base(hdr.Name)
+		// Derived from the normalised name for the same reason as `target` above.
+		baseName := filepath.Base(entryName)
 		if strings.HasPrefix(baseName, ".wh.") {
 			// Opaque whiteout: .wh..wh..opq clears the entire directory.
 			// parent is already resolved within cleanDest (see SecureJoin above),
@@ -574,19 +659,41 @@ func extractTarGz(tarPath, dest string) error {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return err
 			}
+			// The entry's real mode was never applied — ownership, mtimes and
+			// xattrs all were, so this was an omission rather than a decision, and
+			// a directory the image declares as 0700 was left world-readable at
+			// 0755. It is queued rather than applied here: see the note at the top
+			// of the loop for why a read-only directory must not become read-only
+			// until everything inside it has been written.
+			*deferredDirs = append(*deferredDirs, deferredDir{
+				path:  target,
+				mode:  common.SafeFileMode(hdr.Mode),
+				mtime: hdr.ModTime,
+			})
 			if err := os.Chown(target, hdr.Uid, hdr.Gid); err != nil {
 				logChownError("chown dir", target, err)
 			}
-			_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			extractXattrs(hdr, target)
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-				_ = os.Remove(target)
-			} else if err != nil {
-				_ = os.Remove(target)
+			// REPLACE ANYTHING THAT IS NOT ALREADY A REGULAR FILE.
+			//
+			// This previously removed only a symlink, so an existing DIRECTORY at
+			// the target survived and os.Create then failed with EISDIR. A layer
+			// replacing a directory with a file is legal in OCI (and Docker handles
+			// it), so refusing it is wrong independently of the path bug fixed
+			// above. RemoveAll rather than Remove, because the stale entry may be a
+			// non-empty directory.
+			//
+			// The `err != nil` case is deliberately NOT a remove any more: Lstat
+			// failing is almost always ENOENT — nothing to delete — and removing on
+			// an unrelated stat error hides the real problem.
+			if fi, lerr := os.Lstat(target); lerr == nil && !fi.Mode().IsRegular() {
+				if rerr := os.RemoveAll(target); rerr != nil {
+					return fmt.Errorf("tar: replace %s: %w", hdr.Name, rerr)
+				}
 			}
 			out, err := os.Create(target)
 			if err != nil {

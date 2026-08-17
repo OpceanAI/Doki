@@ -236,16 +236,22 @@ func extractLayerNative(tarPath, dest string) error {
 		if !strings.HasPrefix(lexical, cleanDest+string(os.PathSeparator)) && lexical != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, lexical)
 		}
-		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(hdr.Name))
+		// tar names directories WITH a trailing slash, which filepath.Dir/Base do
+		// not strip -- Dir("a/b/") is "a/b" and Base("a/b/") is "b", so the entry
+		// lands at "a/b/b": one level too deep with its basename duplicated. Clean
+		// removes the slash. Same defect as pkg/runtime/runtime.go; see the longer
+		// note there.
+		entryName := filepath.Clean(hdr.Name)
+		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(entryName))
 		if perr != nil {
 			return fmt.Errorf("tar: resolve %s: %w", hdr.Name, perr)
 		}
-		target := filepath.Clean(filepath.Join(parent, filepath.Base(hdr.Name)))
+		target := filepath.Clean(filepath.Join(parent, filepath.Base(entryName)))
 		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s -> %s", hdr.Name, target)
 		}
 
-		baseName := filepath.Base(hdr.Name)
+		baseName := filepath.Base(entryName)
 		if strings.HasPrefix(baseName, ".wh.") {
 			if baseName == ".wh..wh..opq" {
 				if strings.HasPrefix(parent, cleanDest+string(os.PathSeparator)) || parent == cleanDest {
