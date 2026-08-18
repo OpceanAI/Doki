@@ -1020,11 +1020,17 @@ func ExtractTar(r io.Reader, dest string) error {
 		// HIGH-9: resolve the parent directory with symlink semantics clamped to
 		// dest, so a prior entry like "evil -> /" cannot make a later
 		// "evil/etc/cron.d/x" write through the symlink onto the host.
-		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(hdr.Name))
+		// tar names directories WITH a trailing slash, which filepath.Dir/Base do
+		// not strip -- Dir("a/b/") is "a/b" and Base("a/b/") is "b", so the entry
+		// lands at "a/b/b": one level too deep with its basename duplicated. Clean
+		// removes the slash. Same defect as pkg/runtime/runtime.go; see the longer
+		// note there.
+		entryName := filepath.Clean(hdr.Name)
+		parent, perr := common.SecureJoin(cleanDest, filepath.Dir(entryName))
 		if perr != nil {
 			return fmt.Errorf("tar: resolve %s: %w", hdr.Name, perr)
 		}
-		target := filepath.Join(parent, filepath.Base(hdr.Name))
+		target := filepath.Join(parent, filepath.Base(entryName))
 		if !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) && target != cleanDest {
 			return fmt.Errorf("tar: path traversal attempt: %s", hdr.Name)
 		}
