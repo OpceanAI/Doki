@@ -976,6 +976,10 @@ func findProotBinary() string {
 	return ""
 }
 
+// osLink creates a hardlink; overridable in tests to simulate filesystems
+// (or environments, e.g. Android's /data under Termux) that reject os.Link.
+var osLink = os.Link
+
 // ExtractTar extracts a tar archive (optionally gzip-compressed) to dest directory.
 func ExtractTar(r io.Reader, dest string) error {
 	// Peek at the first bytes to detect gzip.
@@ -1100,8 +1104,14 @@ func ExtractTar(r io.Reader, dest string) error {
 			if err := os.Remove(target); err != nil {
 				slog.Warn("remove hardlink target failed", "path", target, "error", err)
 			}
-			if err := os.Link(linkTarget, target); err != nil {
-				return err
+			if err := osLink(linkTarget, target); err != nil {
+				data, readErr := os.ReadFile(linkTarget)
+				if readErr != nil {
+					return fmt.Errorf("tar: hardlink %s: %w", hdr.Name, err)
+				}
+				if err := os.WriteFile(target, data, 0644); err != nil {
+					return fmt.Errorf("tar: hardlink fallback write %s: %w", hdr.Name, err)
+				}
 			}
 		default:
 		}
