@@ -246,8 +246,7 @@ func (r *Registry) AllRunners() []RunnerInfo {
 	return infos
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────
-
+// Helpers
 func hostPlatform() string {
 	return runtime.GOOS + "/" + runtime.GOARCH
 }

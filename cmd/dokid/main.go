@@ -91,12 +91,13 @@ func main() {
 	flag.StringVar(&configPath, "config", "", "Config file path")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug/info/warn/error)")
 	flag.StringVar(&logFormat, "log-format", "auto", "Log format: json|text|auto")
-	flag.BoolVar(&debugMode, "debug", false, "Enable debug mode (pprof on :6060)")
+	flag.BoolVar(&debugMode, "debug", false, "Enable debug mode (pprof on 127.0.0.1:6060)")
 	flag.BoolVar(&tlsEnabled, "tls", false, "Enable TLS")
 	flag.StringVar(&tlsCertFile, "tls-cert", "", "TLS certificate path")
 	flag.StringVar(&tlsKeyFile, "tls-key", "", "TLS key path")
 	flag.StringVar(&tlsCAFile, "tls-ca", "", "TLS CA certificate path")
 	flag.BoolVar(&tlsVerify, "tls-verify", false, "Verify client certificates")
+	flag.BoolVar(&tlsAutoCert, "tls-auto-cert", false, "Automatically generate a self-signed TLS certificate")
 	flag.Float64Var(&rateLimitPerSec, "rate-limit", 100, "Rate limit requests per second")
 	flag.IntVar(&rateLimitBurst, "rate-burst", 200, "Rate limit burst size")
 	flag.StringVar(&dnsListen, "dns-listen", dnsListen, "DNS server listen address (default: 127.0.0.11:8053 on Android, 127.0.0.11:53 on Linux)")
@@ -294,6 +295,7 @@ func main() {
 		logger.Error("failed to create API server", "err", err)
 		os.Exit(1)
 	}
+	server.SetCRIServer(criServer)
 
 	mw := api.NewMiddleware()
 	rateLimiter := api.NewRateLimit(rateLimitPerSec, rateLimitBurst)
@@ -313,8 +315,9 @@ func main() {
 	logger.Info("rate limiter", "req_per_sec", rateLimitPerSec, "burst", rateLimitBurst)
 	if apiToken != "" {
 		logger.Info("API bearer-token auth enabled")
-	} else if tcpAddr != "" && !tlsEnabled {
-		logger.Warn("TCP listener has no authentication; set DOKI_API_TOKEN or enable TLS to protect it")
+	} else if tcpAddr != "" && !isLoopbackAddr(tcpAddr) && !tlsVerify {
+		logger.Error("TCP listener on a non-loopback address requires authentication; set DOKI_API_TOKEN or enable TLS client verification (--tls-verify)")
+		os.Exit(1)
 	}
 
 	if debugMode {
@@ -349,7 +352,7 @@ func main() {
 		}
 		tlsCfg, err := api.NewTLSConfig(&api.TLSConfig{
 			Enabled: true, CertFile: tlsCertFile, KeyFile: tlsKeyFile,
-			CAFile: tlsCAFile, Verify: tlsVerify, MinTLS: tls.VersionTLS12,
+			CAFile: tlsCAFile, Verify: tlsVerify, MinTLS: tls.VersionTLS13,
 		})
 		if err != nil {
 			logger.Error("tls config", "err", err)
@@ -361,13 +364,13 @@ func main() {
 		logger.Info("tls enabled", "mutual", tlsVerify)
 	}
 
-	// AG7: Recover container state on startup.
+	// Recover container state on startup.
 	recoverContainers(logger, rt, dataDir, imgStore, netMgr)
 
 	srv := &http.Server{
 		Handler:        server,
 		ReadTimeout:    30 * time.Second,
-		WriteTimeout:   300 * time.Second,
+		WriteTimeout:   120 * time.Second,
 		IdleTimeout:    60 * time.Second,
 		MaxHeaderBytes: 1 << 20, // 1 MiB — bound header memory per connection
 	}
@@ -601,6 +604,27 @@ func buildListeners(unixPath, tcp string) ([]net.Listener, error) {
 	return out, nil
 }
 
+// isLoopbackAddr reports whether a TCP listen address binds only to the loopback
+// interface (localhost, 127.0.0.1, ::1). An empty host (":2375") binds every
+// interface and is therefore NOT loopback-only.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
 func modeString(m dr.ExecutionMode) string {
 	switch m {
 	case dr.ModeMicroVM:
@@ -639,15 +663,21 @@ func rotateDaemonLog() {
 }
 
 func startPprofServer(port int) {
+	token := os.Getenv("DOKI_API_TOKEN")
+	if token == "" {
+		slog.Default().Error("pprof requires DOKI_API_TOKEN; refusing to start")
+		return
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	addr := fmt.Sprintf(":%d", port)
+	// Loopback-only bind: the debug endpoint is never reachable from the network.
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	slog.Default().Info("pprof server listening", "addr", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, api.TokenAuth(token)(mux)); err != nil {
 		slog.Default().Error("pprof server", "err", err)
 	}
 }

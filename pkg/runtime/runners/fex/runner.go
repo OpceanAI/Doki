@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -89,7 +90,13 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 		fexArgs = append(fexArgs, args...)
 		cmd = exec.CommandContext(ctx, r.fexBin, fexArgs...)
 	case "box64":
-		entrypoint := filepath.Join(rootfsDir, args[0])
+		// filepath.Join(rootfs, "/bin/sh") discards rootfs because the
+		// second element is absolute. Strip "/" and SecureJoin so the
+		// entrypoint stays clamped inside the rootfs.
+		entrypoint, err := common.SecureJoin(rootfsDir, strings.TrimPrefix(args[0], "/"))
+		if err != nil {
+			return 0, fmt.Errorf("resolve entrypoint in rootfs: %w", err)
+		}
 		boxArgs := append([]string{entrypoint}, args[1:]...)
 		cmd = exec.CommandContext(ctx, r.box64Bin, boxArgs...)
 	default:

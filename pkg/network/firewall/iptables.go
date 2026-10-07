@@ -13,11 +13,11 @@ import (
 )
 
 type iptManager struct {
-	mu      sync.Mutex
-	bin     string // "iptables" or "iptables-legacy"
-	chain   string // "DOKI"
-	ipv6    bool
-	ip6Bin  string
+	mu       sync.Mutex
+	bin      string // "iptables" or "iptables-legacy"
+	chain    string // "DOKI"
+	ipv6     bool
+	ip6Bin   string
 	ip6Chain string
 }
 

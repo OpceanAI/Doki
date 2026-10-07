@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -59,14 +60,35 @@ func ParseResolvConf(path string) (*ResolvConf, error) {
 	return rc, scanner.Err()
 }
 
-// HostResolvConf reads the host's /etc/resolv.conf.
-// Falls back to Google DNS if no resolv.conf found.
+// HostResolvConf reads the host's DNS configuration in a platform-aware order:
+//  1. Android DNS via getprop (net.dns1..4), when on an Android system.
+//  2. $PREFIX/etc/resolv.conf (Termux layout), when PREFIX is set.
+//  3. /etc/resolv.conf.
+//  4. Public DNS (8.8.8.8) as a last resort.
 func HostResolvConf() *ResolvConf {
-	for _, path := range []string{"/etc/resolv.conf", "/system/etc/resolv.conf"} {
-		if rc, err := ParseResolvConf(path); err == nil && len(rc.Nameservers) > 0 {
+	// 1. Android DNS via getprop.
+	if servers := AndroidDNSServers(); len(servers) > 0 {
+		nameservers := make([]string, 0, len(servers))
+		for _, s := range servers {
+			if host, _, err := net.SplitHostPort(s); err == nil {
+				nameservers = append(nameservers, host)
+			} else {
+				nameservers = append(nameservers, s)
+			}
+		}
+		return &ResolvConf{Nameservers: nameservers}
+	}
+	// 2. $PREFIX/etc/resolv.conf (Termux layout).
+	if prefix := os.Getenv("PREFIX"); prefix != "" {
+		if rc, err := ParseResolvConf(filepath.Join(prefix, "etc", "resolv.conf")); err == nil && len(rc.Nameservers) > 0 {
 			return rc
 		}
 	}
+	// 3. /etc/resolv.conf.
+	if rc, err := ParseResolvConf("/etc/resolv.conf"); err == nil && len(rc.Nameservers) > 0 {
+		return rc
+	}
+	// 4. Public DNS fallback.
 	return &ResolvConf{
 		Nameservers: []string{"8.8.8.8", "8.8.4.4"},
 	}

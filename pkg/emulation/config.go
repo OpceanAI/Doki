@@ -131,13 +131,17 @@ func PreferredMode() string {
 	return cfg.Preferred
 }
 
-// Detect checks available QEMU/FEX/Box64 backends using PATH.
+// Detect checks available QEMU/FEX/Box64 backends using PATH plus
+// non-static binary names and binfmt_misc registrations.
 func Detect(ctx context.Context) []Result {
 	candidates := []struct {
 		name string
 		bins []string
 	}{
-		{ModeQEMU, []string{"qemu-x86_64-static", "qemu-aarch64-static", "qemu-arm-static", "qemu-i386-static"}},
+		{ModeQEMU, []string{
+			"qemu-x86_64-static", "qemu-aarch64-static", "qemu-arm-static", "qemu-i386-static",
+			"qemu-x86_64", "qemu-aarch64", "qemu-arm", "qemu-i386",
+		}},
 		{ModeFEX, []string{"FEXInterpreter"}},
 		{ModeBox64, []string{"box64"}},
 	}
@@ -154,12 +158,30 @@ func Detect(ctx context.Context) []Result {
 			res.Version, res.Error = version(ctx, path)
 			break
 		}
+		if !res.Available && candidate.name == ModeQEMU && binfmtRegistered() {
+			res.Available = true
+			res.Error = "via binfmt_misc (no qemu binary in PATH)"
+		}
 		if !res.Available {
 			res.Error = "not found in PATH"
 		}
 		out = append(out, res)
 	}
 	return out
+}
+
+// binfmtRegistered reports whether any qemu binfmt_misc entry is registered.
+func binfmtRegistered() bool {
+	entries, err := filepath.Glob("/proc/sys/fs/binfmt_misc/qemu-*")
+	if err != nil || len(entries) == 0 {
+		return false
+	}
+	for _, e := range entries {
+		if fi, err := os.Stat(e); err == nil && !fi.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 // SelectBest chooses a safe default for this host from detection results.

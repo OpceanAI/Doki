@@ -112,7 +112,7 @@ func runCommand() {
 	os.Exit(0)
 }
 
-// ─── Vsock server (guest side) ────────────────────────────────────
+// Vsock server (guest side)
 
 func startVsockServer() {
 	// Listen on vsock port 10000 (exec channel).
@@ -227,7 +227,7 @@ func handleVsockExec(msg map[string]interface{}, enc *json.Encoder, conn net.Con
 	_ = conn
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────
+// Helpers
 
 func mount(source, target, fstype string, flags uintptr, data string) {
 	_ = syscall.Mount(source, target, fstype, flags, data)

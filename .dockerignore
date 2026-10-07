@@ -16,6 +16,11 @@ var/
 *.md
 *.log
 *.gif
+.env
+*.pem
+*.key
+*.token
+*.p12
 doki
 dokid
 doki-compose

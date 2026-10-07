@@ -34,19 +34,24 @@ func (c *DokiCLI) MeshLs() error {
 	}
 	peers := sp.List()
 	if len(peers) == 0 {
-		fmt.Fprintln(os.Stderr, "no peers configured. use `doki link add <id> <addr> --pub <b64>` to add one.")
-		return nil
+		return fmt.Errorf("no peers configured (use `doki link add <id> <addr> --pub <b64>` to add one)")
 	}
 	w := tabwriter.NewWriter(os.Stdout, 8, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "PEER ID\tNAME\tADDRESS\tLAST SEEN")
+	if _, err := fmt.Fprintln(w, "PEER ID\tNAME\tADDRESS\tLAST SEEN"); err != nil {
+		return fmt.Errorf("mesh ls: %w", err)
+	}
 	for _, p := range peers {
 		last := "-"
 		if !p.LastSeen.IsZero() {
 			last = formatDuration(timeSince(p.LastSeen))
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Addr, last)
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Addr, last); err != nil {
+			return fmt.Errorf("mesh ls: %w", err)
+		}
 	}
-	_ = w.Flush()
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("mesh ls: %w", err)
+	}
 	return nil
 }
 

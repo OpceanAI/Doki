@@ -24,6 +24,9 @@ type SyscallRule struct {
 	Names  []string  `json:"names"`
 	Action string    `json:"action"`
 	Args   []ArgRule `json:"args,omitempty"`
+	// Errno is the errno returned when Action is SCMP_ACT_ERRNO. Defaults to
+	// EPERM (1) when zero.
+	Errno int `json:"errno,omitempty"`
 }
 
 // ArgRule defines argument filtering for syscalls.

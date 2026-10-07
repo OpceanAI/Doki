@@ -564,16 +564,138 @@ type CronJobController struct {
 // Name returns the controller name.
 func (c *CronJobController) Name() string { return "cronjob" }
 
-// Run starts the CronJob reconciliation loop.
+// Run starts the CronJob reconciliation loop. On every tick each CronJob whose
+// schedule has produced a run time in the past gets one Job created from its
+// jobTemplate (with a default backoffLimit), and the run is recorded in
+// status.lastScheduleTime / status.active.
 func (c *CronJobController) Run(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	c.tick(time.Now())
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case now := <-ticker.C:
+			c.tick(now)
 		}
+	}
+}
+
+// tick reconciles every CronJob in the store against the current time.
+func (c *CronJobController) tick(now time.Time) {
+	objects, _ := c.store.List(store.KeyFor("batch", "cronjobs", "", ""))
+	for _, obj := range objects {
+		var cj k8s.CronJob
+		if err := json.Unmarshal(obj.Value, &cj); err != nil {
+			continue
+		}
+		c.reconcile(&cj, now)
+	}
+}
+
+// reconcile creates the Job for a CronJob whose next scheduled run has passed.
+func (c *CronJobController) reconcile(cj *k8s.CronJob, now time.Time) {
+	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+		return
+	}
+	sched, err := ParseSchedule(cj.Spec.Schedule)
+	if err != nil {
+		c.logger.Warn("cronjob: invalid schedule", "cronjob", cj.Name, "schedule", cj.Spec.Schedule, "error", err)
+		return
+	}
+
+	// Reference point for the next run: the last scheduled run, or the
+	// creation time on the first pass.
+	base := cj.CreationTimestamp
+	if base.IsZero() {
+		base = now
+	}
+	if cj.Status.LastScheduleTime != nil {
+		base = *cj.Status.LastScheduleTime
+	}
+	nextRun := sched.Next(base)
+	if nextRun.IsZero() || nextRun.After(now) {
+		return // schedule/nextRun have not passed yet
+	}
+
+	c.pruneActive(cj)
+	if cj.Spec.ConcurrencyPolicy == "Forbid" && len(cj.Status.Active) > 0 {
+		c.persistCronJob(cj)
+		return
+	}
+
+	jobName := fmt.Sprintf("%s-%d", cj.Name, nextRun.Unix())
+	spec := cj.Spec.JobTemplate.Spec
+	if spec.BackoffLimit == nil {
+		limit := int32(6) // Kubernetes default
+		spec.BackoffLimit = &limit
+	}
+	job := k8s.Job{
+		TypeMeta: k8s.TypeMeta{Kind: "Job", APIVersion: "batch/v1"},
+		ObjectMeta: k8s.ObjectMeta{
+			Name:              jobName,
+			Namespace:         cj.Namespace,
+			Labels:            cj.Spec.JobTemplate.Labels,
+			CreationTimestamp: now,
+		},
+		Spec: spec,
+	}
+	data, err := json.Marshal(job)
+	if err != nil {
+		c.logger.Error("cronjob: marshal job", "cronjob", cj.Name, "error", err)
+		return
+	}
+	if err := c.store.Put(store.KeyFor("batch", "jobs", job.Namespace, job.Name), &store.StoredObject{Value: data}); err != nil {
+		c.logger.Error("cronjob: create job", "cronjob", cj.Name, "job", jobName, "error", err)
+		return
+	}
+
+	scheduled := now
+	cj.Status.LastScheduleTime = &scheduled
+	cj.Status.Active = append(cj.Status.Active, k8s.ObjectReference{
+		Kind:       "Job",
+		APIVersion: "batch/v1",
+		Namespace:  job.Namespace,
+		Name:       job.Name,
+	})
+	c.persistCronJob(cj)
+	c.logger.Info("cronjob: job scheduled", "cronjob", cj.Name, "job", jobName, "nextRun", nextRun)
+}
+
+// pruneActive drops entries from status.active whose Job no longer exists or
+// has completed, so ConcurrencyPolicy=Forbid sees the real active set.
+func (c *CronJobController) pruneActive(cj *k8s.CronJob) {
+	if len(cj.Status.Active) == 0 {
+		return
+	}
+	keep := cj.Status.Active[:0]
+	for _, ref := range cj.Status.Active {
+		obj, err := c.store.Get(store.KeyFor("batch", "jobs", ref.Namespace, ref.Name))
+		if err != nil || obj == nil {
+			continue
+		}
+		var job k8s.Job
+		if err := json.Unmarshal(obj.Value, &job); err != nil {
+			continue
+		}
+		if hasJobCondition(job.Status.Conditions, "Complete") || hasJobCondition(job.Status.Conditions, "Failed") {
+			continue
+		}
+		keep = append(keep, ref)
+	}
+	cj.Status.Active = keep
+}
+
+// persistCronJob writes the CronJob back to the store.
+func (c *CronJobController) persistCronJob(cj *k8s.CronJob) {
+	data, err := json.Marshal(cj)
+	if err != nil {
+		c.logger.Error("cronjob: marshal", "cronjob", cj.Name, "error", err)
+		return
+	}
+	if err := c.store.Put(store.KeyFor("batch", "cronjobs", cj.Namespace, cj.Name), &store.StoredObject{Value: data}); err != nil {
+		c.logger.Error("cronjob: persist", "cronjob", cj.Name, "error", err)
 	}
 }
 

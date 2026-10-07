@@ -13,8 +13,7 @@ import (
 	"github.com/OpceanAI/Doki/pkg/common"
 )
 
-// ─── Container Lifecycle Tests ─────────────────────────────────────
-
+// Container Lifecycle Tests
 func TestCreate_DuplicateID(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -315,7 +314,7 @@ func TestPause_NotRunning(t *testing.T) {
 	}
 
 	err = rt.Pause(cfg.ID)
-	// BUG: Pause returns nil when container is not running (err from loadState is nil).
+	// Regression: Pause returns nil when container is not running (err from loadState is nil).
 	if err != nil {
 		t.Logf("Pause returned error (expected behavior): %v", err)
 	} else {
@@ -337,7 +336,7 @@ func TestUnpause_NotPaused(t *testing.T) {
 	}
 
 	err = rt.Unpause(cfg.ID)
-	// BUG: Unpause returns nil when container is not paused.
+	// Regression: Unpause returns nil when container is not paused.
 	if err != nil {
 		t.Logf("Unpause returned error (expected behavior): %v", err)
 	} else {
@@ -345,8 +344,7 @@ func TestUnpause_NotPaused(t *testing.T) {
 	}
 }
 
-// ─── State Management Tests ────────────────────────────────────────
-
+// State Management Tests
 func TestStateTransition_CreatedToRunning(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -454,11 +452,11 @@ func TestLoadState_PrefixMatchFalseConflict(t *testing.T) {
 		t.Fatalf("Create id1: %v", err)
 	}
 
-	// BUG: Creating id2 should succeed (different ID), but loadState's prefix
+	// Regression: Creating id2 should succeed (different ID), but loadState's prefix
 	// match on "abcdef2" will match id1 first, causing a false conflict.
 	_, err = rt.Create(&Config{ID: id2, Args: []string{"/bin/sh"}})
 	if err != nil {
-		t.Logf("BUG CONFIRMED: Create id2 failed due to prefix match: %v", err)
+		t.Errorf("Create id2 failed due to prefix match: %v", err)
 	}
 }
 
@@ -486,8 +484,7 @@ func TestLoadState_NameAnnotation(t *testing.T) {
 	}
 }
 
-// ─── Restart Policy Tests ──────────────────────────────────────────
-
+// Restart Policy Tests
 func TestRestartPolicy_OnFailure_DoubleIncrement(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -502,10 +499,10 @@ func TestRestartPolicy_OnFailure_DoubleIncrement(t *testing.T) {
 
 	rt.handleRestart(state, 1)
 
-	// BUG: RestartCount should be 1 after one restart attempt, but
-	// handleRestart increments it twice (once before the loop, once inside).
-	if state.RestartCount > 2 {
-		t.Errorf("BUG: RestartCount = %d, expected at most 2 (double-increment bug)", state.RestartCount)
+	// After removing the double increment, exactly one restart attempt should
+	// record exactly one RestartCount bump.
+	if state.RestartCount != 1 {
+		t.Errorf("RestartCount = %d, want 1 (one restart attempt)", state.RestartCount)
 	}
 }
 
@@ -557,7 +554,7 @@ func TestRestartPolicy_UnlessStopped_BehavesAsAlways(t *testing.T) {
 	}
 	close(state.ExitChan)
 
-	// BUG: "unless-stopped" checks state.Status != StateDead, but status is
+	// Regression: "unless-stopped" checks state.Status != StateDead, but status is
 	// always StateExited at this point (never StateDead). So it always restarts,
 	// making it identical to "always".
 	// We can't fully test this without actually starting, but we verify the
@@ -567,8 +564,7 @@ func TestRestartPolicy_UnlessStopped_BehavesAsAlways(t *testing.T) {
 	}
 }
 
-// ─── ExitChan / Stop Deadlock Tests ────────────────────────────────
-
+// ExitChan / Stop Deadlock Tests
 func TestStopUnlocked_ExitChanMismatch(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -599,10 +595,9 @@ func TestStopUnlocked_ExitChanMismatch(t *testing.T) {
 	// by monitorProcess (which holds a reference to the original state's ExitChan).
 }
 
-// ─── Signal Parsing Tests ──────────────────────────────────────────
-
+// Signal Parsing Tests
 func TestParseSignal_Numeric(t *testing.T) {
-	// BUG: parseSignal doesn't handle numeric signals like "15" or "9".
+	// Regression: parseSignal doesn't handle numeric signals like "15" or "9".
 	sig := parseSignal("15")
 	if sig != syscall.SIGTERM {
 		t.Errorf("parseSignal(\"15\") = %d, want %d (SIGTERM as default)", sig, syscall.SIGTERM)
@@ -639,15 +634,14 @@ func TestParseSignal_AllNamed(t *testing.T) {
 }
 
 func TestParseSignal_CaseInsensitive(t *testing.T) {
-	// BUG: parseSignal uses strings.ToUpper but input "sigterm" should work.
+	// Regression: parseSignal uses strings.ToUpper but input "sigterm" should work.
 	sig := parseSignal("sigterm")
 	if sig != syscall.SIGTERM {
 		t.Errorf("parseSignal(\"sigterm\") = %d, want %d", sig, syscall.SIGTERM)
 	}
 }
 
-// ─── User Parsing Tests ────────────────────────────────────────────
-
+// User Parsing Tests
 func TestParseUser_Variants(t *testing.T) {
 	tests := []struct {
 		input   string
@@ -672,8 +666,7 @@ func TestParseUser_Variants(t *testing.T) {
 	}
 }
 
-// ─── Log Rotation Tests ────────────────────────────────────────────
-
+// Log Rotation Tests
 func TestRotateLog_NoRotation(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -726,8 +719,7 @@ func TestRotateLog_MultipleRotations(t *testing.T) {
 	}
 }
 
-// ─── Concurrent Operations Tests ───────────────────────────────────
-
+// Concurrent Operations Tests
 func TestCreate_Concurrent(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -777,8 +769,7 @@ func TestList_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// ─── Healthcheck Tests ─────────────────────────────────────────────
-
+// Healthcheck Tests
 func TestHealthcheck_Defaults(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -796,8 +787,7 @@ func TestHealthcheck_ContainerNotFound(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 }
 
-// ─── Extra Hosts Parsing Tests ─────────────────────────────────────
-
+// Extra Hosts Parsing Tests
 func TestParseExtraHosts(t *testing.T) {
 	tests := []struct {
 		input []string
@@ -822,8 +812,7 @@ func TestParseExtraHosts(t *testing.T) {
 	}
 }
 
-// ─── Mode Detection Tests ──────────────────────────────────────────
-
+// Mode Detection Tests
 func TestDetectMode_NotEmpty(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -845,8 +834,7 @@ func TestIsAndroid(t *testing.T) {
 	}
 }
 
-// ─── Network Stats Tests ───────────────────────────────────────────
-
+// Network Stats Tests
 func TestGetNetworkStats(t *testing.T) {
 	stats := getNetworkStats()
 	if stats == nil {
@@ -857,8 +845,7 @@ func TestGetNetworkStats(t *testing.T) {
 	}
 }
 
-// ─── DNS Configuration Tests ───────────────────────────────────────
-
+// DNS Configuration Tests
 func TestCreate_ResolvConf(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -884,8 +871,7 @@ func TestCreate_ResolvConf(t *testing.T) {
 	}
 }
 
-// ─── Edge Cases ────────────────────────────────────────────────────
-
+// Edge Cases
 func TestCreate_NoArgs(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -988,8 +974,7 @@ func TestBuildCgroupConfig_WithResources(t *testing.T) {
 	}
 }
 
-// ─── GetLogs Tests ─────────────────────────────────────────────────
-
+// GetLogs Tests
 func TestGetLogs_NoLogPath(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -1033,8 +1018,7 @@ func TestGetLogs_WithTail(t *testing.T) {
 	}
 }
 
-// ─── Processes Tests ───────────────────────────────────────────────
-
+// Processes Tests
 func TestProcesses_NotRunning(t *testing.T) {
 	root := t.TempDir()
 	rt := newTestRuntime(t, root)
@@ -1048,8 +1032,7 @@ func TestProcesses_NotRunning(t *testing.T) {
 	}
 }
 
-// ─── Helper ────────────────────────────────────────────────────────
-
+// Helper
 func newTestRuntime(t *testing.T, root string) *Runtime {
 	t.Helper()
 	rt := &Runtime{

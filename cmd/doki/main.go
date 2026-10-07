@@ -95,7 +95,7 @@ func dispatch(c *cli.DokiCLI, name string, args []string) {
 		}
 	}
 	if !ok {
-		fmt.Fprintf(os.Stderr, "doki: '%s' is not a doki command.\n", name)
+		fmt.Fprintf(os.Stderr, "doki %s: not a doki command\n", name)
 		fmt.Fprintf(os.Stderr, "See 'doki --help'.\n")
 		os.Exit(1)
 	}
@@ -168,6 +168,10 @@ Options:
   -f, --filter   Filter output based on conditions
   --format       Format output using Go template`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
+			args, err := cli.NormalizeArgs(args, cli.PsShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki ps: %w", err)
+			}
 			if err := cli.ValidateFlags(args,
 				[]string{"-a", "--all", "-q", "--quiet", "-n", "--last", "-f", "--filter", "--format"},
 				[]string{"-n", "--last", "-f", "--filter", "--format"}); err != nil {
@@ -175,7 +179,10 @@ Options:
 			}
 			all := flagBool(args, "-a", "--all")
 			quiet := flagBool(args, "-q", "--quiet")
-			lastN := flagInt(args, "-n", "--last")
+			lastN, err := flagIntErr(args, "-n", "--last")
+			if err != nil {
+				return fmt.Errorf("doki ps: %w", err)
+			}
 			filter := flagStr(args, "-f", "--filter")
 			format := flagStr(args, "--format")
 			return c.Ps(all, quiet, false, filter, format, lastN, false)
@@ -187,12 +194,15 @@ Options:
 
 Create a new container without starting it.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			img, cmdArgs, f := cli.ParseRunFlags(args)
+			img, cmdArgs, f, err := cli.ParseRunFlags(args)
+			if err != nil {
+				return fmt.Errorf("doki create: %w", err)
+			}
 			id, err := c.Create(img, cmdArgs, f)
 			if err != nil {
 				return err
 			}
-			fmt.Println(id[:12])
+			fmt.Println(common.ShortID(id))
 			return nil
 		},
 	},
@@ -214,7 +224,10 @@ Stop one or more running containers.
 Options:
   -t, --time SECONDS  Seconds to wait for stop before killing (default 10)`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			timeout := flagInt(args, "-t", "--time")
+			timeout, err := flagIntErr(args, "-t", "--time")
+			if err != nil {
+				return fmt.Errorf("doki stop: %w", err)
+			}
 			ids := cleanIDs(args)
 			if len(ids) == 0 {
 				return fmt.Errorf("doki stop: requires at least 1 argument")
@@ -237,7 +250,10 @@ Restart one or more containers.
 Options:
   -t, --time SECONDS  Seconds to wait for stop before killing (default 10)`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			timeout := flagInt(args, "-t", "--time")
+			timeout, err := flagIntErr(args, "-t", "--time")
+			if err != nil {
+				return fmt.Errorf("doki restart: %w", err)
+			}
 			ids := cleanIDs(args)
 			if len(ids) == 0 {
 				return fmt.Errorf("doki restart: requires at least 1 argument")
@@ -260,6 +276,14 @@ Kill one or more running containers.
 Options:
   -s, --signal SIGNAL  Signal to send (default "KILL")`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
+			args, err := cli.NormalizeArgs(args, cli.KillShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki kill: %w", err)
+			}
+			if err := cli.ValidateFlags(args,
+				[]string{"-s", "--signal"}, []string{"-s", "--signal"}); err != nil {
+				return fmt.Errorf("doki kill: %w", err)
+			}
 			sig := flagStr(args, "-s", "--signal")
 			ids := cleanIDs(args)
 			if len(ids) == 0 {
@@ -284,9 +308,19 @@ Options:
   -f, --force   Force removal of running container
   -v, --volumes Remove anonymous volumes`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
+			args, err := cli.NormalizeArgs(args, cli.RmShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki rm: %w", err)
+			}
+			if err := cli.ValidateFlags(args,
+				[]string{"-f", "--force", "-v", "--volumes"}, nil); err != nil {
+				return fmt.Errorf("doki rm: %w", err)
+			}
 			force := flagBool(args, "-f", "--force")
 			volumes := flagBool(args, "-v", "--volumes")
-			ids := cleanIDs(args)
+			// -f and -v are BOOLEAN here, so strip them before cleanIDs (which
+			// treats -f/-v as value-taking flags in its global flagsWithValue set).
+			ids := cleanIDs(stripFlags(args, "-f", "--force", "-v", "--volumes"))
 			if len(ids) == 0 {
 				return fmt.Errorf("doki rm: requires at least 1 argument")
 			}
@@ -345,29 +379,30 @@ Options:
   -w, --workdir      Working directory inside the container
   -u, --user         Username or UID`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
+			args, err := cli.NormalizeArgs(args, cli.ExecShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki exec: %w", err)
+			}
+			if err := cli.ValidateFlags(args,
+				[]string{"-i", "--interactive", "-t", "--tty", "-d", "--detach", "-e", "--env", "-w", "--workdir", "-u", "--user"},
+				[]string{"-e", "--env", "-w", "--workdir", "-u", "--user"}); err != nil {
+				return fmt.Errorf("doki exec: %w", err)
+			}
 			tty := flagBool(args, "-t", "--tty")
 			detach := flagBool(args, "-d", "--detach")
 			interactive := flagBool(args, "-i", "--interactive")
 			env := flagStrSlice(args, "-e", "--env")
 			workdir := flagStr(args, "-w", "--workdir")
 			user := flagStr(args, "-u", "--user")
-			// Find container ID (first non-flag arg)
-			containerID := ""
-			execArgs := []string{}
-			foundContainer := false
-			for _, a := range args {
-				if !foundContainer && !strings.HasPrefix(a, "-") {
-					containerID = a
-					foundContainer = true
-					continue
-				}
-				if foundContainer {
-					execArgs = append(execArgs, a)
-				}
-			}
-			if containerID == "" {
+			// The container is the first positional argument (flag values are
+			// consumed so they are not mistaken for it); everything after it is
+			// the command to execute, flags included.
+			_, tail := splitAtPositional(args, "-e", "--env", "-w", "--workdir", "-u", "--user")
+			if len(tail) == 0 {
 				return fmt.Errorf("doki exec: requires at least 1 argument (container)")
 			}
+			containerID := tail[0]
+			execArgs := tail[1:]
 			if len(execArgs) == 0 {
 				return fmt.Errorf("doki exec: requires at least 1 argument (command)")
 			}
@@ -385,21 +420,27 @@ Options:
   -n, --tail N    Number of lines to show
   -t, --timestamps  Show timestamps`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			follow := flagBool(args, "-f", "--follow")
-			tail := flagInt(args, "-n", "--tail")
-			timestamps := flagBool(args, "-t", "--timestamps")
-			// Find container ID (first non-flag arg)
-			containerID := ""
-			for _, a := range args {
-				if !strings.HasPrefix(a, "-") {
-					containerID = a
-					break
-				}
+			args, err := cli.NormalizeArgs(args, cli.LogsShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki logs: %w", err)
 			}
-			if containerID == "" {
+			if err := cli.ValidateFlags(args,
+				[]string{"-f", "--follow", "-n", "--tail", "-t", "--timestamps", "--since", "--until"},
+				[]string{"-n", "--tail", "--since", "--until"}); err != nil {
+				return fmt.Errorf("doki logs: %w", err)
+			}
+			follow := flagBool(args, "-f", "--follow")
+			tail, err := flagIntErr(args, "-n", "--tail")
+			if err != nil {
+				return fmt.Errorf("doki logs: %w", err)
+			}
+			timestamps := flagBool(args, "-t", "--timestamps")
+			// The container is the first positional argument.
+			_, tailArgs := splitAtPositional(args, "-n", "--tail", "--since", "--until")
+			if len(tailArgs) == 0 {
 				return fmt.Errorf("doki logs: requires at least 1 argument (container)")
 			}
-			return c.Logs(containerID, follow, timestamps, tail, "")
+			return c.Logs(tailArgs[0], follow, timestamps, tail, "")
 		},
 	},
 	"stats": {
@@ -411,6 +452,13 @@ Display a live stream of container resource usage statistics.
 Options:
   --no-stream  Disable streaming stats and only pull the first result`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
+			args, err := cli.NormalizeArgs(args, cli.NoShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki stats: %w", err)
+			}
+			if err := cli.ValidateFlags(args, []string{"--no-stream"}, nil); err != nil {
+				return fmt.Errorf("doki stats: %w", err)
+			}
 			noStream := flagBool(args, "--no-stream")
 			return c.Stats(cleanIDs(args), noStream)
 		},
@@ -421,11 +469,17 @@ Options:
 
 Display the running processes of a container.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			ids := cleanIDs(args)
-			if len(ids) == 0 {
+			args, err := cli.NormalizeArgs(args, cli.NoShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki top: %w", err)
+			}
+			// The first positional is the container; the rest is ps(1) output
+			// selection and must not be validated as doki flags.
+			_, tail := splitAtPositional(args)
+			if len(tail) == 0 {
 				return fmt.Errorf("doki top: requires at least 1 argument (container)")
 			}
-			return c.Top(ids[0], "")
+			return c.Top(tail[0], "")
 		},
 	},
 	"inspect": {
@@ -454,20 +508,28 @@ Options:
 			author := flagStr(args, "-a", "--author")
 			message := flagStr(args, "-m", "--message")
 			pause := true
-			if flagBool(args, "--pause=false", "-p=false") {
+			// --pause accepts both the boolean and value forms: "--pause=false",
+			// "-p=false", and "--pause false" / "-p false" (space-separated).
+			if p := flagStr(args, "-p", "--pause"); p == "false" || p == "0" {
 				pause = false
 			}
-			if len(args) >= 2 {
-				repoTag := args[1]
-				parts := strings.SplitN(repoTag, ":", 2)
-				repo := parts[0]
-				tag := ""
+			// Strip commit's own flags (and their values) before cleanIDs extracts
+			// the positional CONTAINER [REPOSITORY[:TAG]] arguments. -a/--author,
+			// -m/--message and -p/--pause are not all in the global flagsWithValue
+			// set, so removing them here keeps their values out of the ID list.
+			ids := cleanIDs(stripValueFlags(args, "-a", "--author", "-m", "--message", "-p", "--pause"))
+			if len(ids) == 0 {
+				return fmt.Errorf("doki commit: requires CONTAINER")
+			}
+			repo, tag := "", ""
+			if len(ids) > 1 {
+				parts := strings.SplitN(ids[1], ":", 2)
+				repo = parts[0]
 				if len(parts) > 1 {
 					tag = parts[1]
 				}
-				return c.Commit(args[0], repo, tag, author, message, pause, nil)
 			}
-			return nil
+			return c.Commit(ids[0], repo, tag, author, message, pause, nil)
 		},
 	},
 	"diff": {
@@ -500,10 +562,15 @@ List port mappings for the container.`,
 
 Rename a container.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			if len(args) >= 2 {
-				return c.Rename(args[0], args[1])
+			args, err := cli.NormalizeArgs(args, cli.NoShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki rename: %w", err)
 			}
-			return nil
+			_, tail := splitAtPositional(args)
+			if len(tail) < 2 {
+				return fmt.Errorf("doki rename: requires CONTAINER and NEW_NAME")
+			}
+			return c.Rename(tail[0], tail[1])
 		},
 	},
 	"update": {
@@ -517,9 +584,15 @@ Update configuration of one or more containers.`,
 			// first non-flag token as the positional) instead of assuming the
 			// container is args[0] — that made `update --memory 64m CID` try to
 			// operate on a container literally named "--memory".
-			container, _, f := cli.ParseRunFlags(args)
+			container, rest, f, err := cli.ParseRunFlags(args)
+			if err != nil {
+				return fmt.Errorf("doki update: %w", err)
+			}
 			if container == "" {
-				return fmt.Errorf("update requires a container")
+				return fmt.Errorf("doki update: requires a container")
+			}
+			if len(rest) > 0 {
+				return fmt.Errorf("doki update: unexpected argument %q (update takes a single container)", rest[0])
 			}
 			return c.Update(container, f)
 		},
@@ -570,21 +643,29 @@ Options:
 
 Copy files/folders between a container and the local filesystem.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			if len(args) >= 2 {
-				if strings.Contains(args[0], ":") {
-					parts := strings.SplitN(args[0], ":", 2)
-					destPath := args[1]
-					if len(args) >= 3 {
-						destPath = args[2]
-					}
-					return c.Cp(parts[0], parts[1], destPath, false, false)
-				} else if strings.Contains(args[1], ":") {
-					parts := strings.SplitN(args[1], ":", 2)
-					return c.CpToContainer(parts[0], args[0], parts[1], false, false)
-				}
-				return fmt.Errorf("doki cp: must specify container path with CONTAINER:PATH")
+			args, err := cli.NormalizeArgs(args, cli.CpShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki cp: %w", err)
 			}
-			return nil
+			if err := cli.ValidateFlags(args, []string{"-a", "--archive", "-L", "--follow-link"}, nil); err != nil {
+				return fmt.Errorf("doki cp: %w", err)
+			}
+			_, tail := splitAtPositional(args)
+			if len(tail) < 2 {
+				return fmt.Errorf("doki cp: requires SOURCE and DEST")
+			}
+			if strings.Contains(tail[0], ":") {
+				parts := strings.SplitN(tail[0], ":", 2)
+				destPath := tail[1]
+				if len(tail) >= 3 {
+					destPath = tail[2]
+				}
+				return c.Cp(parts[0], parts[1], destPath, false, false)
+			} else if strings.Contains(tail[1], ":") {
+				parts := strings.SplitN(tail[1], ":", 2)
+				return c.CpToContainer(parts[0], tail[0], parts[1], false, false)
+			}
+			return fmt.Errorf("doki cp: must specify container path with CONTAINER:PATH")
 		},
 	},
 	"attach": {
@@ -593,15 +674,24 @@ Copy files/folders between a container and the local filesystem.`,
 
 Attach local standard input, output, and error streams to a running container.`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			if len(args) > 0 {
-				return c.Attach(args[0], "", "")
+			args, err := cli.NormalizeArgs(args, cli.NoShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki attach: %w", err)
 			}
-			return nil
+			if err := cli.ValidateFlags(args,
+				[]string{"--no-stdin", "--sig-proxy"}, nil); err != nil {
+				return fmt.Errorf("doki attach: %w", err)
+			}
+			_, tail := splitAtPositional(args)
+			if len(tail) == 0 {
+				return fmt.Errorf("doki attach: requires at least 1 argument (container)")
+			}
+			return c.Attach(tail[0], "", "")
 		},
 	},
 	"prune": {
 		Name: "prune",
-		Help: `Usage: doki container prune [OPTIONS]
+		Help: `Usage: doki prune [OPTIONS]
 
 Remove all stopped containers.
 
@@ -682,7 +772,7 @@ Options:
   -f, --force  Force removal of the image`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
 			force := flagBool(args, "-f", "--force")
-			return c.Rmi(cleanIDs(args), force, false)
+			return c.Rmi(cleanIDs(stripFlags(args, "-f", "--force")), force, false)
 		},
 	},
 	"tag": {
@@ -771,33 +861,34 @@ Options:
   -q, --quiet              Suppress build output
   --target STAGE           Set target build stage`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
+			args, err := cli.NormalizeArgs(args, cli.BuildShortFlags)
+			if err != nil {
+				return fmt.Errorf("doki build: %w", err)
+			}
+			if err := cli.ValidateFlags(args,
+				[]string{"-f", "--file", "-t", "--tag", "--build-arg", "--no-cache", "--pull", "-q", "--quiet", "--target", "--rm"},
+				[]string{"-f", "--file", "-t", "--tag", "--build-arg", "--target"}); err != nil {
+				return fmt.Errorf("doki build: %w", err)
+			}
 			tags := flagStrSlice(args, "-t", "--tag")
 			f := flagStr(args, "-f", "--file")
 			noCache := flagBool(args, "--no-cache")
 			pull := flagBool(args, "--pull")
 			quiet := flagBool(args, "-q", "--quiet")
-			rmFlag := !flagBool(args, "--rm=false")
+			// "--rm=false" keeps intermediate containers; the default removes them.
+			rmFlag := true
+			for _, a := range args {
+				if name, val, has := cli.SplitFlag(a); has && name == "--rm" && (val == "false" || val == "0") {
+					rmFlag = false
+				}
+			}
 			buildArgs := flagMap(args, "--build-arg")
 			target := flagStr(args, "--target")
+			// The build context is the first positional argument.
 			contextDir := "."
-			skip := 0
-			for _, a := range args {
-				if skip > 0 {
-					skip--
-					continue
-				}
-				if a == "-t" || a == "--tag" || a == "-f" || a == "--file" || a == "--build-arg" || a == "--target" {
-					skip = 1
-					continue
-				}
-				if strings.HasPrefix(a, "-") && strings.Contains(a, "=") {
-					continue
-				}
-				if strings.HasPrefix(a, "-") {
-					continue
-				}
-				contextDir = a
-				break
+			_, tail := splitAtPositional(args, "-f", "--file", "-t", "--tag", "--build-arg", "--target")
+			if len(tail) > 0 {
+				contextDir = tail[0]
 			}
 			return c.Build(contextDir, f, tags, buildArgs, noCache, pull, quiet, rmFlag, target)
 		},
@@ -811,7 +902,10 @@ Search Docker Hub for images.
 Options:
   --limit N  Maximum number of results (default 25)`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
-			limit := flagInt(args, "--limit")
+			limit, err := flagIntErr(args, "--limit")
+			if err != nil {
+				return fmt.Errorf("doki search: %w", err)
+			}
 			if len(args) > 0 {
 				return c.Search(args[0], limit, false, 0)
 			}
@@ -896,12 +990,18 @@ Commands:
   ls           List known peers
   status       Show local install id and CA fingerprint`,
 		Handler: func(c *cli.DokiCLI, args []string) error {
+			meshLs := func() error {
+				if err := c.MeshLs(); err != nil {
+					return fmt.Errorf("doki mesh: %w", err)
+				}
+				return nil
+			}
 			if len(args) == 0 {
-				return c.MeshLs()
+				return meshLs()
 			}
 			switch args[0] {
 			case "ls", "list":
-				return c.MeshLs()
+				return meshLs()
 			case "status":
 				return c.MeshStatus()
 			default:
@@ -943,6 +1043,8 @@ Example:
 				return c.LinkRemove(args[1])
 			case "show", "ls":
 				return c.LinkShow()
+			case "status":
+				return c.MeshStatus()
 			default:
 				return fmt.Errorf("doki link: '%s' is not a valid subcommand", args[0])
 			}
@@ -1147,7 +1249,8 @@ Scan an image for known vulnerabilities (stub).`,
 		},
 	},
 	"emu": {
-		Name: "emu",
+		Name:    "emu",
+		Aliases: []string{"emulator"},
 		Help: `Usage: doki emu COMMAND [OPTIONS]
 
 Configure QEMU/FEX/Box64 cross-architecture emulation.
@@ -1263,8 +1366,9 @@ func init() {
 
 func handleNetwork(c *cli.DokiCLI, args []string) error {
 	if len(args) == 0 {
-		return nil
+		return fmt.Errorf("doki network: requires a subcommand (ls, create, rm, inspect, connect, disconnect, prune)")
 	}
+	args = normalizeArgv(args)
 	switch args[0] {
 	case "ls", "list":
 		return c.NetworkLs(false, false, "", "")
@@ -1295,19 +1399,25 @@ func handleNetwork(c *cli.DokiCLI, args []string) error {
 		}
 		return c.NetworkCreate(name, driver, false, false, subnet, gw, nil)
 	case "rm", "remove":
+		if len(args) < 2 {
+			return fmt.Errorf("doki network rm: requires at least 1 argument (network)")
+		}
 		return c.NetworkRm(args[1:])
 	case "inspect":
+		if len(args) < 2 {
+			return fmt.Errorf("doki network inspect: requires at least 1 argument (network)")
+		}
 		return c.NetworkInspect(args[1:])
 	case "connect":
-		if len(args) >= 3 {
-			return c.NetworkConnect(args[1], args[2], nil)
+		if len(args) < 3 {
+			return fmt.Errorf("doki network connect: requires NETWORK and CONTAINER")
 		}
-		return nil
+		return c.NetworkConnect(args[1], args[2], nil)
 	case "disconnect":
-		if len(args) >= 3 {
-			return c.NetworkDisconnect(args[1], args[2], false)
+		if len(args) < 3 {
+			return fmt.Errorf("doki network disconnect: requires NETWORK and CONTAINER")
 		}
-		return nil
+		return c.NetworkDisconnect(args[1], args[2], false)
 	case "prune":
 		return c.NetworkPrune("")
 	default:
@@ -1317,8 +1427,9 @@ func handleNetwork(c *cli.DokiCLI, args []string) error {
 
 func handleVolume(c *cli.DokiCLI, args []string) error {
 	if len(args) == 0 {
-		return nil
+		return fmt.Errorf("doki volume: requires a subcommand (ls, create, rm, inspect, prune)")
 	}
+	args = normalizeArgv(args)
 	switch args[0] {
 	case "ls", "list":
 		return c.VolumeLs(false, "")
@@ -1342,8 +1453,14 @@ func handleVolume(c *cli.DokiCLI, args []string) error {
 		}
 		return c.VolumeCreate(name, driver, nil, nil)
 	case "rm", "remove":
+		if len(args) < 2 {
+			return fmt.Errorf("doki volume rm: requires at least 1 argument (volume)")
+		}
 		return c.VolumeRm(args[1:], false)
 	case "inspect":
+		if len(args) < 2 {
+			return fmt.Errorf("doki volume inspect: requires at least 1 argument (volume)")
+		}
 		return c.VolumeInspect(args[1:])
 	case "prune":
 		return c.VolumePrune("")
@@ -1354,7 +1471,7 @@ func handleVolume(c *cli.DokiCLI, args []string) error {
 
 func handleSystem(c *cli.DokiCLI, args []string) error {
 	if len(args) == 0 {
-		return nil
+		return fmt.Errorf("doki system: requires a subcommand (info, df, prune, events, dial-stdio)")
 	}
 	switch args[0] {
 	case "info":
@@ -1390,10 +1507,13 @@ func handleSystem(c *cli.DokiCLI, args []string) error {
 
 func handlePod(c *cli.DokiCLI, args []string) error {
 	if len(args) == 0 {
-		return nil
+		return fmt.Errorf("doki pod: requires a subcommand (create, ps, rm, start, stop)")
 	}
 	switch args[0] {
 	case "create":
+		if len(args) < 2 {
+			return fmt.Errorf("doki pod create: requires a pod name")
+		}
 		_, err := c.PodCreate(args[1], nil)
 		return err
 	case "ps", "ls", "list":
@@ -1404,13 +1524,14 @@ func handlePod(c *cli.DokiCLI, args []string) error {
 		return c.PodStart(args[1:])
 	case "stop":
 		return c.PodStop(args[1:])
+	default:
+		return fmt.Errorf("doki pod: '%s' is not a valid subcommand", args[0])
 	}
-	return nil
 }
 
 func handleGenerate(c *cli.DokiCLI, args []string) error {
 	if len(args) == 0 {
-		return nil
+		return fmt.Errorf("doki generate: requires a subcommand (kube, systemd)")
 	}
 	switch args[0] {
 	case "kube":
@@ -1425,34 +1546,43 @@ func handleGenerate(c *cli.DokiCLI, args []string) error {
 			}
 		}
 		return c.GenerateKube(containerID, true)
+	case "systemd":
+		return fmt.Errorf("E501: doki generate systemd: not yet implemented (Hint: use 'doki generate kube' for Kubernetes YAML)")
+	default:
+		return fmt.Errorf("doki generate: '%s' is not a valid subcommand", args[0])
 	}
-	return nil
 }
 
 func handlePlay(c *cli.DokiCLI, args []string) error {
 	if len(args) < 1 {
-		return nil
+		return fmt.Errorf("doki play: requires a YAML file argument")
 	}
 	return c.KubePlay(args[0])
 }
 
 func handleKube(c *cli.DokiCLI, args []string) error {
 	if len(args) == 0 {
-		return nil
+		return fmt.Errorf("doki kube: requires a subcommand (play, down, generate)")
 	}
 	switch args[0] {
 	case "play":
 		if len(args) > 1 {
 			return c.KubePlay(args[1])
 		}
+		return fmt.Errorf("doki kube play: requires a YAML file argument")
 	case "down":
 		if len(args) > 1 {
 			return c.KubeDown(args[1])
 		}
+		return fmt.Errorf("doki kube down: requires a YAML file argument")
 	case "generate":
-		return c.KubeGenerate(args[1])
+		if len(args) > 1 {
+			return c.KubeGenerate(args[1])
+		}
+		return fmt.Errorf("doki kube generate: requires a resource type")
+	default:
+		return fmt.Errorf("doki kube: '%s' is not a valid subcommand", args[0])
 	}
-	return nil
 }
 
 func handleEmu(_ *cli.DokiCLI, args []string) error {
@@ -1627,6 +1757,10 @@ func depsGo() error {
 	return w.Flush()
 }
 
+// handleError prints err and exits with status 1 (or the process exit code
+// carried by *cli.ExitError). Error messages are printed with the "doki"
+// command prefix; messages that already carry one ("doki ps: ...") are printed
+// as-is so the format stays "doki <cmd>: <message>".
 func handleError(err error) {
 	if err == nil {
 		return
@@ -1635,7 +1769,12 @@ func handleError(err error) {
 	if errors.As(err, &exitErr) {
 		os.Exit(exitErr.Code)
 	}
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	msg := err.Error()
+	if strings.HasPrefix(msg, "doki ") || strings.HasPrefix(msg, "doki:") {
+		fmt.Fprintln(os.Stderr, msg)
+	} else {
+		fmt.Fprintf(os.Stderr, "doki: %s\n", msg)
+	}
 	os.Exit(1)
 }
 
@@ -1690,19 +1829,20 @@ func printCommandHelp(cmd string) {
 	}
 }
 
+// flagBool reports whether any of the given flags is present. Both the
+// "--flag" and "--flag=true|false" forms are recognized (name matching goes
+// through cli.SplitFlag so every helper agrees on what a flag's name is).
 func flagBool(args []string, names ...string) bool {
 	for _, n := range names {
 		for _, a := range args {
-			if a == n {
+			name, val, hasValue := cli.SplitFlag(a)
+			if name != n {
+				continue
+			}
+			if !hasValue {
 				return true
 			}
-			if strings.HasPrefix(a, n+"=") {
-				val := strings.TrimPrefix(a, n+"=")
-				if val == "false" || val == "0" {
-					return false
-				}
-				return true
-			}
+			return val != "false" && val != "0"
 		}
 	}
 	return false
@@ -1711,11 +1851,15 @@ func flagBool(args []string, names ...string) bool {
 func flagStr(args []string, names ...string) string {
 	for _, n := range names {
 		for i, a := range args {
-			if a == n && i+1 < len(args) {
-				return args[i+1]
+			name, val, hasValue := cli.SplitFlag(a)
+			if name != n {
+				continue
 			}
-			if strings.HasPrefix(a, n+"=") {
-				return strings.TrimPrefix(a, n+"=")
+			if hasValue {
+				return val
+			}
+			if i+1 < len(args) {
+				return args[i+1]
 			}
 		}
 	}
@@ -1723,23 +1867,39 @@ func flagStr(args []string, names ...string) string {
 }
 
 func flagInt(args []string, names ...string) int {
+	v, _ := flagIntErr(args, names...)
+	return v
+}
+
+// flagIntErr is flagInt with an explicit error: a present-but-unparseable
+// value (e.g. `doki ps -n foo`) is reported as `doki <cmd>`-style context by
+// the caller instead of silently becoming 0.
+func flagIntErr(args []string, names ...string) (int, error) {
 	s := flagStr(args, names...)
-	if s != "" {
-		v, _ := strconv.Atoi(s)
-		return v
+	if s == "" {
+		return 0, nil
 	}
-	return 0
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid value %q for %s", s, names[len(names)-1])
+	}
+	return v, nil
 }
 
 func flagStrSlice(args []string, names ...string) []string {
 	var result []string
 	for _, n := range names {
 		for i, a := range args {
-			if a == n && i+1 < len(args) {
-				result = append(result, args[i+1])
+			name, val, hasValue := cli.SplitFlag(a)
+			if name != n {
+				continue
 			}
-			if strings.HasPrefix(a, n+"=") {
-				result = append(result, strings.TrimPrefix(a, n+"="))
+			if hasValue {
+				result = append(result, val)
+				continue
+			}
+			if i+1 < len(args) {
+				result = append(result, args[i+1])
 			}
 		}
 	}
@@ -1750,27 +1910,32 @@ func flagMap(args []string, names ...string) map[string]string {
 	result := make(map[string]string)
 	for _, n := range names {
 		for i, a := range args {
-			if a == n && i+1 < len(args) {
-				k, v, ok := strings.Cut(args[i+1], "=")
-				if ok {
-					result[k] = v
+			name, val, hasValue := cli.SplitFlag(a)
+			if name != n {
+				continue
+			}
+			if !hasValue {
+				if i+1 < len(args) {
+					val = args[i+1]
+				} else {
+					continue
 				}
 			}
-			if strings.HasPrefix(a, n+"=") {
-				k, v, ok := strings.Cut(strings.TrimPrefix(a, n+"="), "=")
-				if ok {
-					result[k] = v
-				}
+			k, v, ok := strings.Cut(val, "=")
+			if ok {
+				result[k] = v
 			}
 		}
 	}
 	return result
 }
 
-// flagsWithValue lists flags that ALWAYS consume the next argument as their value.
-// Short flags like -f, -t, -s are AMBIGUOUS (e.g., -f means --filter in "ps" but
-// --force in "rm") so they are intentionally excluded. Only unambiguous long forms
-// and short forms that never collide with boolean flags are listed here.
+// flagsWithValue lists flags that ALWAYS consume the next argument as their value
+// when cleanIDs strips them out of an argv. This includes the short forms (-t, -s,
+// -f, -p, -o, -i, -m, -e, -v, -u, -w, -c) so positional IDs are not mistaken for
+// flag values. Because a few of these short forms are BOOLEAN in specific commands
+// (e.g. -f/--force in rm, -v/--volumes in rm), those handlers must strip their
+// boolean flags with stripFlags before calling cleanIDs.
 var flagsWithValue = map[string]bool{
 	"--format": true,
 	"--filter": true,
@@ -1782,8 +1947,23 @@ var flagsWithValue = map[string]bool{
 	"--latest": true,
 	"--time":   true,
 	"--signal": true,
+	"-t":       true,
+	"-s":       true,
+	"-f":       true,
+	"-p":       true,
+	"-o":       true,
+	"-i":       true,
+	"-m":       true,
+	"-e":       true,
+	"-v":       true,
+	"-u":       true,
+	"-w":       true,
+	"-c":       true,
 }
 
+// cleanIDs extracts the positional IDs from args. Flag names are matched with
+// cli.SplitFlag, so "--flag=value" and "--flag value" behave the same and a
+// flag's value is never mistaken for a container/image ID.
 func cleanIDs(args []string) []string {
 	var ids []string
 	skipNext := false
@@ -1792,13 +1972,14 @@ func cleanIDs(args []string) []string {
 			skipNext = false
 			continue
 		}
-		if strings.HasPrefix(a, "-") {
-			// If this is a flag with a = value, skip the whole thing.
-			if strings.Contains(a, "=") {
+		if strings.HasPrefix(a, "-") && a != "-" {
+			name, _, hasValue := cli.SplitFlag(a)
+			if hasValue {
+				// "--flag=value": value travels with the flag.
 				continue
 			}
 			// Only skip the next argument if this flag is known to take a value.
-			if flagsWithValue[a] && i+1 < len(args) {
+			if flagsWithValue[name] && i+1 < len(args) {
 				skipNext = true
 			}
 			continue
@@ -1806,6 +1987,93 @@ func cleanIDs(args []string) []string {
 		ids = append(ids, a)
 	}
 	return ids
+}
+
+// normalizeArgv rewrites "--key=value" tokens into two tokens ("--key", "value")
+// so the manual flag loops in handleNetwork/handleVolume/build can parse both the
+// space-separated and equals forms uniformly. Short flags and bare positionals are
+// left untouched.
+func normalizeArgv(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "--") && strings.Contains(a, "=") {
+			key, val, _ := strings.Cut(a, "=")
+			out = append(out, key, val)
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// stripFlags removes the given BOOLEAN flags (and their "--flag=false" form) from
+// args, leaving the positional arguments. It is used by commands whose short flags
+// collide with the value-taking entries in flagsWithValue, so cleanIDs does not
+// swallow the next positional argument as a flag value. Flag names are matched
+// with cli.SplitFlag so "--flag=false" is recognized as the same flag.
+func stripFlags(args []string, names ...string) []string {
+	drop := make(map[string]bool, len(names))
+	for _, n := range names {
+		drop[n] = true
+	}
+	var out []string
+	for _, a := range args {
+		name, _, _ := cli.SplitFlag(a)
+		if drop[name] {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// stripValueFlags removes the given VALUE-taking flags and the argument that
+// follows each, returning the remaining positional arguments. It is used for
+// flags not present in the global flagsWithValue set (e.g. commit's -a/--author).
+func stripValueFlags(args []string, names ...string) []string {
+	vals := make(map[string]bool, len(names))
+	for _, n := range names {
+		vals[n] = true
+	}
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		name, _, hasValue := cli.SplitFlag(a)
+		if vals[name] {
+			if !hasValue && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// splitAtPositional splits args at its first positional argument. Flags listed
+// in valueFlags consume the following argument as their value, so values such
+// as the "FOO=1" of `-e FOO=1` are never mistaken for positionals. head is the
+// flag section, tail starts at the first positional (the container, image or
+// context) and includes the command arguments that follow it.
+func splitAtPositional(args []string, valueFlags ...string) (head, tail []string) {
+	vals := make(map[string]bool, len(valueFlags))
+	for _, n := range valueFlags {
+		vals[n] = true
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return args[:i], args[i+1:]
+		}
+		if a == "-" || !strings.HasPrefix(a, "-") {
+			return args[:i], args[i:]
+		}
+		name, _, hasValue := cli.SplitFlag(a)
+		if vals[name] && !hasValue && i+1 < len(args) {
+			i++
+		}
+	}
+	return args, nil
 }
 
 // runWithDistro runs a command inside a predefined distro rootfs using proot.

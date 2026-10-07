@@ -1,3 +1,5 @@
+//go:build !freebsd
+
 // Package cgroups provides cgroup management for containers.
 package cgroups
 
@@ -7,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/OpceanAI/Doki/pkg/common"
 )
@@ -35,7 +38,7 @@ type Config struct {
 
 // NewManager creates a new cgroup manager.
 func NewManager(root string) *Manager {
-	enabled := isCgroupV2()
+	enabled := isCgroupV2() && probeCgroupV2(root)
 	return &Manager{
 		root:    root,
 		enabled: enabled,
@@ -48,6 +51,25 @@ func isCgroupV2() bool {
 		return false
 	}
 	return strings.Contains(string(data), "cgroup2")
+}
+
+// probeCgroupV2 verifies that the cgroup v2 hierarchy is actually usable, not
+// merely listed in /proc/filesystems. On Android/Termux the filesystem is
+// frequently mounted read-only or unprivileged, so "cgroup2" being present is
+// not enough to claim that limits can be enforced. A failed probe disables the
+// manager so Create/Update degrade gracefully instead of half-applying limits.
+func probeCgroupV2(root string) bool {
+	// Creating the cgroup root exercises the mkdir path.
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return false
+	}
+	// Writing cgroup.subtree_control exercises the controller-delegation path
+	// that Create depends on to enable cpu/memory/pids/io for containers.
+	controllers := "+cpu +memory +pids +io"
+	if err := os.WriteFile(filepath.Join(root, "cgroup.subtree_control"), []byte(controllers), 0644); err != nil {
+		return false
+	}
+	return true
 }
 
 // IsAvailable checks if cgroups v2 is available.
@@ -204,7 +226,9 @@ func (m *Manager) Destroy(containerID string) error {
 // one resource was updated.
 func (m *Manager) Update(containerID string, cfg *Config) error {
 	if !m.enabled {
-		return nil
+		// Signal "operation not supported" instead of silently pretending the
+		// update succeeded. Callers that care use IsAvailable first.
+		return syscall.EOPNOTSUPP
 	}
 	cgroupPath := filepath.Join(m.root, containerID)
 	// Capture previous values for rollback.

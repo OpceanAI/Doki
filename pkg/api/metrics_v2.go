@@ -214,7 +214,7 @@ func MetricsHandlerV2(w http.ResponseWriter, _ *http.Request) {
 	writeGauge(w, "doki_avg_request_ms", int64(snap.AvgRequestMs), "Average request duration in ms")
 }
 
-// HealthHandlerV2 returns comprehensive health status.
+// HealthHandlerV2 reports health status.
 func HealthHandlerV2(w http.ResponseWriter, _ *http.Request) {
 	snap := metrics.Snapshot()
 

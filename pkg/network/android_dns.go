@@ -2,16 +2,21 @@ package network
 
 import (
 	"net"
+	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 )
 
 // AndroidDNSServers discovers DNS servers on Android via getprop.
 // Android does not use /etc/resolv.conf — DNS is managed by netd.
+//
+// Detection no longer relies on GOOS (Termux reports "linux" even though it
+// runs on Android); it uses the /system/build.prop marker or a set PREFIX env
+// var instead.
+//
 // Returns servers as "host:port" strings suitable for upstream dialing.
 func AndroidDNSServers() []string {
-	if runtime.GOOS != "android" {
+	if !isAndroidSystem() {
 		return nil
 	}
 	var servers []string
@@ -26,6 +31,18 @@ func AndroidDNSServers() []string {
 		}
 	}
 	return servers
+}
+
+// isAndroidSystem reports whether we are running on an Android system,
+// detected via the /system/build.prop marker or a set PREFIX (Termux).
+func isAndroidSystem() bool {
+	if _, err := os.Stat("/system/build.prop"); err == nil {
+		return true
+	}
+	if os.Getenv("PREFIX") != "" {
+		return true
+	}
+	return false
 }
 
 func getProp(name string) string {

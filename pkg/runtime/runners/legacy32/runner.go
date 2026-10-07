@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/OpceanAI/Doki/internal/proot"
 	"github.com/OpceanAI/Doki/pkg/common"
 	rt "github.com/OpceanAI/Doki/pkg/runtime"
 )
@@ -39,7 +40,20 @@ func New(root string) *Runner {
 func (r *Runner) Name() rt.ExecutionMode { return rt.ModeLegacy32 }
 
 // Detect checks if this runner is available on the current host.
-func (r *Runner) Detect() bool { return true }
+// Honest: true only when 32-bit compat, a QEMU user-mode binary (or
+// binfmt_misc registration), or proot is available.
+func (r *Runner) Detect() bool {
+	if r.canCompat {
+		return true
+	}
+	if haveQEMUEmulator() {
+		return true
+	}
+	if binfmtRegistered("arm") || binfmtRegistered("i386") {
+		return true
+	}
+	return proot.IsAvailable()
+}
 
 // Capabilities returns the runner capabilities.
 func (r *Runner) Capabilities() rt.RunnerCapabilities {
@@ -79,8 +93,45 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 	}
 	targetArch := r.detectArch(state.Config)
 
-	// If host can run 32-bit natively (kernel compat).
+	// If host can run 32-bit natively (kernel compat), still contain the
+	// process: prefer proot -r, then chroot (root only). Direct host exec
+	// without containment would bypass the rootfs.
 	if r.canCompat && is32Bit(targetArch) {
+		if bin := proot.FindProotBinary(); bin != "" {
+			prootArgs, err := proot.BuildProotBaseArgs(rootfsDir, -1, -1)
+			if err == nil {
+				prootArgs = append(prootArgs, args...)
+				cmd := exec.CommandContext(ctx, bin, prootArgs...)
+				cmd.Dir = "/"
+				cmd.Env = proot.BuildEnv(proot.SanitizedEnvForCmd(state.Config.Env), nil)
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				cmd.Stdin = os.Stdin
+				if err := cmd.Start(); err != nil {
+					return 0, err
+				}
+				r.cmd = cmd
+				r.log.Info("legacy32 native via proot", "id", common.ShortID(id), "pid", cmd.Process.Pid, "arch", targetArch)
+				return cmd.Process.Pid, nil
+			}
+		}
+		if os.Geteuid() == 0 {
+			if _, err := exec.LookPath("chroot"); err == nil {
+				chrootArgs := append([]string{rootfsDir}, args...)
+				cmd := exec.CommandContext(ctx, "chroot", chrootArgs...)
+				cmd.Dir = "/"
+				cmd.Env = state.Config.Env
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				cmd.Stdin = os.Stdin
+				if err := cmd.Start(); err != nil {
+					return 0, err
+				}
+				r.cmd = cmd
+				r.log.Info("legacy32 native via chroot", "id", common.ShortID(id), "pid", cmd.Process.Pid, "arch", targetArch)
+				return cmd.Process.Pid, nil
+			}
+		}
 		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 		cmd.Dir = rootfsDir
 		cmd.Env = state.Config.Env
@@ -95,8 +146,9 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 		return cmd.Process.Pid, nil
 	}
 
-	// Fallback: use QEMU user-mode.
-	qemuBin := "qemu-" + targetArch + "-static"
+	// Fallback: use QEMU user-mode. Map the Go arch name to the QEMU
+	// binary name: "armv7" is not a QEMU target, it is "arm".
+	qemuBin := "qemu-" + qemuArchName(targetArch) + "-static"
 	if p, err := exec.LookPath(qemuBin); err == nil {
 		qemuArgs := []string{"-L", rootfsDir}
 		qemuArgs = append(qemuArgs, args...)
@@ -254,6 +306,54 @@ func canRun32Bit() bool {
 
 func is32Bit(arch string) bool {
 	return arch == "armv7" || arch == "arm" || arch == "386" || arch == "i386"
+}
+
+// haveQEMUEmulator reports whether any 32-bit QEMU user-mode binary is in PATH.
+func haveQEMUEmulator() bool {
+	for _, bin := range []string{"qemu-arm-static", "qemu-i386-static", "qemu-arm", "qemu-i386"} {
+		if _, err := exec.LookPath(bin); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// binfmtRegistered reports whether a binfmt_misc entry for the given QEMU
+// target exists (e.g. /proc/sys/fs/binfmt_misc/qemu-arm).
+func binfmtRegistered(target string) bool {
+	for _, p := range []string{
+		"/proc/sys/fs/binfmt_misc/qemu-" + target,
+		"/proc/sys/fs/binfmt_misc/qemu_" + target,
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// qemuArchName maps a Go/arch-platform name to the QEMU user-mode binary
+// suffix. Go says "armv7" and "386"; QEMU binaries are "qemu-arm-static" and
+// "qemu-i386-static".
+func qemuArchName(arch string) string {
+	switch arch {
+	case "armv7", "armv6", "arm":
+		return "arm"
+	case "arm64", "aarch64":
+		return "aarch64"
+	case "386", "i386":
+		return "i386"
+	case "amd64", "x86_64":
+		return "x86_64"
+	case "riscv64":
+		return "riscv64"
+	case "s390x":
+		return "s390x"
+	case "ppc64le":
+		return "ppc64le"
+	default:
+		return arch
+	}
 }
 
 var _ rt.ContainerRunner = (*Runner)(nil)

@@ -200,8 +200,7 @@ func (r *Runner) loadState(id string) (*rt.ContainerState, error) {
 	return &s, nil
 }
 
-// ─── WasmEdge backend ─────────────────────────────────────────────
-
+// WasmEdge backend
 // WasmEdgeBackend is a WASM backend using the WasmEdge runtime.
 type WasmEdgeBackend struct{ binPath string }
 
@@ -246,8 +245,7 @@ func (b *WasmEdgeBackend) Stop(pid int) error {
 	return p.Kill()
 }
 
-// ─── WAMR backend ─────────────────────────────────────────────────
-
+// WAMR backend
 // WAMRBackend is a WASM backend using the WAMR (iwasm) runtime.
 type WAMRBackend struct{ binPath string }
 
@@ -287,8 +285,7 @@ func (b *WAMRBackend) Stop(pid int) error {
 	return p.Kill()
 }
 
-// ─── Wasmtime backend ─────────────────────────────────────────────
-
+// Wasmtime backend
 // WasmtimeBackend is a WASM backend using the Wasmtime runtime.
 type WasmtimeBackend struct{ binPath string }
 

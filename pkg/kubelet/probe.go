@@ -6,8 +6,12 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	v1 "k8s.io/cri-api/pkg/apis/runtime/v1"
 
 	k8s "github.com/OpceanAI/Doki/pkg/k8s-types"
@@ -77,22 +81,237 @@ func min32(a, b int32) int32 {
 	return b
 }
 
-// containerReady evaluates a container's readiness (K13). With no readiness
-// probe, a running container is ready (Kubernetes default). With a probe, it is
-// ready only once the probe passes — but not before InitialDelaySeconds has
-// elapsed since the container started.
-func (k *Kubelet) containerReady(ctx context.Context, pod *k8s.Pod, c k8s.Container, containerID string, startedAtNanos int64) bool {
-	probe := c.ReadinessProbe
-	if probe == nil {
+// Probe state machine
+// probeTracker holds the per-container probe state machine: consecutive
+// success/failure counters and last-run timestamps for the startup, liveness
+// and readiness probes, following Kubernetes semantics (periodSeconds,
+// timeoutSeconds, successThreshold, failureThreshold).
+type probeTracker struct {
+	mu sync.Mutex
+
+	// lastContainerID detects container recreation: a new container always
+	// starts with fresh probe state.
+	lastContainerID string
+
+	startupDone      bool
+	startupSuccesses int32
+	startupFailures  int32
+	lastStartupRun   time.Time
+
+	livenessFailures int32
+	lastLivenessRun  time.Time
+
+	ready          bool
+	readySuccesses int32
+	readyFailures  int32
+	lastReadyRun   time.Time
+}
+
+// reset clears all probe state for a (re)created container. Callers must hold
+// tr.mu; the mutex itself is never overwritten.
+func (tr *probeTracker) reset(containerID string) {
+	tr.lastContainerID = containerID
+	tr.startupDone = false
+	tr.startupSuccesses = 0
+	tr.startupFailures = 0
+	tr.lastStartupRun = time.Time{}
+	tr.livenessFailures = 0
+	tr.lastLivenessRun = time.Time{}
+	tr.ready = false
+	tr.readySuccesses = 0
+	tr.readyFailures = 0
+	tr.lastReadyRun = time.Time{}
+}
+
+// probeThreshold returns a probe threshold with the Kubernetes default applied
+// (0 means "unset"). successThreshold defaults to 1, failureThreshold to 3.
+func probeThreshold(v, def int32) int32 {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+// probeDue reports whether a probe may run again: the initial delay has
+// elapsed since the container started and periodSeconds has elapsed since the
+// last attempt. A zero period means "on every pass".
+func probeDue(last time.Time, p *k8s.Probe, startedAtNanos int64) bool {
+	if p == nil {
+		return false
+	}
+	if p.InitialDelaySeconds > 0 && startedAtNanos > 0 {
+		if time.Since(time.Unix(0, startedAtNanos)) < time.Duration(p.InitialDelaySeconds)*time.Second {
+			return false
+		}
+	}
+	if last.IsZero() {
 		return true
 	}
-	if probe.InitialDelaySeconds > 0 && startedAtNanos > 0 {
-		started := time.Unix(0, startedAtNanos)
-		if time.Since(started) < time.Duration(probe.InitialDelaySeconds)*time.Second {
+	period := time.Duration(p.PeriodSeconds) * time.Second
+	if period <= 0 {
+		return true
+	}
+	return time.Since(last) >= period
+}
+
+// tracker returns (creating it if needed) the probe state of one container.
+func (k *Kubelet) tracker(podKey, container string) *probeTracker {
+	key := podKey + "/" + container
+	k.probeMu.Lock()
+	defer k.probeMu.Unlock()
+	if k.probes == nil {
+		k.probes = make(map[string]*probeTracker)
+	}
+	tr, ok := k.probes[key]
+	if !ok {
+		tr = &probeTracker{}
+		k.probes[key] = tr
+	}
+	return tr
+}
+
+// clearProbeState drops all probe state belonging to a deleted pod.
+func (k *Kubelet) clearProbeState(podKey string) {
+	k.probeMu.Lock()
+	defer k.probeMu.Unlock()
+	prefix := podKey + "/"
+	for key := range k.probes {
+		if strings.HasPrefix(key, prefix) {
+			delete(k.probes, key)
+		}
+	}
+}
+
+// bumpRestart records a restart caused by a failed liveness/startup probe so
+// the next reconcile reports it in RestartCount.
+func (k *Kubelet) bumpRestart(podKey, container string) {
+	k.restartBumpMu.Lock()
+	k.restartBumps[podKey+"/"+container]++
+	k.restartBumpMu.Unlock()
+}
+
+// takeRestartBump consumes the pending probe-restart count of a container.
+func (k *Kubelet) takeRestartBump(podKey, container string) int32 {
+	key := podKey + "/" + container
+	k.restartBumpMu.Lock()
+	defer k.restartBumpMu.Unlock()
+	n := k.restartBumps[key]
+	delete(k.restartBumps, key)
+	return n
+}
+
+// containerHealth runs one probe pass for a running container and reports
+// whether it is ready:
+//
+//   - startupProbe gates everything: while it has not yet succeeded, liveness
+//     and readiness are not evaluated and the container is not ready;
+//   - livenessProbe failure (failureThreshold consecutive failures) kills and
+//     removes the container so the reconcile loop restarts it;
+//   - readinessProbe drives the Ready condition via successThreshold /
+//     failureThreshold counters.
+//
+// Each probe runs at most once per periodSeconds (and not before
+// initialDelaySeconds after container start).
+func (k *Kubelet) containerHealth(ctx context.Context, pod *k8s.Pod, c k8s.Container, containerID string, startedAtNanos int64) bool {
+	podKey := podKey(pod)
+	tr := k.tracker(podKey, c.Name)
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+
+	// A recreated container always starts with fresh probe state.
+	if tr.lastContainerID != containerID {
+		tr.reset(containerID)
+	}
+
+	// startupProbe gates liveness and readiness until it has succeeded.
+	if c.StartupProbe != nil && !tr.startupDone {
+		if probeDue(tr.lastStartupRun, c.StartupProbe, startedAtNanos) {
+			tr.lastStartupRun = time.Now()
+			if k.probeOnce(ctx, pod, c, c.StartupProbe, containerID) {
+				tr.startupSuccesses++
+				tr.startupFailures = 0
+				if tr.startupSuccesses >= probeThreshold(c.StartupProbe.SuccessThreshold, 1) {
+					tr.startupDone = true
+				}
+			} else {
+				tr.startupFailures++
+				tr.startupSuccesses = 0
+				if tr.startupFailures >= probeThreshold(c.StartupProbe.FailureThreshold, 3) {
+					k.killUnhealthyContainer(ctx, podKey, c.Name, containerID, "StartupProbeFailed")
+					tr.startupFailures = 0
+					return false
+				}
+			}
+		}
+		if !tr.startupDone {
 			return false
 		}
 	}
 
+	// livenessProbe: consecutive failures beyond failureThreshold restart the
+	// container (Kubernetes does this regardless of restartPolicy).
+	if c.LivenessProbe != nil && probeDue(tr.lastLivenessRun, c.LivenessProbe, startedAtNanos) {
+		tr.lastLivenessRun = time.Now()
+		if k.probeOnce(ctx, pod, c, c.LivenessProbe, containerID) {
+			tr.livenessFailures = 0
+		} else {
+			tr.livenessFailures++
+			if tr.livenessFailures >= probeThreshold(c.LivenessProbe.FailureThreshold, 3) {
+				k.killUnhealthyContainer(ctx, podKey, c.Name, containerID, "LivenessProbeFailed")
+				tr.livenessFailures = 0
+				tr.ready = false
+				return false
+			}
+		}
+	}
+
+	// readinessProbe: no probe means "ready once running" (Kubernetes default).
+	if c.ReadinessProbe == nil {
+		tr.ready = true
+		return tr.ready
+	}
+	if probeDue(tr.lastReadyRun, c.ReadinessProbe, startedAtNanos) {
+		tr.lastReadyRun = time.Now()
+		if k.probeOnce(ctx, pod, c, c.ReadinessProbe, containerID) {
+			tr.readySuccesses++
+			tr.readyFailures = 0
+			if tr.readySuccesses >= probeThreshold(c.ReadinessProbe.SuccessThreshold, 1) {
+				tr.ready = true
+			}
+		} else {
+			tr.readyFailures++
+			tr.readySuccesses = 0
+			if tr.readyFailures >= probeThreshold(c.ReadinessProbe.FailureThreshold, 3) {
+				tr.ready = false
+			}
+		}
+	}
+	return tr.ready
+}
+
+// killUnhealthyContainer stops and removes a container whose startup or
+// liveness probe failed. The reconcile loop recreates it (the same path used
+// for restartPolicy handling); the restart is counted so RestartCount and the
+// restart backoff reflect it.
+func (k *Kubelet) killUnhealthyContainer(ctx context.Context, podKey, name, containerID, reason string) {
+	if k.criClient == nil {
+		return
+	}
+	k.logger.Warn("probe failed, restarting container",
+		"pod", podKey, "container", name, "containerID", containerID, "reason", reason)
+	k.bumpRestart(podKey, name)
+	k.markRestart(podKey, name)
+	if _, err := k.criClient.StopContainer(ctx, &v1.StopContainerRequest{ContainerId: containerID, Timeout: 10}); err != nil {
+		k.logger.Warn("cri: stop unhealthy container", "pod", podKey, "container", name, "error", err)
+	}
+	if _, err := k.criClient.RemoveContainer(ctx, &v1.RemoveContainerRequest{ContainerId: containerID}); err != nil {
+		k.logger.Warn("cri: remove unhealthy container", "pod", podKey, "container", name, "error", err)
+	}
+}
+
+// probeOnce runs a single probe attempt against the container.
+func (k *Kubelet) probeOnce(ctx context.Context, pod *k8s.Pod, c k8s.Container, probe *k8s.Probe, containerID string) bool {
 	timeout := time.Duration(probe.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = time.Second
@@ -109,12 +328,128 @@ func (k *Kubelet) containerReady(ctx context.Context, pod *k8s.Pod, c k8s.Contai
 		return httpProbe(pctx, k.probeScheme(probe.HTTPGet.Scheme), k.probeHost(pod, probe.HTTPGet.Host),
 			resolveProbePort(c, probe.HTTPGet.Port), probe.HTTPGet.Path, timeout)
 	case probe.GRPC != nil:
-		// gRPC health probing is out of scope; treat as ready so it does not
-		// block traffic (do not silently report a false negative).
-		return true
+		return grpcProbe(pctx, pod, probe.GRPC, timeout)
 	default:
+		// A probe with no handler is not a probe; treat it as passing rather
+		// than blocking the container forever.
 		return true
 	}
+}
+
+// grpcProbe performs a real gRPC health check (grpc.health.v1.Health/Check)
+// against the container. A container is considered healthy only when the
+// health service answers SERVING; connection failures and unknown services are
+// reported as failures instead of the previous unconditional "ready".
+//
+// The two health messages are encoded by hand (healthProtoCodec) so the probe
+// needs no generated stubs and no vendor/ changes.
+func grpcProbe(ctx context.Context, pod *k8s.Pod, action *k8s.GRPCAction, timeout time.Duration) bool {
+	port := int(action.Port)
+	if port <= 0 {
+		return false
+	}
+	host := pod.Status.PodIP
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	conn, err := grpc.NewClient(net.JoinHostPort(host, strconv.Itoa(port)),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = conn.Close() }()
+
+	service := ""
+	if action.Service != nil {
+		service = *action.Service
+	}
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var resp healthCheckResponse
+	err = conn.Invoke(pctx, "/grpc.health.v1.Health/Check",
+		&healthCheckRequest{Service: service}, &resp,
+		grpc.ForceCodec(healthProtoCodec{}))
+	if err != nil {
+		return false
+	}
+	return resp.Status == healthStatusServing
+}
+
+// healthStatusServing is grpc.health.v1.HealthCheckResponse.SERVING.
+const healthStatusServing = 1
+
+// healthCheckRequest is grpc.health.v1.HealthCheckRequest: field 1 is the
+// service name (length-delimited string). healthCheckResponse is
+// HealthCheckResponse: field 1 is the status enum (varint).
+type healthCheckRequest struct{ Service string }
+
+func (h *healthCheckRequest) Marshal() ([]byte, error) {
+	if h.Service == "" {
+		return []byte{}, nil
+	}
+	buf := make([]byte, 0, len(h.Service)+2)
+	buf = append(buf, 0x0a, byte(len(h.Service)))
+	return append(buf, h.Service...), nil
+}
+
+func (h *healthCheckRequest) Unmarshal(b []byte) error {
+	h.Service = string(b)
+	return nil
+}
+
+type healthCheckResponse struct {
+	Status int32
+}
+
+func (h *healthCheckResponse) Marshal() ([]byte, error) { return []byte{}, nil }
+
+func (h *healthCheckResponse) Unmarshal(b []byte) error {
+	for len(b) > 0 {
+		key := b[0]
+		b = b[1:]
+		if key&0x07 != 0 { // only varint fields are understood
+			return fmt.Errorf("grpc health: unexpected wire type %d", key&0x07)
+		}
+		var v uint64
+		shift := 0
+		for {
+			if len(b) == 0 {
+				return fmt.Errorf("grpc health: truncated varint")
+			}
+			c := b[0]
+			b = b[1:]
+			v |= uint64(c&0x7f) << shift
+			if c&0x80 == 0 {
+				break
+			}
+			shift += 7
+		}
+		h.Status = int32(v)
+	}
+	return nil
+}
+
+// healthProtoCodec marshals the hand-rolled health messages with the "proto"
+// wire codec name so grpc accepts them on the standard content subtype.
+type healthProtoCodec struct{}
+
+func (healthProtoCodec) Name() string { return "proto" }
+
+func (healthProtoCodec) Marshal(v any) ([]byte, error) {
+	m, ok := v.(interface{ Marshal() ([]byte, error) })
+	if !ok {
+		return nil, fmt.Errorf("grpc health: unsupported message %T", v)
+	}
+	return m.Marshal()
+}
+
+func (healthProtoCodec) Unmarshal(data []byte, v any) error {
+	m, ok := v.(interface{ Unmarshal([]byte) error })
+	if !ok {
+		return fmt.Errorf("grpc health: unsupported message %T", v)
+	}
+	return m.Unmarshal(data)
 }
 
 // execProbe runs an exec readiness probe inside the container via CRI ExecSync.

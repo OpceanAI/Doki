@@ -61,7 +61,7 @@ func RecordRequest() { atomic.AddUint64(&reqCount, 1) }
 // RecordError increments the error counter.
 func RecordError() { atomic.AddUint64(&errCount, 1) }
 
-// AG8: HealthHandler returns comprehensive daemon health status.
+// HealthHandler reports daemon health status.
 func HealthHandler(w http.ResponseWriter, _ *http.Request) {
 	status := "healthy"
 	checks := make([]map[string]string, 0)

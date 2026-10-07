@@ -57,6 +57,14 @@ type NetworkConfig struct {
 	Gateway    string
 	DNS        []string
 	MacAddress string
+	PortMaps   []PortMap
+}
+
+// PortMap forwards hostPort on the host to guestPort inside the VM.
+type PortMap struct {
+	HostPort  int
+	GuestPort int
+	Proto     string // "tcp" (default) or "udp"
 }
 
 // VsockConfig holds vsock configuration.
@@ -124,7 +132,7 @@ type VMMConfig struct {
 	Debug        bool
 }
 
-// ─── Factory ───────────────────────────────────────────────────────
+// Factory
 
 // NewVMM creates the best available VMM for the current platform.
 func NewVMM(cfg *VMMConfig) (VMM, error) {
@@ -176,7 +184,7 @@ func autoDetectVMM(cfg *VMMConfig) (VMM, error) {
 	return nil, fmt.Errorf("no compatible VMM found on this system")
 }
 
-// ─── Detection helpers ────────────────────────────────────────────
+// Detection helpers
 
 func crosvmInstalled() bool {
 	_, err := exec.LookPath("crosvm")
@@ -260,7 +268,7 @@ func Platform() string {
 	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 }
 
-// ─── Stub backend creators (implemented in respective packages) ────
+// Stub backend creators (implemented in respective packages)
 
 var registeredBackends = make(map[string]func(*VMMConfig) (VMM, error))
 

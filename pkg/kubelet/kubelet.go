@@ -36,7 +36,10 @@ type Kubelet struct {
 	mu       sync.RWMutex
 	pods     map[string]*k8s.Pod
 	running  map[string]bool
-	logger   *slog.Logger
+	// sandboxes maps podKey -> CRI pod sandbox ID so deletePod can tear the
+	// sandbox down instead of leaking its containers, network namespace and IP.
+	sandboxes map[string]string
+	logger    *slog.Logger
 
 	// nodeIP is the primary non-loopback IPv4 of the host, detected once
 	// at construction time and used for both node registration and pod
@@ -56,6 +59,18 @@ type Kubelet struct {
 	// by "<podKey>/<container>".
 	restartMu   sync.Mutex
 	lastRestart map[string]time.Time
+
+	// probes tracks per-container startup/liveness/readiness probe state
+	// (failure/success counters and last-run times). Keyed by
+	// "<podKey>/<container>". See probe.go.
+	probeMu sync.Mutex
+	probes  map[string]*probeTracker
+
+	// restartBumps counts container restarts caused by failed liveness/startup
+	// probes, keyed by "<podKey>/<container>", so the next reconcile reports a
+	// correct RestartCount and applies restart backoff.
+	restartBumpMu sync.Mutex
+	restartBumps  map[string]int32
 }
 
 // NewKubelet returns a Kubelet without a CRI connection. It preserves the
@@ -63,14 +78,17 @@ type Kubelet struct {
 // compatibility; new callers should prefer NewKubeletWithCRI.
 func NewKubelet(nodeName string, s store.Store, logger *slog.Logger) *Kubelet {
 	return &Kubelet{
-		nodeName:    nodeName,
-		store:       s,
-		pods:        make(map[string]*k8s.Pod),
-		running:     make(map[string]bool),
-		logger:      logger,
-		nodeIP:      detectNodeIP(),
-		criSocket:   defaultCRISocket(),
-		lastRestart: make(map[string]time.Time),
+		nodeName:     nodeName,
+		store:        s,
+		pods:         make(map[string]*k8s.Pod),
+		running:      make(map[string]bool),
+		sandboxes:    make(map[string]string),
+		probes:       make(map[string]*probeTracker),
+		restartBumps: make(map[string]int32),
+		logger:       logger,
+		nodeIP:       detectNodeIP(),
+		criSocket:    defaultCRISocket(),
+		lastRestart:  make(map[string]time.Time),
 	}
 }
 
@@ -90,17 +108,20 @@ func NewKubeletWithCRI(ctx context.Context, nodeName string, s store.Store, logg
 		return nil, fmt.Errorf("dial CRI socket %q: %w", criSocket, err)
 	}
 	return &Kubelet{
-		nodeName:    nodeName,
-		store:       s,
-		pods:        make(map[string]*k8s.Pod),
-		running:     make(map[string]bool),
-		logger:      logger,
-		nodeIP:      detectNodeIP(),
-		criSocket:   criSocket,
-		conn:        conn,
-		criClient:   v1.NewRuntimeServiceClient(conn),
-		imageClient: v1.NewImageServiceClient(conn),
-		lastRestart: make(map[string]time.Time),
+		nodeName:     nodeName,
+		store:        s,
+		pods:         make(map[string]*k8s.Pod),
+		running:      make(map[string]bool),
+		sandboxes:    make(map[string]string),
+		probes:       make(map[string]*probeTracker),
+		restartBumps: make(map[string]int32),
+		logger:       logger,
+		nodeIP:       detectNodeIP(),
+		criSocket:    criSocket,
+		conn:         conn,
+		criClient:    v1.NewRuntimeServiceClient(conn),
+		imageClient:  v1.NewImageServiceClient(conn),
+		lastRestart:  make(map[string]time.Time),
 	}, nil
 }
 
@@ -118,6 +139,7 @@ func (k *Kubelet) Run(ctx context.Context) error {
 
 	go k.watchPods(ctx)
 	go k.statusLoop(ctx)
+	go k.reconcileLoop(ctx)
 
 	k.logger.Info("kubelet started", "node", k.nodeName, "cri", k.criSocket, "nodeIP", k.nodeIP)
 	<-ctx.Done()
@@ -313,6 +335,8 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 		}
 		sandboxID = runResp.GetPodSandboxId()
 	}
+	// Remember the sandbox so deletePod can tear it down through CRI.
+	k.sandboxes[podKey] = sandboxID
 
 	// Discover containers already present in the sandbox (e.g. after a
 	// kubelet restart) so we don't try to recreate them.
@@ -336,6 +360,9 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 	restartCounts := map[string]int32{}
 	for _, cs := range pod.Status.ContainerStatuses {
 		restartCounts[cs.Name] = cs.RestartCount
+	}
+	for _, c := range pod.Spec.Containers {
+		restartCounts[c.Name] += k.takeRestartBump(podKey, c.Name)
 	}
 	policy := podRestartPolicy(pod)
 
@@ -461,11 +488,12 @@ func (k *Kubelet) reconcilePodCRI(ctx context.Context, pod *k8s.Pod, podKey stri
 			cs.Started = &running
 			cs.State = k8s.ContainerState{Running: &k8s.ContainerStateRunning{StartedAt: time.Unix(0, st.GetStartedAt()).UTC()}}
 			allExited0 = false
-			// K13: a container is Ready only when its readiness probe passes.
-			// Without a probe, "running" is ready, matching Kubernetes. Service
-			// endpoints depend on this, so a running-but-not-ready pod must not
-			// be marked ready.
-			cs.Ready = k.containerReady(ctx, pod, c, containerID, st.GetStartedAt())
+			// K13: a container is Ready only when its startup and readiness
+			// probes pass, and a failed liveness probe restarts it (see
+			// probe.go). Without probes, "running" is ready, matching
+			// Kubernetes. Service endpoints depend on this, so a
+			// running-but-not-ready pod must not be marked ready.
+			cs.Ready = k.containerHealth(ctx, pod, c, containerID, st.GetStartedAt())
 			if !cs.Ready {
 				allReady = false
 			}
@@ -589,14 +617,61 @@ func (k *Kubelet) persistPod(pod *k8s.Pod, podKey string) {
 }
 
 func (k *Kubelet) deletePod(pod *k8s.Pod) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-
 	podKey := podKey(pod)
+
+	k.mu.Lock()
 	delete(k.pods, podKey)
 	delete(k.running, podKey)
+	sandboxID := k.sandboxes[podKey]
+	delete(k.sandboxes, podKey)
+	k.mu.Unlock()
+
+	k.clearProbeState(podKey)
+	k.removePodSandbox(pod, podKey, sandboxID)
 
 	k.logger.Info("pod deleted", "pod", podKey)
+}
+
+// removePodSandbox tears the pod's CRI sandbox down. Without this the sandbox,
+// its containers, the pod network namespace and the allocated pod IP all leak
+// after the pod object is deleted. The sandbox is looked up by the pod-uid
+// label when the in-memory mapping is missing (e.g. after a kubelet restart),
+// and every match is cleaned up.
+func (k *Kubelet) removePodSandbox(pod *k8s.Pod, podKey, sandboxID string) {
+	if k.criClient == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ids := make([]string, 0, 1)
+	if sandboxID != "" {
+		ids = append(ids, sandboxID)
+	} else {
+		resp, err := k.criClient.ListPodSandbox(ctx, &v1.ListPodSandboxRequest{
+			Filter: &v1.PodSandboxFilter{LabelSelector: sandboxLabels(pod)},
+		})
+		if err != nil {
+			k.logger.Warn("cri: list pod sandbox for delete", "pod", podKey, "error", err)
+			return
+		}
+		for _, item := range resp.GetItems() {
+			ids = append(ids, item.GetId())
+		}
+	}
+
+	for _, id := range ids {
+		// StopPodSandbox also stops the sandbox's containers; RemovePodSandbox
+		// then drops the sandbox and releases its network namespace / IP.
+		if _, err := k.criClient.StopPodSandbox(ctx, &v1.StopPodSandboxRequest{PodSandboxId: id}); err != nil {
+			k.logger.Warn("cri: stop pod sandbox", "pod", podKey, "sandbox", id, "error", err)
+		}
+		if _, err := k.criClient.RemovePodSandbox(ctx, &v1.RemovePodSandboxRequest{PodSandboxId: id}); err != nil {
+			k.logger.Warn("cri: remove pod sandbox", "pod", podKey, "sandbox", id, "error", err)
+			continue
+		}
+		k.logger.Info("pod sandbox removed", "pod", podKey, "sandbox", id)
+	}
 }
 
 func (k *Kubelet) statusLoop(ctx context.Context) {
@@ -609,6 +684,27 @@ func (k *Kubelet) statusLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			k.heartbeat()
+		}
+	}
+}
+
+// reconcileLoop re-reconciles every known pod on a fixed cadence. Watch events
+// alone are not enough: a container killed by a failed liveness probe must be
+// recreated, and probes must run on their periodSeconds cadence even when no
+// object changes. persistPod suppresses no-op writes, so this does not cause
+// store churn.
+func (k *Kubelet) reconcileLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, pod := range k.RunningPods() {
+				k.reconcilePod(ctx, pod)
+			}
 		}
 	}
 }
@@ -662,7 +758,7 @@ func podKey(pod *k8s.Pod) string {
 	return pod.Name
 }
 
-// ---- helpers ---------------------------------------------------------------
+// helpers
 
 // sandboxLabels returns the set of Kubernetes-standard labels the kubelet
 // stamps onto a CRI pod sandbox. The io.kubernetes.pod.uid label is what we

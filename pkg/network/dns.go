@@ -565,7 +565,7 @@ func (d *DNSServer) tryUpstreamTCP(upstream string, query []byte) ([]byte, error
 	return resp, nil
 }
 
-// ─── DNS wire helpers ──────────────────────────────────────────────
+// DNS wire helpers
 
 const (
 	dnsTypeA     uint16 = 1
@@ -809,7 +809,7 @@ func arpaToIP(arpa string) string {
 	return ""
 }
 
-// ─── LRU cache for DNS responses ──────────────────────────────────
+// LRU cache for DNS responses
 
 type dnsCacheEntry struct {
 	key   string

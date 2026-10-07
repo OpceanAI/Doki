@@ -27,3 +27,4 @@ vendor/
 cover.html
 coverage.out
 coverage.xml
+.atl/

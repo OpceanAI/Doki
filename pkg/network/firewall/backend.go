@@ -20,8 +20,8 @@ import (
 type Backend string
 
 const (
-	BackendNFTables   Backend = "nftables"
-	BackendIPTables   Backend = "iptables"
+	BackendNFTables    Backend = "nftables"
+	BackendIPTables    Backend = "iptables"
 	BackendUnavailable Backend = "unavailable"
 )
 
@@ -117,7 +117,7 @@ func (o Options) normalized() Options {
 	return o
 }
 
-// ─── shared helpers ─────────────────────────────────────────────────
+// shared helpers
 
 // execCmd is a small helper that runs a command and returns
 // (stdout, stderr, err). It is used by both backends.
@@ -137,5 +137,3 @@ func ruleKey(r Rule) string {
 	return fmt.Sprintf("%s|%s:%d->%s:%d|%s",
 		r.Protocol, r.HostIP, r.HostPort, r.ContainerIP, r.ContainerPort, r.ContainerID)
 }
-
-

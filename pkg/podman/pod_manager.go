@@ -3,7 +3,7 @@ package podman
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -397,7 +397,7 @@ func (pm *PodManager) removePodFile(id string) error {
 func (pm *PodManager) loadPods() {
 	entries, err := os.ReadDir(pm.store)
 	if err != nil {
-		log.Printf("podman: read pod store %s: %v", pm.store, err)
+		slog.Error("podman: read pod store", "store", pm.store, "error", err)
 		return
 	}
 	for _, entry := range entries {
@@ -407,12 +407,12 @@ func (pm *PodManager) loadPods() {
 		path := filepath.Join(pm.store, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("podman: read pod file %s: %v", path, err)
+			slog.Error("podman: read pod file", "path", path, "error", err)
 			continue
 		}
 		var pod Pod
 		if err := json.Unmarshal(data, &pod); err != nil {
-			log.Printf("podman: parse pod file %s: %v", path, err)
+			slog.Error("podman: parse pod file", "path", path, "error", err)
 			continue
 		}
 		pm.pods[pod.ID] = &pod

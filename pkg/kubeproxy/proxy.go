@@ -339,7 +339,7 @@ func (p *Proxy) syncUserspace() {
 	}
 }
 
-// --- iptables helpers ---
+// iptables helpers
 
 func ensureChain(bin, table, chain string) {
 	cmd := exec.Command(bin, "-t", table, "-N", chain)
@@ -369,7 +369,7 @@ func runIPTables(args []string, logger *slog.Logger) {
 	}
 }
 
-// --- userspace proxy ---
+// userspace proxy
 
 type userspaceProxy struct {
 	listenAddr string

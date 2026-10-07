@@ -105,7 +105,7 @@ func IsCNIAvailable() bool {
 	return false
 }
 
-// ─── Pasta / rootless networking ──────────────────────────────────
+// Pasta / rootless networking
 
 // PastaManager manages pasta-based rootless networking.
 type PastaManager struct {
@@ -145,7 +145,7 @@ func (p *PastaManager) Start(pid int, opts ...string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// ─── Firewall management ───────────────────────────────────────────
+// Firewall management
 
 // FirewallBackend represents a firewall backend.
 type FirewallBackend string
@@ -322,7 +322,7 @@ func (f *FirewallManager) removeIptablesPortMapping(containerIP string, hostPort
 	return cmd.Run()
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────
+// Helpers
 
 func pathExists(p string) bool {
 	_, err := os.Stat(p)

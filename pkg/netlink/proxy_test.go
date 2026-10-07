@@ -200,7 +200,7 @@ func TestUDPProxy_BasicRoundtrip(t *testing.T) {
 	}
 }
 
-// --- helpers ---
+// helpers
 
 func startEchoServer(t *testing.T, network string) (string, func()) {
 	t.Helper()

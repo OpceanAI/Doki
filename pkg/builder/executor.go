@@ -977,15 +977,15 @@ func findProotBinary() string {
 }
 
 // osLink creates a hardlink; overridable in tests to simulate filesystems
-// (or environments, e.g. Android's /data under Termux) that reject os.Link.
+// (or environments, e.g. Android's /data under Termux) that reject os.Link,
+// so the copy fallback path can be exercised.
 var osLink = os.Link
 
 // ExtractTar extracts a tar archive (optionally gzip-compressed) to dest directory.
 func ExtractTar(r io.Reader, dest string) error {
 	// Peek at the first bytes to detect gzip.
 	buf := make([]byte, 2)
-	_, err := r.Read(buf)
-	if err != nil {
+	if _, err := io.ReadFull(r, buf); err != nil {
 		return err
 	}
 	mr := io.MultiReader(bytes.NewReader(buf), r)
@@ -1097,20 +1097,33 @@ func ExtractTar(r io.Reader, dest string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			linkTarget := filepath.Clean(filepath.Join(dest, hdr.Linkname))
+			linkTarget, err := common.SecureJoin(cleanDest, hdr.Linkname)
+			if err != nil {
+				return fmt.Errorf("tar: resolve hardlink %s -> %s: %w", hdr.Name, hdr.Linkname, err)
+			}
 			if !strings.HasPrefix(linkTarget, cleanDest+string(os.PathSeparator)) && linkTarget != cleanDest {
 				return fmt.Errorf("tar: hardlink traversal: %s -> %s", hdr.Name, hdr.Linkname)
 			}
-			if err := os.Remove(target); err != nil {
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 				slog.Warn("remove hardlink target failed", "path", target, "error", err)
 			}
 			if err := osLink(linkTarget, target); err != nil {
+				// Hardlink may be unsupported (EPERM on some filesystems); fall
+				// back to a byte copy so extraction still succeeds.
 				data, readErr := os.ReadFile(linkTarget)
 				if readErr != nil {
 					return fmt.Errorf("tar: hardlink %s: %w", hdr.Name, err)
 				}
-				if err := os.WriteFile(target, data, 0644); err != nil {
-					return fmt.Errorf("tar: hardlink fallback write %s: %w", hdr.Name, err)
+				_ = os.Remove(target)
+				// Preserve the archived mode when present; tar hardlink
+				// entries often carry Mode 0, which would create an
+				// unreadable file -- fall back to 0644 in that case.
+				fbMode := common.SafeFileMode(hdr.Mode)
+				if hdr.Mode == 0 {
+					fbMode = 0644
+				}
+				if writeErr := os.WriteFile(target, data, fbMode); writeErr != nil {
+					return fmt.Errorf("tar: hardlink fallback write %s: %w", hdr.Name, writeErr)
 				}
 			}
 		default:

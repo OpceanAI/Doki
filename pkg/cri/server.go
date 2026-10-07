@@ -111,7 +111,7 @@ func (s *CRIServer) Close() error {
 	return nil
 }
 
-// ─── helpers ────────────────────────────────────────────────────────
+// helpers
 
 // toCINanos converts a Unix-second timestamp (as stored by the plugin) to the
 // nanosecond timestamp expected by CRI.
@@ -177,7 +177,7 @@ func notFoundErr(resource, id string, err error) error {
 	return status.Errorf(codes.Internal, "%v", err)
 }
 
-// ─── RuntimeService ─────────────────────────────────────────────────
+// RuntimeService
 
 // Version returns the runtime name, runtime version, and runtime API version.
 func (s *CRIServer) Version(ctx context.Context, req *v1.VersionRequest) (*v1.VersionResponse, error) {
@@ -354,6 +354,26 @@ func (s *CRIServer) CreateContainer(ctx context.Context, req *v1.CreateContainer
 		LogPath:      cfg.GetLogPath(),
 	}
 
+	// Translate the CRI Linux security context (capabilities, user,
+	// seccomp/apparmor profiles, ...) into enforceable runtime knobs.
+	// Requests the runtime cannot honor fail here with InvalidArgument
+	// (SELinux, ambient caps) or are recorded in the
+	// doki.io/unenforced-security annotation instead of being silently
+	// dropped. applySecurityContext may add that annotation to cfg, so the
+	// container must observe the post-translation map.
+	sec, err := applySecurityContext(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cc.Annotations = cfg.GetAnnotations()
+	cc.SecurityOpt = sec.securityOpt
+	cc.CapAdd = sec.capAdd
+	cc.CapDrop = sec.capDrop
+	cc.Privileged = sec.privileged
+	cc.ReadOnly = sec.readOnly
+	cc.User = sec.user
+	cc.HostNetwork = sec.hostNetwork
+
 	if err := s.plugin.CreateContainer(cc); err != nil {
 		return nil, notFoundErr("pod sandbox", podID, err)
 	}
@@ -495,14 +515,33 @@ func (s *CRIServer) Status(ctx context.Context, req *v1.StatusRequest) (*v1.Stat
 			SupplementalGroupsPolicy:  false,
 			UserNamespacesHostNetwork: false,
 		},
-		Info: map[string]string{
-			"doki_version":  common.Version,
-			"cgroup_driver": cgroupDriver,
-			"cgroup_v2":     boolStr(s.plugin.cgroupV2Available()),
-			"network_dns":   s.plugin.dnsMode(),
-		},
+		Info: s.runtimeInfo(cgroupDriver),
 	}
 	return resp, nil
+}
+
+// runtimeInfo reports honest security-posture claims for Status.Info. Every
+// seccomp/apparmor value is derived from the runtime's live enforcement
+// probes (dokiruntime.GetSecurityStatus), never hardcoded, so the kubelet
+// sees the same posture the Start gate enforces: per-container seccomp runs
+// through the re-exec shim in native mode, AppArmor confinement of container
+// processes is not implemented, and "default" profiles degrade to warn +
+// annotation outside native mode.
+func (s *CRIServer) runtimeInfo(cgroupDriver string) map[string]string {
+	info := map[string]string{
+		"doki_version":   common.Version,
+		"cgroup_driver":  cgroupDriver,
+		"cgroup_v2":      boolStr(s.plugin.cgroupV2Available()),
+		"network_dns":    s.plugin.dnsMode(),
+		"execution_mode": s.plugin.runtime.Mode().String(),
+	}
+	sec := dokiruntime.GetSecurityStatus()
+	info["seccomp_supported"] = boolStr(sec.SeccompSupported)
+	info["seccomp_shim_available"] = boolStr(sec.SeccompShimAvailable)
+	info["seccomp_enforced_daemon"] = boolStr(sec.SeccompEnforced)
+	info["apparmor_supported"] = boolStr(sec.AppArmorSupported)
+	info["apparmor_enforced_daemon"] = boolStr(sec.AppArmorEnforced)
+	return info
 }
 
 func boolStr(b bool) string {
@@ -593,7 +632,7 @@ func (s *CRIServer) ExecSync(ctx context.Context, req *v1.ExecSyncRequest) (*v1.
 	}, nil
 }
 
-// ─── RuntimeService: not-yet-implemented RPCs ───────────────────────
+// RuntimeService: not-yet-implemented RPCs
 
 // StreamPodSandboxes is a streaming alternative to ListPodSandbox.
 func (s *CRIServer) StreamPodSandboxes(*v1.StreamPodSandboxesRequest, grpc.ServerStreamingServer[v1.StreamPodSandboxesResponse]) error {
@@ -742,27 +781,20 @@ func (s *CRIServer) Attach(ctx context.Context, req *v1.AttachRequest) (*v1.Atta
 	return &v1.AttachResponse{Url: url}, nil
 }
 
-// PortForward prepares a streaming endpoint to forward ports from a PodSandbox.
-func (s *CRIServer) PortForward(ctx context.Context, req *v1.PortForwardRequest) (*v1.PortForwardResponse, error) {
-	podID := req.GetPodSandboxId()
-	if podID == "" {
+// PortForward is not implemented. Earlier revisions returned a streaming URL
+// that accepted the dial and then failed with HTTP 501, which misled callers
+// (kubelet/crictl) into believing port-forwarding would work. The runtime has
+// no port-forwarding primitive, so the RPC reports codes.Unimplemented
+// honestly instead of handing out a dead URL.
+func (s *CRIServer) PortForward(_ context.Context, req *v1.PortForwardRequest) (*v1.PortForwardResponse, error) {
+	if req.GetPodSandboxId() == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "pod_sandbox_id required")
 	}
 	if len(req.GetPort()) == 0 {
 		return nil, status.Errorf(codes.InvalidArgument, "at least one port required")
 	}
-	if _, err := s.plugin.PodSandboxStatus(podID); err != nil {
-		return nil, notFoundErr("pod sandbox", podID, err)
-	}
-	url, err := s.streamingURL(ctx, StreamRequest{
-		Op:         "portforward",
-		ResourceID: podID,
-		Ports:      req.GetPort(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &v1.PortForwardResponse{Url: url}, nil
+	return nil, status.Errorf(codes.Unimplemented,
+		"port-forward is not implemented by the doki CRI runtime (no port-forwarding primitive exists; expose the pod via a hostPort/NodePort or a Service)")
 }
 
 // streamingURL starts a small ephemeral HTTP server that handles a
@@ -1112,7 +1144,7 @@ func (s *CRIServer) UpdatePodSandboxResources(ctx context.Context, req *v1.Updat
 	return &v1.UpdatePodSandboxResourcesResponse{}, nil
 }
 
-// ─── ImageService ───────────────────────────────────────────────────
+// ImageService
 
 // ListImages lists existing images.
 func (s *CRIServer) ListImages(ctx context.Context, req *v1.ListImagesRequest) (*v1.ListImagesResponse, error) {

@@ -8,10 +8,7 @@ import (
 	"time"
 )
 
-// DokiVersion is the current version of the Doki engine.
-// v0.12.0: Production-ready unified runtime - Docker 80% / Podman 40% / CRI 75%
-// Full attach/exec hijack, critest passing, Quadlets, Kube Play, OCI Artifacts,
-// nftables/iptables auto-detect, cgroup v2 manager, plugins stubs.
+// DokiVersion = engine version.
 const DokiVersion = "0.12.0"
 
 // DokiAPIVersion is the compatible Docker Engine API version.
@@ -132,6 +129,20 @@ type Ulimit struct {
 	Hard int64  `json:"Hard"`
 }
 
+// WeightDevice is a per-device blkio weight rule (Docker API 1.55
+// BlkioWeightDevice). Weight 0 removes the rule for the device.
+type WeightDevice struct {
+	Path   string `json:"Path"`
+	Weight uint16 `json:"Weight"`
+}
+
+// ThrottleDevice is a per-device blkio throttle rule: Rate is bytes per second
+// for Read/WriteBps and IO operations per second for Read/WriteIOps.
+type ThrottleDevice struct {
+	Path string `json:"Path"`
+	Rate uint64 `json:"Rate"`
+}
+
 // DefaultConfig returns the default Doki configuration.
 func DefaultConfig() *DokiConfig {
 	dataDir := AppDataDir()
@@ -205,9 +216,19 @@ type HostConfig struct {
 	NanoCpus        int64               `json:"NanoCpus"`
 	CgroupParent    string              `json:"CgroupParent"`
 	BlkioWeight     uint16              `json:"BlkioWeight"`
-	PidsLimit       int64               `json:"PidsLimit"`
-	OomKillDisable  bool                `json:"OomKillDisable"`
-	OomScoreAdj     int64               `json:"OomScoreAdj"`
+	// Per-device blkio rules (Docker API 1.55).
+	BlkioWeightDevice    []WeightDevice   `json:"BlkioWeightDevice"`
+	BlkioDeviceReadBps   []ThrottleDevice `json:"BlkioDeviceReadBps"`
+	BlkioDeviceWriteBps  []ThrottleDevice `json:"BlkioDeviceWriteBps"`
+	BlkioDeviceReadIOps  []ThrottleDevice `json:"BlkioDeviceReadIOps"`
+	BlkioDeviceWriteIOps []ThrottleDevice `json:"BlkioDeviceWriteIOps"`
+	PidsLimit            int64            `json:"PidsLimit"`
+	OomKillDisable       bool             `json:"OomKillDisable"`
+	OomScoreAdj          int64            `json:"OomScoreAdj"`
+	MemorySwappiness     *int64           `json:"MemorySwappiness"`
+	// CPU realtime scheduling limits (0 = disabled/period unchanged).
+	CPURealtimePeriod  int64 `json:"CpuRealtimePeriod"`
+	CPURealtimeRuntime int64 `json:"CpuRealtimeRuntime"`
 }
 
 // RestartPolicyConfig describes container restart behavior.

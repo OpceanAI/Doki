@@ -15,8 +15,8 @@ ARG BUILD_DATE=unknown
 ARG BUILD_USER=docker
 
 ARG DOKI_PKG=github.com/OpceanAI/Doki/pkg/common
-ARG DOKI_API=1.54
-ARG DOKI_VER=0.10.0
+ARG DOKI_API=1.55
+ARG DOKI_VER=0.12.5
 
 RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w \
@@ -86,7 +86,11 @@ COPY --from=builder /build/doki-kubectl /usr/bin/doki-kubectl
 
 RUN mkdir -p /etc/doki /var/lib/doki /var/log/doki
 
+USER 65532
+
 EXPOSE 8080 8443
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD ["doki", "version"]
 
 ENTRYPOINT ["/usr/bin/doki"]
 CMD ["--help"]

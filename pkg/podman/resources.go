@@ -3,6 +3,7 @@ package podman
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/events"
 	"github.com/OpceanAI/Doki/pkg/network"
+	dokiruntime "github.com/OpceanAI/Doki/pkg/runtime"
 )
 
 // validateBindSource applies the same host-path policy the Docker surface
@@ -242,8 +244,10 @@ func (s *PodmanServer) handleImageAction(w http.ResponseWriter, id, action strin
 		}
 		w.WriteHeader(http.StatusCreated)
 	case "untag":
-		// Untagging the last reference is a removal in libpod's model.
-		if err := s.images.Remove(id); err != nil {
+		// libpod drops one name from the image and keeps the image data as
+		// long as another name still points at it; only the last name turns
+		// untag into a removal.
+		if err := s.untagImage(id, r); err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -265,6 +269,71 @@ func (s *PodmanServer) handleImageAction(w http.ResponseWriter, id, action strin
 	default:
 		writeError(w, http.StatusNotFound, "unsupported image action: "+action)
 	}
+}
+
+// untagImage removes one name (repo[:tag]) from an image while keeping the
+// image data as long as another name still references it. The name comes from
+// the repo/tag query parameters, or from the reference used to address the
+// image; addressing the image by ID without a name drops every name. When the
+// last name goes the image itself is removed.
+func (s *PodmanServer) untagImage(id string, r *http.Request) error {
+	rec, err := s.images.Get(id)
+	if err != nil {
+		return err
+	}
+	q := r.URL.Query()
+	target := q.Get("repo")
+	if tag := q.Get("tag"); tag != "" {
+		if target == "" {
+			target = id
+		}
+		target += ":" + tag
+	}
+	dropAll := false
+	if target == "" {
+		if !nameMatchesAny(id, rec.RepoTags) {
+			// Addressed by ID: libpod drops every name from the image.
+			dropAll = true
+		}
+		target = id
+	}
+
+	remaining := make([]string, 0, len(rec.RepoTags))
+	dropped := false
+	for _, name := range rec.RepoTags {
+		if dropAll || sameRepoTag(name, target) {
+			dropped = true
+			continue
+		}
+		remaining = append(remaining, name)
+	}
+	if !dropped {
+		return common.NewErrNotFound("tag", target)
+	}
+	if len(remaining) == 0 {
+		// Last name: clear the names first so nothing can still answer to
+		// them, then drop the image data.
+		rec.RepoTags = nil
+		_ = s.images.SaveRecord(rec)
+		return s.images.Remove(rec.ID)
+	}
+	rec.RepoTags = remaining
+	return s.images.SaveRecord(rec)
+}
+
+// sameRepoTag compares repository names the way the image store indexes them:
+// "busybox" and "busybox:latest" name the same tag.
+func sameRepoTag(a, b string) bool {
+	return a == b || a == b+":latest" || a+":latest" == b
+}
+
+func nameMatchesAny(id string, tags []string) bool {
+	for _, t := range tags {
+		if sameRepoTag(t, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Volumes (P5) ----------------------------------------------------------
@@ -591,7 +660,11 @@ func (s *PodmanServer) handleNetworkConnect(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var body struct {
-		Container string `json:"container"`
+		Container string      `json:"container"`
+		StaticIP  flexStrings `json:"static_ip"`
+		StaticMAC string      `json:"static_mac"`
+		MAC       string      `json:"mac"`
+		Aliases   []string    `json:"aliases"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPodmanJSONBody)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -603,7 +676,11 @@ func (s *PodmanServer) handleNetworkConnect(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if action == "connect" {
-		err = s.network.Connect(netID, st.ID, "", nil, nil, st.Pid)
+		mac := body.StaticMAC
+		if mac == "" {
+			mac = body.MAC
+		}
+		err = s.networkConnect(netID, st, body.StaticIP, body.Aliases, mac)
 	} else {
 		err = s.network.Disconnect(netID, st.ID, st.Pid)
 	}
@@ -612,6 +689,62 @@ func (s *PodmanServer) handleNetworkConnect(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// networkConnect attaches a container to a network, honoring the optional
+// static_ip, aliases and MAC address from the request body.
+//
+// network.Manager.Connect always generates a MAC address of its own; when the
+// caller pins one, the endpoint is pre-seeded with it so Connect keeps the
+// pinned address instead of the generated one. GetNetwork returns the
+// manager's live network state and Connect is what persists it.
+func (s *PodmanServer) networkConnect(netID string, st *dokiruntime.ContainerState, staticIPs, aliases []string, mac string) error {
+	staticIP := ""
+	for _, ip := range staticIPs {
+		if ip != "" {
+			staticIP = ip
+			break
+		}
+	}
+	if mac != "" {
+		if _, err := net.ParseMAC(mac); err != nil {
+			return fmt.Errorf("invalid MAC address %q: %w", mac, err)
+		}
+		nw, err := s.network.GetNetwork(netID)
+		if err != nil {
+			return err
+		}
+		if ep := nw.Containers[st.ID]; ep != nil {
+			ep.MacAddress = mac
+		} else {
+			nw.Containers[st.ID] = &network.Endpoint{
+				EndpointID: common.GenerateID(64),
+				MacAddress: mac,
+			}
+		}
+	}
+	return s.network.Connect(netID, st.ID, staticIP, aliases, nil, st.Pid)
+}
+
+// flexStrings decodes a JSON string or a JSON array of strings.
+type flexStrings []string
+
+func (f *flexStrings) UnmarshalJSON(data []byte) error {
+	var one string
+	if err := json.Unmarshal(data, &one); err == nil {
+		if one == "" {
+			*f = nil
+		} else {
+			*f = []string{one}
+		}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(data, &many); err != nil {
+		return err
+	}
+	*f = many
+	return nil
 }
 
 // --- Events (P4) -----------------------------------------------------------

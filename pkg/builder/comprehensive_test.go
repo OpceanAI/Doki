@@ -9,7 +9,7 @@ import (
 	"github.com/OpceanAI/Doki/pkg/image"
 )
 
-// --- PARSER TESTS ---
+// PARSER TESTS
 
 func TestParseFromWithAS(t *testing.T) {
 	content := []byte("FROM alpine:3.18 AS builder\nRUN echo hi\n")
@@ -476,7 +476,7 @@ func TestParseMaintainerInstr(t *testing.T) {
 	}
 }
 
-// --- EDGE CASE TESTS ---
+// EDGE CASE TESTS
 
 func TestParseLineContinuation(t *testing.T) {
 	content := []byte("FROM alpine\nRUN apt-get update && \\\n    apt-get install -y curl\n")
@@ -589,7 +589,7 @@ RUN echo 3
 	}
 }
 
-// --- VARIABLE SUBSTITUTION TESTS ---
+// VARIABLE SUBSTITUTION TESTS
 
 func TestSubstituteVarsBraces(t *testing.T) {
 	envMap := map[string]string{"FOO": "bar"}
@@ -631,7 +631,7 @@ func TestSubstituteVarsBuildArgPriority(t *testing.T) {
 	}
 }
 
-// --- EXECUTOR TESTS ---
+// EXECUTOR TESTS
 
 func TestExecuteEnv(t *testing.T) {
 	b := NewBuilder(nil)
@@ -922,7 +922,7 @@ func TestExecuteMaintainer(t *testing.T) {
 	}
 }
 
-// --- COPY TESTS ---
+// COPY TESTS
 
 func TestExecuteCopyLocalFile(t *testing.T) {
 	ctxDir := t.TempDir()
@@ -990,7 +990,7 @@ func TestExecuteCopyDirectory(t *testing.T) {
 	}
 }
 
-// --- DOCKERIGNORE TESTS ---
+// DOCKERIGNORE TESTS
 
 func TestDockerignoreParse(t *testing.T) {
 	dir := t.TempDir()
@@ -1027,7 +1027,7 @@ func TestDockerignoreMissing(t *testing.T) {
 	}
 }
 
-// --- PARSE ARGS TESTS ---
+// PARSE ARGS TESTS
 
 func TestParseArgsEmpty(t *testing.T) {
 	args := parseArgs("")
@@ -1063,7 +1063,7 @@ func TestParseArgsQuoted(t *testing.T) {
 	}
 }
 
-// --- VALIDATE TESTS ---
+// VALIDATE TESTS
 
 func TestValidateValid(t *testing.T) {
 	err := Validate([]byte("FROM alpine\nRUN echo test\n"))
@@ -1086,7 +1086,7 @@ func TestValidateEmpty(t *testing.T) {
 	}
 }
 
-// --- DOCKERIGNORE DOUBLE STAR TESTS ---
+// DOCKERIGNORE DOUBLE STAR TESTS
 
 func TestDockerignoreDoubleStar(t *testing.T) {
 	di := &Dockerignore{patterns: []string{"**/*.log"}}
@@ -1098,7 +1098,7 @@ func TestDockerignoreDoubleStar(t *testing.T) {
 	}
 }
 
-// --- HEALTHCHECK PARSING ---
+// HEALTHCHECK PARSING
 
 func TestExecuteHealthcheckStartPeriod(t *testing.T) {
 	b := NewBuilder(nil)
@@ -1123,7 +1123,7 @@ func TestExecuteHealthcheckStartPeriod(t *testing.T) {
 	}
 }
 
-// --- ONBUILD PARSING ---
+// ONBUILD PARSING
 
 func TestParseOnbuildInstructions(t *testing.T) {
 	data := "RUN|echo hello;;COPY|file.txt /dest/"
@@ -1146,7 +1146,7 @@ func TestParseOnbuildInstructionsEmpty(t *testing.T) {
 	}
 }
 
-// --- ENV KEY=VALUE PARSING IN EXECUTOR ---
+// ENV KEY=VALUE PARSING IN EXECUTOR
 
 func TestExecuteEnvMultipleInOneInstruction(t *testing.T) {
 	b := NewBuilder(nil)
@@ -1164,7 +1164,7 @@ func TestExecuteEnvMultipleInOneInstruction(t *testing.T) {
 	}
 }
 
-// --- COPY --from NUMERIC INDEX ---
+// COPY --from NUMERIC INDEX
 
 func TestParseCopyFromNumeric(t *testing.T) {
 	content := []byte(`FROM alpine AS build
@@ -1186,7 +1186,7 @@ COPY --from=0 /app /app
 	}
 }
 
-// --- DIRECTIVE PARSING ---
+// DIRECTIVE PARSING
 
 func TestParseDirectivesOnlyBeforeFirstInstruction(t *testing.T) {
 	content := []byte(`# syntax=dockerfile:1
@@ -1204,7 +1204,7 @@ RUN echo hi
 	}
 }
 
-// --- LABEL WITH QUOTES ---
+// LABEL WITH QUOTES
 
 func TestParseLabelWithQuotes(t *testing.T) {
 	content := []byte(`FROM alpine
@@ -1220,7 +1220,7 @@ LABEL "com.example.version"="1.0"
 	}
 }
 
-// --- EXPOSE PORT ONLY (no protocol) ---
+// EXPOSE PORT ONLY (no protocol)
 
 func TestExecuteExposeDefaultProtocol(t *testing.T) {
 	b := NewBuilder(nil)
@@ -1235,7 +1235,7 @@ func TestExecuteExposeDefaultProtocol(t *testing.T) {
 	}
 }
 
-// --- STOPSIGNAL NUMERIC ---
+// STOPSIGNAL NUMERIC
 
 func TestExecuteStopsignalNumeric(t *testing.T) {
 	b := NewBuilder(nil)

@@ -132,7 +132,7 @@ VZ backend via cgo bridge to Virtualization.framework for macOS 11+. QEMU backen
 
 ### Cross-Architecture Emulation
 
-Run x86 containers on ARM and vice versa without kernel support. Three backends: QEMU user-mode (`qemu-x86_64-static`, `qemu-aarch64-static`), FEX-Emu (x86-on-ARM, optimized for Termux/Android), and Box64 (lightweight x86_64 emulator). Configurable via `doki emulator ls|set|detect` or `DOKI_EMULATION_MODE=qemu|fex|box64|auto`. Persistent preferences stored in `~/.doki/emulation.json` with atomic writes and env-var override. Auto-detection selects the best available backend for your host architecture.
+Run x86 containers on ARM and vice versa without kernel support. Three backends: QEMU user-mode (`qemu-x86_64-static`, `qemu-aarch64-static`), FEX-Emu (x86-on-ARM, optimized for Termux/Android), and Box64 (lightweight x86_64 emulator). Configurable via `doki emu show|detect|test|set` or `DOKI_EMULATION_MODE=qemu|fex|box64|auto`. Persistent preferences stored in `~/.doki/emulation.json` with atomic writes and env-var override. Auto-detection selects the best available backend for your host architecture.
 
 ---
 
@@ -208,7 +208,7 @@ doki-kubectl logs web-abc123
 
 | Binary | Size | Description |
 |:-------|:----:|:------------|
-| **doki** | 6.7 MB | CLI with 108+ commands. Connects to daemon via Unix socket |
+| **doki** | 6.7 MB | CLI with 100+ commands. Connects to daemon via Unix socket |
 | **dokid** | 9.2 MB | Daemon. Docker Engine API v1.54 + Podman API v5 over Unix socket |
 | **doki-compose** | 7.6 MB | Compose engine with watch, publish, healthcheck execution, and full spec support |
 | **doki-init** | 2.9 MB | PID 1 for microVM guests (Go). Rust variant available in source |
@@ -304,7 +304,7 @@ The VZ backend uses `VZVirtualMachineConfiguration`, `VZLinuxBootLoader`, `VZVir
 
 ## CLI
 
-Doki provides **108 commands** across 8 categories.
+Doki provides **100 commands** across 8 categories.
 
 ### Container Management
 
@@ -892,7 +892,7 @@ go build -trimpath -ldflags="-s -w" -o releases/doki-kubectl ./cmd/doki-kubectl
 ```
 Doki/
   cmd/
-    doki/                 CLI binary (108 commands, 1600+ lines)
+    doki/                 CLI binary (100 commands, 2000+ lines)
     dokid/                Daemon binary (REST API, TLS, rate limiting)
     doki-compose/         Docker Compose compatible CLI
     doki-init/            Minimal PID 1 for containers (Go)

@@ -15,19 +15,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
-	"sort"
 	"time"
 
+	"github.com/OpceanAI/Doki/internal/apparmor"
 	"github.com/OpceanAI/Doki/internal/cgroups"
 	"github.com/OpceanAI/Doki/internal/dokivm"
 	"github.com/OpceanAI/Doki/internal/dokivm/rootfs"
 	"github.com/OpceanAI/Doki/internal/fuse"
 	"github.com/OpceanAI/Doki/internal/namespaces"
 	"github.com/OpceanAI/Doki/internal/proot"
+	"github.com/OpceanAI/Doki/internal/seccomp"
 	"github.com/OpceanAI/Doki/pkg/common"
 	"github.com/OpceanAI/Doki/pkg/storage"
 )
@@ -38,6 +41,11 @@ import (
 // rootlessChownOnce ensures the "chown skipped in rootless mode" INFO
 // message is emitted only once per process, not once per file.
 var rootlessChownOnce sync.Once
+
+// osLink is a variable indirection over os.Link so tests can force the
+// hardlink path to fail (e.g. EPERM on filesystems that forbid links) and
+// exercise the copy fallback.
+var osLink = os.Link
 
 // logChownError logs a chown/lchown error appropriately. In rootless
 // mode (non-root UID or Termux/proot), chown returns EPERM because
@@ -82,7 +90,9 @@ type Runtime struct {
 	rootless bool
 	mode     ExecutionMode
 	registry *Registry
-	dnsAddr  string // Internal DNS server address (e.g., "127.0.0.11:53")
+	// forcedMode overrides detectMode when set (WithMode).
+	forcedMode *ExecutionMode
+	dnsAddr    string // Internal DNS server address (e.g., "127.0.0.11:53")
 
 	hcMu           sync.Mutex
 	healthCheckers map[string]*HealthChecker
@@ -92,6 +102,11 @@ type Runtime struct {
 	// cannot ride on ContainerState across calls; it lives here instead.
 	ioMu    sync.Mutex
 	brokers map[string]*stdioBroker
+
+	// restartStop holds per-container channels used to cancel a pending
+	// restart backoff (handleRestart) when the container is stopped or deleted.
+	restartStopMu sync.Mutex
+	restartStop   map[string]chan struct{}
 }
 
 // LinuxResources is a portable representation of cgroup resource
@@ -115,7 +130,16 @@ type LinuxResources struct {
 	PidsLimit int64
 
 	// Block I/O
-	BlkioWeight uint16
+	BlkioWeight          uint16
+	BlkioWeightDevice    []common.WeightDevice
+	BlkioDeviceReadBps   []common.ThrottleDevice
+	BlkioDeviceWriteBps  []common.ThrottleDevice
+	BlkioDeviceReadIOps  []common.ThrottleDevice
+	BlkioDeviceWriteIOps []common.ThrottleDevice
+
+	// CPU realtime scheduling (0 = disabled/unchanged).
+	CPURealtimePeriod  uint64
+	CPURealtimeRuntime int64
 
 	// OOM
 	OomKillDisable bool
@@ -176,18 +200,31 @@ type HealthCheckConfig struct {
 
 // Resources defines the resource limits for a container.
 type Resources struct {
-	CPUShares      int64
-	Memory         int64
-	MemorySwap     int64
-	NanoCpus       int64
-	CPUPeriod      int64
-	CPUQuota       int64
-	CpusetCpus     string
-	CpusetMems     string
-	PidsLimit      int64
-	BlkioWeight    uint16
-	OomKillDisable bool
-	ShmSize        int64
+	CPUShares   int64
+	Memory      int64
+	MemorySwap  int64
+	NanoCpus    int64
+	CPUPeriod   int64
+	CPUQuota    int64
+	CpusetCpus  string
+	CpusetMems  string
+	PidsLimit   int64
+	BlkioWeight uint16
+	// Per-device blkio rules (Docker API 1.55). Nil = unchanged, empty =
+	// cleared. Persisted with the container config; live enforcement depends
+	// on the cgroup manager in use.
+	BlkioWeightDevice    []common.WeightDevice
+	BlkioDeviceReadBps   []common.ThrottleDevice
+	BlkioDeviceWriteBps  []common.ThrottleDevice
+	BlkioDeviceReadIOps  []common.ThrottleDevice
+	BlkioDeviceWriteIOps []common.ThrottleDevice
+	OomKillDisable       bool
+	// MemorySwappiness tunes swappiness (0-100); nil means unchanged.
+	MemorySwappiness *int64
+	// CPU realtime scheduling limits (0 = disabled/unchanged).
+	CPURealtimePeriod  int64
+	CPURealtimeRuntime int64
+	ShmSize            int64
 }
 
 // ImageOCIConfig represents the OCI image configuration extracted from an image manifest.
@@ -220,8 +257,12 @@ type ContainerState struct {
 	Mode         ExecutionMode         `json:"mode"`
 	RestartCount int                   `json:"restartCount,omitempty"`
 	HealthStatus *common.HealthStatus  `json:"healthStatus,omitempty"`
-	ExitChan     chan struct{}         `json:"-"`
-	Cmd          *exec.Cmd             `json:"-"`
+	// StoppedByUser is set when the user explicitly stops a container. It is
+	// checked by the "unless-stopped" restart policy so a manual stop is not
+	// undone by the restart monitor.
+	StoppedByUser bool          `json:"stoppedByUser,omitempty"`
+	ExitChan      chan struct{} `json:"-"`
+	Cmd           *exec.Cmd     `json:"-"`
 	// io brokers live interactive stdio (pty or pipes) for `run -it`/`run -i`.
 	// Like Cmd it is never persisted: it only exists while the process is a
 	// child of this daemon instance.
@@ -235,6 +276,14 @@ type RuntimeOption func(*Runtime)
 func WithRegistry(reg *Registry) RuntimeOption {
 	return func(rt *Runtime) {
 		rt.registry = reg
+	}
+}
+
+// WithMode forces the execution mode instead of auto-detecting it. Used by
+// tests and embedders that need a deterministic runner choice.
+func WithMode(mode ExecutionMode) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.forcedMode = &mode
 	}
 }
 
@@ -275,6 +324,10 @@ func (rt *Runtime) Registry() *Registry {
 }
 
 func (rt *Runtime) detectMode() {
+	if rt.forcedMode != nil {
+		rt.mode = *rt.forcedMode
+		return
+	}
 	switch {
 	case dokivm.IsAvailable():
 		rt.mode = ModeMicroVM
@@ -309,8 +362,7 @@ func (rt *Runtime) isAndroid() bool {
 	return false
 }
 
-// ─── Container lifecycle ───────────────────────────────────────────
-
+// Container lifecycle
 // Create creates a new container with the given configuration.
 func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 	rt.mu.Lock()
@@ -320,7 +372,10 @@ func (rt *Runtime) Create(cfg *Config) (*ContainerState, error) {
 		return nil, fmt.Errorf("container ID cannot be empty")
 	}
 
-	if _, err := rt.loadState(cfg.ID); err == nil {
+	// Exact-match only: loadState falls back to prefix matching, which would
+	// wrongly treat "abc" as conflicting with an existing "abcdef..." container.
+	statePath := filepath.Join(rt.root, "containers", cfg.ID, "state.json")
+	if common.PathExists(statePath) {
 		return nil, common.NewErrConflict("container", cfg.ID)
 	}
 
@@ -754,16 +809,25 @@ func extractTarGzInto(tarPath, dest string, deferredDirs *[]deferredDir) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			linkTarget := filepath.Clean(filepath.Join(dest, hdr.Linkname))
+			linkTarget, err := common.SecureJoin(cleanDest, hdr.Linkname)
+			if err != nil {
+				return fmt.Errorf("tar: resolve hardlink %s -> %s: %w", hdr.Name, hdr.Linkname, err)
+			}
 			if !strings.HasPrefix(linkTarget, cleanDest+string(os.PathSeparator)) && linkTarget != cleanDest {
 				return fmt.Errorf("tar: hardlink escape attempt")
 			}
 			_ = os.Remove(target)
 			// C8: Hardlink with fallback to copy; return error if both fail.
-			if err := os.Link(linkTarget, target); err != nil {
+			if err := osLink(linkTarget, target); err != nil {
 				if data, readErr := os.ReadFile(linkTarget); readErr == nil {
 					_ = os.Remove(target)
-					if writeErr := os.WriteFile(target, data, 0644); writeErr != nil {
+					// Tar hardlink entries often carry Mode 0, which would
+					// create an unreadable file -- fall back to 0644 then.
+					fbMode := common.SafeFileMode(hdr.Mode)
+					if hdr.Mode == 0 {
+						fbMode = 0644
+					}
+					if writeErr := os.WriteFile(target, data, fbMode); writeErr != nil {
 						return fmt.Errorf("tar: hardlink copy fallback: %w", writeErr)
 					}
 				} else {
@@ -878,6 +942,14 @@ func (rt *Runtime) Start(id string) error {
 	bundleDir := state.Bundle
 	rootfsDir := filepath.Join(bundleDir, "rootfs")
 	cfg := state.Config
+
+	// Honest security gate: reject explicit seccomp profiles and any AppArmor
+	// confinement this mode/host cannot enforce, instead of starting the
+	// container unconfined while the config claims otherwise. CRI callers
+	// already fail fast at CreateContainer; this covers direct users.
+	if err := checkSecurityRequests(rt.mode, cfg.SecurityOpt); err != nil {
+		return err
+	}
 
 	// H5: Log driver selection.
 	var logFile *os.File
@@ -1016,6 +1088,11 @@ func (rt *Runtime) monitorProcess(state *ContainerState, logFile *os.File) {
 
 	// Lock for state modification and persistence only.
 	rt.mu.Lock()
+	// Preserve a manual-stop flag that Stop() may have persisted while we were
+	// blocked in Cmd.Wait(); our in-memory copy predates that write.
+	if cur, err := rt.loadState(state.ID); err == nil && cur.StoppedByUser {
+		state.StoppedByUser = true
+	}
 	state.Status = common.StateExited
 	state.Finished = time.Now()
 	state.ExitCode = exitCode
@@ -1040,67 +1117,128 @@ func (rt *Runtime) handleRestart(state *ContainerState, exitCode int) {
 	switch cfg.RestartPolicy {
 	case common.RestartAlways:
 		// G11: "always" policy loops via monitorProcess re-registration each time.
-		time.Sleep(1 * time.Second)
-		rt.mu.Lock()
-		state.RestartCount++
-		if err := rt.saveState(state); err != nil {
-			slog.Default().Warn("saveState failed", "error", err)
+		if !rt.waitBackoff(id, 1*time.Second) {
+			return // stopped while waiting
 		}
-		rt.mu.Unlock()
+		rt.incrementRestart(state)
 		if err := rt.Start(id); err != nil {
 			slog.Warn("restart-always failed", "id", id, "err", err)
 		}
 
 	case common.RestartOnFailure:
-		if exitCode != 0 {
-			rt.mu.Lock()
-			state.RestartCount++
-			if err := rt.saveState(state); err != nil {
-				slog.Default().Warn("saveState failed", "error", err)
+		if exitCode == 0 {
+			return
+		}
+		maxRetries := cfg.RestartMaxRetries
+		// G12: Fix backoff overflow for maxRetries=0 (unlimited) - cap at 60s.
+		if maxRetries < 0 {
+			maxRetries = 0
+		}
+		backoff := 1 * time.Second
+		for attempt := 0; maxRetries == 0 || attempt < maxRetries; attempt++ {
+			rt.incrementRestart(state)
+			if err := rt.Start(id); err == nil {
+				return // Success: new monitorProcess will handle next exit.
 			}
-			rt.mu.Unlock()
-
-			maxRetries := cfg.RestartMaxRetries
-			// G12: Fix backoff overflow for maxRetries=0 (unlimited) - cap at 60s.
-			if maxRetries < 0 {
-				maxRetries = 0
+			// No backoff wait after the final allowed attempt.
+			if maxRetries != 0 && attempt+1 >= maxRetries {
+				return
 			}
-			backoff := time.Duration(1) * time.Second
-			for i := 0; maxRetries == 0 || i < maxRetries; i++ {
-				time.Sleep(backoff)
-				backoff *= 2
-				if backoff > 60*time.Second {
-					backoff = 60 * time.Second
-				}
-				rt.mu.Lock()
-				state.RestartCount++
-				if err := rt.saveState(state); err != nil {
-					slog.Default().Warn("saveState failed", "error", err)
-				}
-				rt.mu.Unlock()
-				if err := rt.Start(id); err == nil {
-					return // Success: new monitorProcess will handle next exit.
-				}
+			if !rt.waitBackoff(id, backoff) {
+				return // stopped while waiting
+			}
+			backoff *= 2
+			if backoff > 60*time.Second {
+				backoff = 60 * time.Second
 			}
 		}
 
 	case common.RestartUnlessStopped:
-		if state.Status != common.StateDead {
-			time.Sleep(1 * time.Second)
-			rt.mu.Lock()
-			state.RestartCount++
-			if err := rt.saveState(state); err != nil {
-				slog.Default().Warn("saveState failed", "error", err)
-			}
-			rt.mu.Unlock()
-			_ = rt.Start(id)
+		// A manual Stop() sets StoppedByUser on the persisted state, but the
+		// in-memory `state` here may predate that write (monitorProcess holds a
+		// different copy than Stop's loadState). Re-read the persisted flag so
+		// "unless-stopped" never resurrects a container the user just stopped.
+		stoppedByUser := state.StoppedByUser
+		if cur, err := rt.loadState(id); err == nil {
+			stoppedByUser = stoppedByUser || cur.StoppedByUser
 		}
+		if stoppedByUser {
+			return
+		}
+		if !rt.waitBackoff(id, 1*time.Second) {
+			return
+		}
+		rt.incrementRestart(state)
+		_ = rt.Start(id)
 	}
 }
 
-// ─── 3 execution modes ─────────────────────────────────────────────
+// incrementRestart bumps RestartCount exactly once and persists it. Extracting
+// the save into a helper removes the previous double-increment bug where the
+// counter advanced both before and inside the retry loop.
+func (rt *Runtime) incrementRestart(state *ContainerState) {
+	rt.mu.Lock()
+	state.RestartCount++
+	if err := rt.saveState(state); err != nil {
+		slog.Default().Warn("saveState failed", "error", err)
+	}
+	rt.mu.Unlock()
+}
 
+// waitBackoff blocks for d (bounded by a timer) unless the container's restart
+// stop channel is closed first (manual stop / delete). Returns false when the
+// wait was interrupted so the caller aborts the restart.
+func (rt *Runtime) waitBackoff(id string, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-rt.restartStopCh(id):
+		return false
+	}
+}
+
+// restartStopCh returns the per-container restart-cancel channel, creating it
+// on first use. Closing it cancels any in-flight handleRestart backoff.
+func (rt *Runtime) restartStopCh(id string) <-chan struct{} {
+	rt.restartStopMu.Lock()
+	defer rt.restartStopMu.Unlock()
+	if rt.restartStop == nil {
+		rt.restartStop = make(map[string]chan struct{})
+	}
+	ch, ok := rt.restartStop[id]
+	if !ok {
+		ch = make(chan struct{})
+		rt.restartStop[id] = ch
+	}
+	return ch
+}
+
+// signalRestartStop closes and forgets the restart-cancel channel for id, if
+// one exists. It is safe to call multiple times.
+func (rt *Runtime) signalRestartStop(id string) {
+	rt.restartStopMu.Lock()
+	defer rt.restartStopMu.Unlock()
+	if ch, ok := rt.restartStop[id]; ok {
+		close(ch)
+		delete(rt.restartStop, id)
+	}
+}
+
+// Execution mode dispatch
 // startProcess selects the appropriate execution mode.
+//
+// Fully implemented here: native, proot, namespaces, microvm. The remaining
+// modes (wasm, gvisor, sysbox, qemu-user, chroot, fex, legacy32, pkdroid) are
+// experimental: they run only through a ContainerRunner from the Registry
+// (pkg/runtime/runners/...) wired in via WithRegistry, and fail with an honest,
+// actionable error when no runner for the mode is registered or detected on
+// this host. They never silently fall back to unconfined native execution,
+// which would misreport the container's isolation level.
 func (rt *Runtime) startProcess(cfg *Config, rootfsDir string, logFile *os.File) (int, *exec.Cmd, error) {
 	switch rt.mode {
 	case ModeMicroVM:
@@ -1109,9 +1247,44 @@ func (rt *Runtime) startProcess(cfg *Config, rootfsDir string, logFile *os.File)
 		return rt.startWithProot(cfg, rootfsDir, logFile)
 	case ModeNamespaces:
 		return rt.startWithNamespaces(cfg, rootfsDir, logFile)
-	default:
+	case ModeNative:
 		return rt.startNative(cfg, rootfsDir, logFile)
+	default:
+		// Experimental runners: expose the registry runner for this mode when
+		// one is registered and usable on this host.
+		if rt.registry != nil {
+			if runner := rt.registry.Get(rt.mode); runner != nil {
+				return rt.startWithRunner(cfg, runner, logFile)
+			}
+		}
+		return 0, nil, fmt.Errorf(
+			"execution mode %q is experimental: no runner for it is registered/available on this host (wire one with runtime.WithRegistry); use --runtime native|proot|namespaces|microvm instead",
+			rt.mode)
 	}
+}
+
+// startWithRunner bridges the experimental execution modes to their
+// ContainerRunner implementation from the registry. The runner owns the
+// container process; the returned pid is tracked in the container state like
+// any other mode, while *exec.Cmd stays nil (the process is not a direct child
+// of the daemon). Output goes to the container log only when the runner
+// reports it; a marker line documents the mode in the log.
+func (rt *Runtime) startWithRunner(cfg *Config, runner ContainerRunner, logFile *os.File) (int, *exec.Cmd, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	id, err := runner.Create(ctx, cfg)
+	if err != nil {
+		return 0, nil, fmt.Errorf("runner %s: create: %w", runner.Name(), err)
+	}
+	pid, err := runner.Start(ctx, id)
+	if err != nil {
+		return 0, nil, fmt.Errorf("runner %s: start: %w", runner.Name(), err)
+	}
+	if logFile != nil {
+		_, _ = logFile.Write([]byte(fmt.Sprintf("[doki] started via experimental runner %s (pid %d)\n", runner.Name(), pid)))
+	}
+	return pid, nil, nil
 }
 
 // startNative runs the container process directly on the host without
@@ -1130,6 +1303,29 @@ func (rt *Runtime) startNative(cfg *Config, rootfsDir string, logFile *os.File) 
 		cmd.Dir = filepath.Join(rootfsDir, cfg.Cwd)
 	}
 	cmd.Env = cfg.Env
+
+	// Real seccomp enforcement: when the container requests a profile through
+	// SecurityOpt ("seccomp=<spec>"), the command is started through the
+	// re-exec shim so it runs under an actual kernel filter. A requested
+	// profile that cannot be enforced is a hard error, never a silent no-op.
+	// "no-new-privileges" without a seccomp profile rides the same shim so
+	// NO_NEW_PRIVS is genuinely set via prctl before exec.
+	spec := seccompSpec(cfg.SecurityOpt)
+	nnb := hasNoNewPrivs(cfg.SecurityOpt)
+	if (spec != "" && spec != "unconfined") || nnb {
+		if !seccomp.Supported() {
+			if spec != "" && spec != "unconfined" {
+				return 0, nil, fmt.Errorf("seccomp profile %q requested, but this kernel/process cannot install seccomp filters", spec)
+			}
+			slog.Warn("no-new-privileges requested but seccomp shim unavailable; continuing without NO_NEW_PRIVS confinement")
+		} else {
+			wrapped, err := confineShimCommand(spec, nnb, cmd.Args, cmd.Env, cmd.Dir)
+			if err != nil {
+				return 0, nil, err
+			}
+			cmd = wrapped
+		}
+	}
 
 	if cfg.User != "" {
 		u, g := parseUser(cfg.User)
@@ -1473,8 +1669,7 @@ func (rt *Runtime) startWithNamespaces(cfg *Config, rootfsDir string, logFile *o
 	return cmd.Process.Pid, cmd, nil
 }
 
-// ─── Mount setup (namespace mode only) ─────────────────────────────
-
+// Mount setup (namespace mode only)
 func (rt *Runtime) setupMounts(rootfsDir string, cfg *Config) error {
 	_ = fuse.ProcMount(filepath.Join(rootfsDir, "proc"))
 	_ = fuse.SysMount(filepath.Join(rootfsDir, "sys"))
@@ -1520,10 +1715,15 @@ func (rt *Runtime) setupMounts(rootfsDir string, cfg *Config) error {
 	return nil
 }
 
-// ─── Container operations ──────────────────────────────────────────
-
+// Container operations
 // Exec runs a command inside a running container.
 func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user string) ([]byte, []byte, error) {
+	return rt.ExecContext(context.Background(), id, args, env, workingDir, user)
+}
+
+// ExecContext runs a command inside a running container, honouring ctx for
+// cancellation and deadlines (the child process is killed when ctx is done).
+func (rt *Runtime) ExecContext(ctx context.Context, id string, args []string, env []string, workingDir, user string) ([]byte, []byte, error) {
 	var stdoutBuf, stderrBuf bytes.Buffer
 
 	state, err := rt.State(id)
@@ -1564,7 +1764,7 @@ func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user
 		// Clear LD_PRELOAD family in the parent process so exec.Command does not
 		// propagate libtermux-exec.so to the proot child.
 		proot.UnsetProotKillers()
-		cmd := exec.Command(prootBin, prootArgs...)
+		cmd := exec.CommandContext(ctx, prootBin, prootArgs...)
 		// Use BuildEnv for the same env composition as startWithProot.
 		cmd.Env = proot.BuildEnv(env, nil)
 		// IMPORTANT: cmd.Dir must NOT be set to the guest rootfs path.
@@ -1583,7 +1783,7 @@ func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user
 			nsenterArgs = append(nsenterArgs, "-w", workingDir)
 		}
 		nsenterArgs = append(append(nsenterArgs, "--"), args...)
-		cmd := exec.Command("nsenter", nsenterArgs...)
+		cmd := exec.CommandContext(ctx, "nsenter", nsenterArgs...)
 		cmd.Env = env
 		cmd.Stdout = &stdoutBuf
 		cmd.Stderr = &stderrBuf
@@ -1593,7 +1793,7 @@ func (rt *Runtime) Exec(id string, args []string, env []string, workingDir, user
 	case ModeNative:
 		fallthrough
 	default:
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 		if workingDir != "" {
 			cmd.Dir = workingDir
 		} else if rootfsDir != "" && common.PathExists(rootfsDir) {
@@ -1838,6 +2038,14 @@ func (rt *Runtime) Stop(id string, timeout int) error {
 		rt.mu.Unlock()
 		return nil // Idempotent: already stopped
 	}
+
+	// Mark the container as manually stopped so the "unless-stopped" restart
+	// policy does not resurrect it, and cancel any pending restart backoff.
+	state.StoppedByUser = true
+	if err := rt.saveState(state); err != nil {
+		slog.Warn("saveState failed", "error", err)
+	}
+	rt.signalRestartStop(id)
 
 	sig := syscall.SIGTERM
 	if state.Config != nil && state.Config.StopSignal != "" {
@@ -2317,8 +2525,7 @@ func (rt *Runtime) Processes(id string) ([]string, error) {
 	return strings.Split(string(data), "\n"), nil
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────
-
+// Helpers
 func (rt *Runtime) cleanupContainer(state *ContainerState) {
 	if rt.cgMgr != nil {
 		_ = rt.cgMgr.Destroy(state.ID)
@@ -2494,8 +2701,7 @@ func parseExtraHosts(hosts []string) map[string]string {
 	return m
 }
 
-// ─── Healthcheck ──────────────────────────────────────────────────
-
+// Healthcheck
 // StartHealthcheck begins periodic health checks for a container.
 // This is a backward-compatible wrapper that delegates to HealthChecker.
 func (rt *Runtime) StartHealthcheck(id string, cmd []string, interval, timeout time.Duration, retries int) {
@@ -2533,36 +2739,97 @@ func (rt *Runtime) stopHealthchecker(id string) {
 	}
 }
 
-// ─── Seccomp enforcement ───────────────────────────────────────────
-
-// ApplySeccomp applies a seccomp profile to the current process (for use before exec).
-func ApplySeccomp(profilePath string) error {
-	// On Android, seccomp is not available for unprivileged processes.
-	if _, err := os.Stat("/system/build.prop"); err == nil {
-		return nil
+// Seccomp / AppArmor enforcement
+// ApplySeccomp installs a seccomp profile on the calling thread, for use
+// immediately before exec'ing the container process (the filter survives
+// exec). The profile spec may be a builtin name ("default", "privileged",
+// "android", "arm"), a profile JSON file path, inline JSON, or "unconfined".
+//
+// This is real enforcement through seccomp(2) (see internal/seccomp). On
+// kernels that refuse the filter the error is returned as-is: callers must not
+// report seccomp as active unless the call returned nil and
+// SeccompEnforced() is true.
+func ApplySeccomp(profileSpec string) error {
+	profile, err := seccomp.ResolveProfile(profileSpec)
+	if err != nil {
+		return err
 	}
-	// seccomp is applied via OCI runtime hook or directly via libseccomp.
-	// This is a no-op when libseccomp is not available.
-	_ = profilePath
+	return seccomp.ApplyToSelf(profile)
+}
+
+// SeccompEnforced reports whether this process actually runs under a seccomp
+// filter installed by ApplySeccomp/the container shim. It is deliberately
+// false everywhere enforcement did not happen, so `/info` and the security
+// posture reporting never claim seccomp that is not there.
+func SeccompEnforced() bool { return seccomp.Applied() }
+
+// AppArmorEnforced reports whether an AppArmor profile was successfully
+// applied to a live process by ApplyAppArmor.
+func AppArmorEnforced() bool { return apparmorApplied.Load() }
+
+var apparmorApplied atomic.Bool
+
+// ApplyAppArmor applies an AppArmor profile to a live process. The profile is
+// loaded into the kernel via apparmor_parser (if not already loaded), then the
+// named profile is written to /proc/<pid>/attr/current, which takes effect at
+// that process' next exec.
+//
+// Honest limitations: AppArmor is unavailable on most Android/Termux hosts and
+// requires root to load profiles; both cases return an error instead of
+// silently doing nothing. Applying to pid == os.Getpid() confines the calling
+// process itself (intended only for a pre-exec shim).
+func ApplyAppArmor(pid int, profileName string) error {
+	if profileName == "" {
+		return fmt.Errorf("apparmor: empty profile name")
+	}
+	if !apparmor.IsEnabled() {
+		return fmt.Errorf("apparmor is not available on this host (no /sys/kernel/security/apparmor)")
+	}
+	// Load the generated doki profile so the name can actually be entered.
+	prof, err := apparmor.NewProfile(profileName)
+	if err != nil {
+		return fmt.Errorf("apparmor: build profile: %w", err)
+	}
+	if err := apparmor.LoadProfile(prof); err != nil {
+		return fmt.Errorf("apparmor: load profile %q: %w", prof.Name, err)
+	}
+	attrPath := fmt.Sprintf("/proc/%d/attr/current", pid)
+	if err := os.WriteFile(attrPath, []byte(prof.Name), 0); err != nil {
+		return fmt.Errorf("apparmor: apply %q to pid %d: %w", prof.Name, pid, err)
+	}
+	apparmorApplied.Store(true)
 	return nil
 }
 
-// ApplyAppArmor applies an AppArmor profile to a container.
-// KNOWN ISSUE: This writes to /proc/self/attr/current which only affects the
-// calling goroutine, not the actual container process. A correct implementation
-// requires writing to /proc/<pid>/attr/current after the container process has
-// started, which requires an architecture change to defer profile application
-// until after fork/exec.
-func ApplyAppArmor(profileName string) error {
-	if _, err := os.Stat("/sys/kernel/security/apparmor"); err != nil {
-		return nil // AppArmor not available
-	}
-	// Write profile name to /proc/self/attr/current.
-	return os.WriteFile("/proc/self/attr/current", []byte(profileName), 0644)
+// SecurityStatus reports the security mechanisms this build can actually
+// enforce on this host. API surfaces (`/info`, `doki info`) must derive their
+// seccomp/apparmor claims from this struct instead of hardcoding availability.
+type SecurityStatus struct {
+	// SeccompSupported: the kernel accepts seccomp filters from this process.
+	SeccompSupported bool
+	// SeccompEnforced: this process runs under a filter we installed.
+	SeccompEnforced bool
+	// SeccompShimAvailable: containers requesting seccomp=... can be started
+	// under a real filter through the re-exec shim (Linux only).
+	SeccompShimAvailable bool
+	// AppArmorSupported: AppArmor is present on this host.
+	AppArmorSupported bool
+	// AppArmorEnforced: a profile has been successfully applied by us.
+	AppArmorEnforced bool
 }
 
-// ─── MicroVM Mode ──────────────────────────────────────────────────
+// GetSecurityStatus returns the honest enforcement status for this host/process.
+func GetSecurityStatus() SecurityStatus {
+	return SecurityStatus{
+		SeccompSupported:     seccomp.Supported(),
+		SeccompEnforced:      seccomp.Applied(),
+		SeccompShimAvailable: seccomp.Supported(),
+		AppArmorSupported:    apparmor.IsEnabled(),
+		AppArmorEnforced:     apparmorApplied.Load(),
+	}
+}
 
+// MicroVM Mode
 // startWithMicroVM starts the container inside a hardware-isolated microVM.
 func (rt *Runtime) startWithMicroVM(cfg *Config, rootfsDir string, logFile *os.File) (int, *exec.Cmd, error) {
 	if !dokivm.IsAvailable() {

@@ -112,7 +112,7 @@ func (t *TapManager) EnableMasquerade() error {
 	return nil
 }
 
-// ─── CNI Integration ──────────────────────────────────────────────
+// CNI Integration
 
 // DefaultCNIBinDir is the default search path for CNI plugin binaries.
 var DefaultCNIBinDir = "/usr/lib/cni"

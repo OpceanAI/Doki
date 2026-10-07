@@ -73,7 +73,9 @@ func (r *Runner) Create(_ context.Context, cfg *rt.Config) (string, error) {
 	return id, nil
 }
 
-// Start launches the container process.
+// Start launches the container process. Always routes through the rootfs
+// with qemu -L (never a direct host exec): even when target==host, a direct
+// exec would run host binaries without containment.
 func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 	state, err := r.loadState(id)
 	if err != nil {
@@ -91,25 +93,16 @@ func (r *Runner) Start(ctx context.Context, id string) (int, error) {
 	targetArch := r.detectArch(state.Config)
 	qemuBin, ok := r.emulators[targetArch]
 	if !ok {
-		return 0, fmt.Errorf("no QEMU emulator for arch %s", targetArch)
-	}
-	// If target matches host, run directly.
-	if targetArch == hostArch() {
-		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-		cmd.Dir = rootfsDir
-		cmd.Env = state.Config.Env
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		if err := cmd.Start(); err != nil {
-			return 0, err
+		// Same-arch fallback: still contain via qemu if a host-arch
+		// emulator exists, else refuse rather than exec host binary.
+		if hb := r.emulators[hostArch()]; hb != "" {
+			qemuBin, ok = hb, true
+		} else {
+			return 0, fmt.Errorf("no QEMU emulator for arch %s", targetArch)
 		}
-		r.cmd = cmd
-		return cmd.Process.Pid, nil
 	}
-	// Use QEMU as wrapper.
-	qemuArgs := []string{"-L", rootfsDir}
-	qemuArgs = append(qemuArgs, args...)
+	// Use QEMU as wrapper, always contained in rootfs.
+	qemuArgs := buildQEMUArgs(rootfsDir, targetArch, args[0], args[1:], state.Config.Env)
 	cmd := exec.CommandContext(ctx, qemuBin, qemuArgs...)
 	cmd.Dir = rootfsDir
 	cmd.Env = state.Config.Env
@@ -140,12 +133,45 @@ func (r *Runner) Stop(_ context.Context, id string, timeout time.Duration) error
 	return nil
 }
 
-// Exec runs a process inside a running container.
-func (r *Runner) Exec(_ context.Context, _ string, cfg *rt.ExecConfig) (int, error) {
+// Exec runs a process inside a running container. Always routes through QEMU
+// with qemu -L rootfs (never a direct host exec): the binary is resolved
+// inside the container rootfs so we cannot execute an arbitrary host path.
+func (r *Runner) Exec(_ context.Context, id string, cfg *rt.ExecConfig) (int, error) {
 	if len(cfg.Args) == 0 {
 		return 0, fmt.Errorf("no command specified")
 	}
-	cmd := exec.Command(cfg.Args[0], cfg.Args[1:]...)
+	state, err := r.loadState(id)
+	if err != nil {
+		return 0, err
+	}
+	rootfsDir := ""
+	if state.Config != nil {
+		rootfsDir = state.Config.RootfsReady
+	}
+	if rootfsDir == "" {
+		rootfsDir = filepath.Join(state.Bundle, "rootfs")
+	}
+
+	// Resolve the binary inside the container rootfs. A host-absolute path
+	// must not escape the rootfs: strip the leading "/" and SecureJoin so
+	// "/bin/sh" -> "<rootfs>/bin/sh" and ".." / symlinks stay clamped.
+	binPath, err := common.SecureJoin(rootfsDir, strings.TrimPrefix(cfg.Args[0], "/"))
+	if err != nil {
+		return 0, fmt.Errorf("resolve exec binary in rootfs: %w", err)
+	}
+
+	targetArch := r.detectArch(state.Config)
+	qemuBin, ok := r.emulators[targetArch]
+	if !ok {
+		if hb := r.emulators[hostArch()]; hb != "" {
+			qemuBin, ok = hb, true
+		} else {
+			return 0, fmt.Errorf("no QEMU emulator for arch %s", targetArch)
+		}
+	}
+	qemuArgs := buildQEMUArgs(rootfsDir, targetArch, binPath, cfg.Args[1:], cfg.Env)
+	cmd := exec.Command(qemuBin, qemuArgs...)
+	cmd.Dir = rootfsDir
 	cmd.Env = cfg.Env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -263,6 +289,51 @@ func archMap(s string) string {
 	default:
 		return s
 	}
+}
+
+// buildQEMUArgs assembles the qemu-user argv: sysroot, CPU model, guest
+// LD_LIBRARY_PATH passthrough, and argv0 (-0) so the guest sees its own
+// binary name instead of the qemu binary.
+func buildQEMUArgs(rootfsDir, targetArch, bin string, rest, env []string) []string {
+	args := []string{"-L", rootfsDir}
+	if cpu := qemuCPU(targetArch); cpu != "" {
+		args = append(args, "-cpu", cpu)
+	}
+	if ld := envValue(env, "LD_LIBRARY_PATH"); ld != "" {
+		args = append(args, "-E", "LD_LIBRARY_PATH="+ld)
+	}
+	args = append(args, "-0", bin)
+	args = append(args, bin)
+	args = append(args, rest...)
+	return args
+}
+
+// qemuCPU maps a qemu arch suffix to a sane default CPU model.
+func qemuCPU(arch string) string {
+	switch arch {
+	case "arm":
+		return "cortex-a15"
+	case "aarch64":
+		return "cortex-a57"
+	case "x86_64":
+		return "qemu64"
+	case "i386":
+		return "qemu32"
+	case "riscv64":
+		return "rv64"
+	default:
+		return ""
+	}
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return ""
 }
 
 func (r *Runner) loadState(id string) (*rt.ContainerState, error) {

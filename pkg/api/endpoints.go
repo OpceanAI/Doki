@@ -40,7 +40,7 @@ func (s *Server) handleContainerResize(w http.ResponseWriter, r *http.Request, i
 	}
 
 	// Apply the new window size to the container's pty when it has one. For a
-	// non-TTY (or non-interactive) container this is a genuine no-op, which is
+	// non-TTY (or non-interactive) container this is a no-op, which is
 	// why ResizeTTY returns nil rather than an error there.
 	if err := s.runtime.ResizeTTY(state.ID, uint16(height), uint16(width)); err != nil {
 		// Only a hard failure (bad ioctl) reaches here; a missing pty is not an
@@ -67,8 +67,8 @@ func (s *Server) handleContainerArchive(w http.ResponseWriter, r *http.Request, 
 	if rootfs == "" && state.Bundle != "" {
 		rootfs = filepath.Join(state.Bundle, "rootfs")
 	}
-	// MED-1: without a rootfs, resolveContainerPath would operate on the host
-	// root ("/etc/shadow" → the real host file). Fail closed.
+	// Without a rootfs, resolveContainerPath would operate on the host
+	// root ("/etc/shadow" → the host file). Fail closed.
 	if rootfs == "" {
 		s.writeError(w, http.StatusInternalServerError, "container rootfs not available")
 		return
@@ -81,7 +81,7 @@ func (s *Server) handleContainerArchive(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// CRIT-3: resolve the requested path with symlink semantics clamped to the
+	// Resolve the requested path with symlink semantics clamped to the
 	// container rootfs. A plain Clean+Join follows a symlink planted inside the
 	// rootfs (e.g. "/escape -> /") and turns docker cp into arbitrary host
 	// read/write → RCE.
@@ -94,7 +94,7 @@ func (s *Server) handleContainerArchive(w http.ResponseWriter, r *http.Request, 
 
 	switch r.Method {
 	case "HEAD":
-		// MED-13: docker cp issues a HEAD to stat the path before copying.
+		// docker cp issues a HEAD to stat the path before copying.
 		info, err := os.Stat(containerPath)
 		if err != nil {
 			s.writeError(w, http.StatusNotFound, "path not found in container")
@@ -291,10 +291,10 @@ func (s *Server) handleExecResize(w http.ResponseWriter, r *http.Request, _ stri
 
 // Helper functions.
 
-// resolveContainerPath maps a client-supplied path to a real path beneath the
+// resolveContainerPath maps a client-supplied path to a path beneath the
 // container rootfs, following symlink components but clamping every result to
-// rootfs (chroot semantics). This is the CRIT-3 fix: never let a symlink inside
-// the rootfs redirect docker cp onto the host filesystem.
+// rootfs (chroot semantics). A symlink inside the rootfs must never redirect
+// docker cp onto the host filesystem.
 func resolveContainerPath(rootfs, path string) (string, error) {
 	if rootfs == "" {
 		return "", fmt.Errorf("empty rootfs")

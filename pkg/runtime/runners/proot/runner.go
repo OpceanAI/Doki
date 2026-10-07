@@ -148,10 +148,6 @@ func (r *Runner) startCLI(ctx context.Context, state *rt.ContainerState) (int, e
 	}
 	prootArgs = append(prootArgs, args...)
 
-	// Clear LD_PRELOAD family in the parent process so exec.Command does not
-	// propagate libtermux-exec.so to the proot child.
-	proot.UnsetProotKillers()
-
 	cmd := exec.CommandContext(ctx, prootBin, prootArgs...)
 	// Use BuildEnv for the same env composition as startWithProot:
 	// StripHostEnv (17-var deny-list) + AndroidEnv defaults + image env +
@@ -160,7 +156,7 @@ func (r *Runner) startCLI(ctx context.Context, state *rt.ContainerState) (int, e
 	if state.Config.ImageConfig != nil {
 		imageEnv = state.Config.ImageConfig.Env
 	}
-	cmd.Env = proot.BuildEnv(state.Config.Env, imageEnv)
+	cmd.Env = proot.BuildEnv(proot.SanitizedEnvForCmd(state.Config.Env), imageEnv)
 	cmd.Dir = "/"
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -239,13 +235,9 @@ func (r *Runner) Exec(_ context.Context, id string, cfg *rt.ExecConfig) (int, er
 	argv = append(argv, "--")
 	argv = append(argv, cfg.Args...)
 
-	// Clear LD_PRELOAD family in the parent process so exec.Command does not
-	// propagate libtermux-exec.so to the proot child.
-	proot.UnsetProotKillers()
-
 	cmd := exec.Command(prootBin, argv[1:]...)
 	// Use BuildEnv for the same env composition as startWithProot.
-	cmd.Env = proot.BuildEnv(cfg.Env, nil)
+	cmd.Env = proot.BuildEnv(proot.SanitizedEnvForCmd(cfg.Env), nil)
 	cmd.Dir = "/"
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

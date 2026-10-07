@@ -567,7 +567,7 @@ func (s *PodmanServer) handleContainerAction(w http.ResponseWriter, nameOrID, ac
 	case "unpause":
 		err = s.runtime.Unpause(st.ID)
 	case "wait":
-		s.handleContainerWait(w, st.ID)
+		s.handleContainerWait(w, r, st.ID)
 		return
 	default:
 		writeError(w, http.StatusNotFound, "unsupported container action: "+action)
@@ -581,18 +581,70 @@ func (s *PodmanServer) handleContainerAction(w http.ResponseWriter, nameOrID, ac
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *PodmanServer) handleContainerWait(w http.ResponseWriter, id string) {
+// handleContainerWait blocks until the container reaches the requested
+// condition and reports its exit code, libpod style:
+// ?condition=next-exit|stopped|running&interval=<duration>. The poll interval
+// defaults to 250ms and accepts a Go duration or a plain millisecond count.
+//
+// next-exit only waits for a container that can still exit; one that is not
+// running has no next exit pending and resolves at once instead of hanging.
+// The loop also stops when the client goes away.
+func (s *PodmanServer) handleContainerWait(w http.ResponseWriter, r *http.Request, id string) {
+	condition := r.URL.Query().Get("condition")
+	if condition == "" {
+		condition = "stopped"
+	}
+	switch condition {
+	case "next-exit", "stopped", "exited", "not-running", "running",
+		"created", "configured", "paused":
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported condition: "+condition)
+		return
+	}
+	interval := 250 * time.Millisecond
+	if v := r.URL.Query().Get("interval"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			interval = d
+		} else if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			interval = time.Duration(n) * time.Millisecond
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid interval: "+v)
+			return
+		}
+	}
+
 	for {
 		st, err := s.runtime.State(id)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "no such container")
 			return
 		}
-		if st.Status == common.StateExited {
+		if waitConditionMet(condition, st.Status) {
 			writeJSON(w, http.StatusOK, st.ExitCode)
 			return
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}
+
+// waitConditionMet reports whether a container state satisfies the wait
+// condition. next-exit, stopped, exited and not-running all resolve once the
+// container is neither running nor paused: a container in another state has no
+// exit to wait for, which is what used to hang clients forever.
+func waitConditionMet(condition string, status common.ContainerState) bool {
+	switch condition {
+	case "running":
+		return status == common.StateRunning
+	case "paused":
+		return status == common.StatePaused
+	case "created", "configured":
+		return status == common.StateCreated
+	default: // next-exit, stopped, exited, not-running
+		return status != common.StateRunning && status != common.StatePaused
 	}
 }
 

@@ -52,7 +52,7 @@ func (r *Runner) Detect() bool {
 // Capabilities returns the runner capabilities.
 func (r *Runner) Capabilities() rt.RunnerCapabilities {
 	return rt.RunnerCapabilities{
-		Arch:         []string{"arm64", "amd64"},
+		Arch:         []string{"arm64", "armv7", "amd64", "386"},
 		RootRequired: true,
 		ExecSupport:  true,
 		StatsSupport: true,

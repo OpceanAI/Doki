@@ -375,7 +375,7 @@ func TestDNSServer_StopIdempotent(t *testing.T) {
 	d.Stop() // should not panic
 }
 
-// ─── DNS wire-format helper for tests ──────────────────────────────
+// DNS wire-format helper for tests
 
 func buildTestQuery(id uint16, name string, qtype uint16) []byte {
 	buf := make([]byte, 0, 64)

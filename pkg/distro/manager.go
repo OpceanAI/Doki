@@ -26,6 +26,10 @@ import (
 //go:embed defs/*.yml
 var distroFS embed.FS
 
+// osLink is a variable indirection over os.Link so tests can force the
+// hardlink path to fail (e.g. EPERM) and exercise the copy fallback.
+var osLink = os.Link
+
 type DistroManager struct {
 	mu         sync.RWMutex
 	homeDir    string
@@ -317,19 +321,22 @@ func extractLayerNative(tarPath, dest string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			linkTarget := filepath.Clean(filepath.Join(dest, hdr.Linkname))
+			linkTarget, err := common.SecureJoin(cleanDest, hdr.Linkname)
+			if err != nil {
+				return fmt.Errorf("tar: resolve hardlink %s -> %s: %w", hdr.Name, hdr.Linkname, err)
+			}
 			if !strings.HasPrefix(linkTarget, cleanDest+string(os.PathSeparator)) && linkTarget != cleanDest {
 				return fmt.Errorf("tar: hardlink escape")
 			}
 			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			if err := os.Link(linkTarget, target); err != nil {
+			if err := osLink(linkTarget, target); err != nil {
 				data, readErr := os.ReadFile(linkTarget)
 				if readErr != nil {
 					return fmt.Errorf("tar: hardlink %s: %w", hdr.Name, err)
 				}
-				if err := os.WriteFile(target, data, 0644); err != nil {
+				if err := os.WriteFile(target, data, common.SafeFileMode(hdr.Mode)); err != nil {
 					return fmt.Errorf("tar: hardlink fallback write %s: %w", hdr.Name, err)
 				}
 			}

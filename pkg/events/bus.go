@@ -38,47 +38,47 @@ const (
 type Action string
 
 const (
-	ActionCreate   Action = "create"
-	ActionStart    Action = "start"
-	ActionStop     Action = "stop"
-	ActionDie      Action = "die"
-	ActionKill     Action = "kill"
-	ActionPause    Action = "pause"
-	ActionUnpause  Action = "unpause"
-	ActionRestart  Action = "restart"
-	ActionDestroy  Action = "destroy"
-	ActionRemove   Action = "destroy"
-	ActionRename   Action = "rename"
-	ActionResize   Action = "resize"
-	ActionArchive  Action = "archive"
-	ActionExport   Action = "export"
-	ActionImport   Action = "import"
-	ActionPull     Action = "pull"
-	ActionPush     Action = "push"
-	ActionTag      Action = "tag"
-	ActionUntag    Action = "untag"
-	ActionDelete   Action = "delete"
-	ActionConnect  Action = "connect"
+	ActionCreate     Action = "create"
+	ActionStart      Action = "start"
+	ActionStop       Action = "stop"
+	ActionDie        Action = "die"
+	ActionKill       Action = "kill"
+	ActionPause      Action = "pause"
+	ActionUnpause    Action = "unpause"
+	ActionRestart    Action = "restart"
+	ActionDestroy    Action = "destroy"
+	ActionRemove     Action = "destroy"
+	ActionRename     Action = "rename"
+	ActionResize     Action = "resize"
+	ActionArchive    Action = "archive"
+	ActionExport     Action = "export"
+	ActionImport     Action = "import"
+	ActionPull       Action = "pull"
+	ActionPush       Action = "push"
+	ActionTag        Action = "tag"
+	ActionUntag      Action = "untag"
+	ActionDelete     Action = "delete"
+	ActionConnect    Action = "connect"
 	ActionDisconnect Action = "disconnect"
-	ActionPrune    Action = "prune"
-	ActionHealth   Action = "health_status"
-	ActionOOM      Action = "oom"
-	ActionExec     Action = "exec_create"
-	ActionExecDie  Action = "exec_die"
+	ActionPrune      Action = "prune"
+	ActionHealth     Action = "health_status"
+	ActionOOM        Action = "oom"
+	ActionExec       Action = "exec_create"
+	ActionExecDie    Action = "exec_die"
 )
 
 // Event is a single lifecycle notification.
 type Event struct {
-	Type        Type             `json:"Type"`
-	Action      Action           `json:"Action"`
-	Actor       Actor            `json:"Actor"`
-	Status      string           `json:"status,omitempty"`
-	ID          string           `json:"id,omitempty"`
-	From        string           `json:"from,omitempty"`
-	Time        int64            `json:"time"`
-	TimeNano    int64            `json:"timeNano"`
-	Scope       string           `json:"scope,omitempty"`
-	Attributes  map[string]string `json:"Actor.Attributes,omitempty"`
+	Type       Type              `json:"Type"`
+	Action     Action            `json:"Action"`
+	Actor      Actor             `json:"Actor"`
+	Status     string            `json:"status,omitempty"`
+	ID         string            `json:"id,omitempty"`
+	From       string            `json:"from,omitempty"`
+	Time       int64             `json:"time"`
+	TimeNano   int64             `json:"timeNano"`
+	Scope      string            `json:"scope,omitempty"`
+	Attributes map[string]string `json:"Actor.Attributes,omitempty"`
 }
 
 // Actor is the object the event refers to.
@@ -90,14 +90,14 @@ type Actor struct {
 // Filter narrows the events a subscriber receives. Each non-empty
 // field is AND-combined; each list within a field is OR-combined.
 type Filter struct {
-	Type   []string `json:"type,omitempty"`
-	Event  []string `json:"event,omitempty"`
+	Type      []string `json:"type,omitempty"`
+	Event     []string `json:"event,omitempty"`
 	Container []string `json:"container,omitempty"`
-	Image  []string `json:"image,omitempty"`
-	Network []string `json:"network,omitempty"`
-	Volume []string `json:"volume,omitempty"`
-	Pod    []string `json:"pod,omitempty"`
-	Label  []string `json:"label,omitempty"`
+	Image     []string `json:"image,omitempty"`
+	Network   []string `json:"network,omitempty"`
+	Volume    []string `json:"volume,omitempty"`
+	Pod       []string `json:"pod,omitempty"`
+	Label     []string `json:"label,omitempty"`
 }
 
 // Subscription is a handle returned by Subscribe that the caller

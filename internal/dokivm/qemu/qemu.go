@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,7 +116,20 @@ func (v *VMM) Start(ctx context.Context, vmID string) error {
 		args = append(args, "-device", "virtio-net-device,netdev=net0")
 	case "none":
 	default:
-		args = append(args, "-netdev", "user,id=net0,hostfwd=tcp::8080-:80")
+		// Fixed :8080 collides when several VMs run or the host already
+		// uses 8080. Honor explicit PortMaps when provided, otherwise
+		// allocate an ephemeral host port.
+		hostPort := freePort()
+		guestPort := 80
+		fwd := fmt.Sprintf("user,id=net0,hostfwd=tcp::%d-:%d", hostPort, guestPort)
+		if v.vmCfg != nil && v.vmCfg.Network != nil && len(v.vmCfg.Network.PortMaps) > 0 {
+			parts := []string{"user,id=net0"}
+			for _, pm := range v.vmCfg.Network.PortMaps {
+				parts = append(parts, fmt.Sprintf("hostfwd=tcp::%d-:%d", pm.HostPort, pm.GuestPort))
+			}
+			fwd = joinComma(parts)
+		}
+		args = append(args, "-netdev", fwd)
 		args = append(args, "-device", "virtio-net-device,netdev=net0")
 	}
 
@@ -222,3 +236,29 @@ func (v *VMM) Cleanup(_ context.Context, vmID string) error {
 }
 
 var _ dokivm.VMM = (*VMM)(nil)
+
+// freePort allocates an ephemeral host TCP port for slirp hostfwd so two
+// VMs (or a host service on :8080) never collide. Small TOCTOU race is
+// acceptable: worst case qemu fails to bind and Start surfaces the error.
+func freePort() int {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = l.Close() }()
+	if addr, ok := l.Addr().(*net.TCPAddr); ok {
+		return addr.Port
+	}
+	return 0
+}
+
+func joinComma(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += ","
+		}
+		out += p
+	}
+	return out
+}

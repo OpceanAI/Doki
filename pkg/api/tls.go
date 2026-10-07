@@ -27,7 +27,7 @@ type TLSConfig struct {
 func DefaultTLSConfig() *TLSConfig {
 	return &TLSConfig{
 		Enabled: false,
-		MinTLS:  tls.VersionTLS12,
+		MinTLS:  tls.VersionTLS13,
 	}
 }
 
@@ -78,8 +78,8 @@ func TLSListener(l net.Listener, tlsCfg *tls.Config) net.Listener {
 	return tls.NewListener(l, tlsCfg)
 }
 
-// GenerateSelfSignedCert generates a self-signed certificate for testing.
-// AE10: Generates self-signed certs when no cert is provided.
+// GenerateSelfSignedCert generates a self-signed certificate for testing or
+// for bootstrapping a certificate when none is provided.
 func GenerateSelfSignedCert(certFile, keyFile string) error {
 	key, err := rsa.GenerateKey(rand.Reader, 4096)
 	if err != nil {

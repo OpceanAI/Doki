@@ -4,7 +4,7 @@
     {
       "label": "Build All",
       "type": "shell",
-      "command": "go build -o /tmp/doki ./cmd/doki && go build -o /tmp/dokid ./cmd/dokid && go build -o /tmp/doki-compose ./cmd/doki-compose",
+      "command": "go build -o ${TMPDIR:-/tmp}/doki ./cmd/doki && go build -o ${TMPDIR:-/tmp}/dokid ./cmd/dokid && go build -o ${TMPDIR:-/tmp}/doki-compose ./cmd/doki-compose",
       "group": "build",
       "problemMatcher": ["$go"]
     },

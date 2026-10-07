@@ -3,7 +3,7 @@ package podman
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,7 +216,7 @@ func (mm *ManifestManager) saveManifest(ml *ManifestList) error {
 func (mm *ManifestManager) loadManifests() {
 	entries, err := os.ReadDir(mm.store)
 	if err != nil {
-		log.Printf("podman: read manifest store %s: %v", mm.store, err)
+		slog.Error("podman: read manifest store", "store", mm.store, "error", err)
 		return
 	}
 	for _, entry := range entries {
@@ -226,12 +226,12 @@ func (mm *ManifestManager) loadManifests() {
 		path := filepath.Join(mm.store, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("podman: read manifest file %s: %v", path, err)
+			slog.Error("podman: read manifest file", "path", path, "error", err)
 			continue
 		}
 		var ml ManifestList
 		if err := json.Unmarshal(data, &ml); err != nil {
-			log.Printf("podman: parse manifest file %s: %v", path, err)
+			slog.Error("podman: parse manifest file", "path", path, "error", err)
 			continue
 		}
 		mm.manifests[ml.Name] = &ml

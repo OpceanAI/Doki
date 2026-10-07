@@ -44,6 +44,18 @@ type CRIContainer struct {
 	Mounts       []common.Mount
 	CreatedAt    int64
 	LogPath      string
+	// Security carries the enforceable subset of the CRI
+	// LinuxContainerSecurityContext (see security.go): capabilities,
+	// privilege, user, read-only rootfs and seccomp/apparmor/no-new-privs
+	// requests. Unenforceable leftovers are recorded in Annotations under
+	// doki.io/unenforced-security instead of being silently dropped.
+	SecurityOpt []string
+	CapAdd      []string
+	CapDrop     []string
+	Privileged  bool
+	ReadOnly    bool
+	User        string
+	HostNetwork bool
 }
 
 // PodSandbox represents a Kubernetes Pod.
@@ -247,11 +259,27 @@ func (c *CRIPlugin) CreateContainer(cc *CRIContainer) error {
 		Args:        cc.Args,
 		Env:         cc.Env,
 		Cwd:         cc.WorkingDir,
+		User:        cc.User,
+		Privileged:  cc.Privileged,
+		ReadOnly:    cc.ReadOnly,
+		CapAdd:      cc.CapAdd,
+		CapDrop:     cc.CapDrop,
+		SecurityOpt: cc.SecurityOpt,
 		Labels:      cc.Labels,
 		Annotations: cc.Annotations,
 		Mounts:      cc.Mounts,
 		ImageRef:    cc.Image,
 		NetworkMode: common.NetworkBridge,
+	}
+	if cc.HostNetwork {
+		cfg.NetworkMode = common.NetworkHost
+	}
+
+	// Fail fast on security requests this host/mode cannot honestly honor
+	// (explicit seccomp profiles outside native mode, any AppArmor
+	// confinement). The same gate runs again at Start for non-CRI callers.
+	if err := runtime.CheckSecurityRequests(cfg); err != nil {
+		return err
 	}
 
 	// Resolve the image's layer tarballs so Create extracts a real rootfs.

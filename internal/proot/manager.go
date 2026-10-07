@@ -145,24 +145,42 @@ func BuildEnv(userEnv []string, imageEnv []string) []string {
 	return env
 }
 
-// UnsetProotKillers clears the LD_PRELOAD family and the Termux/Android
-// vars from the *current* process env so that exec.Command(proot) does not
-// inherit them. The guest env is sanitised separately by BuildEnv.
+// UnsetProotKillers is deprecated: it mutated the global process environment
+// via os.Unsetenv, racing with other goroutines. Prefer per-process
+// sanitization: set cmd.Env explicitly via BuildEnv/SanitizedEnvForCmd so
+// only the proot child sees a clean environment.
 //
-// This must be called once per process before the first proot invocation.
-// It is safe to call multiple times.
-func UnsetProotKillers() {
-	for _, k := range []string{
-		"LD_PRELOAD", "LD_PRELOAD32", "LD_PRELOAD64",
-		"LD_LIBRARY_PATH", "LD_SHOW_AUXV",
-		"TERMUX_VERSION", "TERMUX__PREFIX", "TERMUX__ROOTFS", "TERMUX__HOME",
-		"PREFIX",
-		"ANDROID_ROOT", "ANDROID_DATA", "ANDROID_STORAGE", "ANDROID_PROPERTY_WORKSPACE",
-		"TMPDIR", "TMP", "TEMP",
-		"HOME",
-	} {
-		_ = os.Unsetenv(k)
+// Kept as a no-op shim for out-of-tree callers; in-tree runners must NOT
+// call it (see SanitizedEnvForCmd).
+func UnsetProotKillers() {}
+
+// SanitizedEnvForCmd returns a copy of base with the LD_PRELOAD family and
+// Termux/Android vars stripped, for use as exec.Cmd.Env on a single proot
+// child process. Unlike UnsetProotKillers it never touches os.Environ.
+func SanitizedEnvForCmd(base []string) []string {
+	out := make([]string, 0, len(base))
+kill:
+	for _, e := range base {
+		name := e
+		if i := strings.IndexByte(e, '='); i >= 0 {
+			name = e[:i]
+		}
+		for _, k := range []string{
+			"LD_PRELOAD", "LD_PRELOAD32", "LD_PRELOAD64",
+			"LD_LIBRARY_PATH", "LD_SHOW_AUXV",
+			"TERMUX_VERSION", "TERMUX__PREFIX", "TERMUX__ROOTFS", "TERMUX__HOME",
+			"PREFIX",
+			"ANDROID_ROOT", "ANDROID_DATA", "ANDROID_STORAGE", "ANDROID_PROPERTY_WORKSPACE",
+			"TMPDIR", "TMP", "TEMP",
+			"HOME",
+		} {
+			if name == k {
+				continue kill
+			}
+		}
+		out = append(out, e)
 	}
+	return out
 }
 
 // Exec executes a command in a proot-based environment.
@@ -177,9 +195,10 @@ func (m *Manager) Exec(rootfs string, args []string, env []string, _ string) (st
 	prootArgs = append(prootArgs, args...)
 
 	prootBin := FindProotBinary()
-	UnsetProotKillers()
 	cmd := exec.Command(prootBin, prootArgs...)
-	cmd.Env = BuildEnv(env, nil)
+	// Per-process sanitization (no global os.Unsetenv): BuildEnv strips the
+	// host killers from the child env explicitly.
+	cmd.Env = BuildEnv(SanitizedEnvForCmd(env), nil)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("proot command failed: %w\n%s", err, string(output))

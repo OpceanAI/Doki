@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os/exec"
@@ -111,8 +112,9 @@ func (s *defaultStreamer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "attach":
 		s.serveAttach(w, r, req)
 	case "portforward":
-		// No runtime primitive maps to port-forwarding yet; fail honestly
-		// rather than hand back a URL that silently does nothing.
+		// Backstop: the PortForward RPC never hands out tokens any more (it
+		// returns codes.Unimplemented directly), so this path should be
+		// unreachable. Keep it failing honestly in case a stale token exists.
 		http.Error(w, "port-forward is not implemented", http.StatusNotImplemented)
 	default:
 		http.Error(w, "unknown streaming operation", http.StatusBadRequest)
@@ -254,7 +256,7 @@ func readChannels(ws *wsConn, stdin io.WriteCloser, sess *dokiruntime.AttachSess
 		case channelResize:
 			var rz resizeMsg
 			if json.Unmarshal(payload, &rz) == nil {
-				applyResize(ws, sess, rz)
+				applyResize(sess, rz)
 			}
 		case channelClose:
 			// v5 half-close: the client is done sending stdin.
@@ -265,12 +267,19 @@ func readChannels(ws *wsConn, stdin io.WriteCloser, sess *dokiruntime.AttachSess
 	}
 }
 
-// applyResize forwards a terminal resize. For an attach session it goes to the
-// container's pty; for exec the pty lives inside ExecResult and is resized
-// through the session hook when available. (Exec pty resize is a follow-up.)
-func applyResize(_ *wsConn, sess *dokiruntime.AttachSession, rz resizeMsg) {
-	_ = sess
-	_ = rz
+// applyResize forwards a terminal resize to the container's pty via
+// TIOCSWINSZ. The Kubernetes remotecommand resize frame carries Width (cols)
+// and Height (rows); the pty ioctl wants (rows, cols). Sessions without a live
+// pty (non-TTY attach) report the failure to the caller's log instead of
+// silently dropping the request. (Exec pty resize is a follow-up: ExecAttach
+// does not allocate a pty yet.)
+func applyResize(sess *dokiruntime.AttachSession, rz resizeMsg) {
+	if sess == nil {
+		return
+	}
+	if err := sess.Resize(rz.Height, rz.Width); err != nil {
+		slog.Default().Debug("cri: resize failed", "error", err)
+	}
 }
 
 // sendExitStatus emits a Kubernetes metav1.Status on the error channel so the

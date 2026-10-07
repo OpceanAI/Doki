@@ -1,0 +1,37 @@
+Doki - Universal Container Engine
+
+Usage:  doki [OPTIONS] COMMAND
+
+Management Commands:
+  container   Manage containers
+  image       Manage images
+  network     Manage networks
+  volume      Manage volumes
+  system      Manage Doki
+  pod         Manage pods
+  kube        Kubernetes integration
+  compose     Multi-container orchestration
+  mesh        DokiLink-Lite mesh management
+  link        DokiLink-Lite peer management
+  deps        Inspect and manage host dependencies
+
+Commands:
+  run         Create and run a new container from an image
+  exec        Execute a command in a running container
+  ps          List containers
+  build       Build an image from a Dokifile
+  pull        Download an image from a registry
+  push        Upload an image to a registry
+  images      List images
+  login       Log in to a registry
+  logout      Log out from a registry
+  search      Search Docker Hub for images
+  version     Show the Doki version information
+  info        Display system-wide information
+  play        Play Kubernetes YAML
+  generate    Generate Kubernetes YAML
+  unshare     Run command in user namespace
+  mount       Mount container root filesystem
+  unmount     Unmount container root filesystem
+
+Run 'doki COMMAND --help' for more information.

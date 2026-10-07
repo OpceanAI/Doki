@@ -23,13 +23,17 @@ import (
 	"github.com/OpceanAI/Doki/internal/dokivm"
 	"github.com/OpceanAI/Doki/pkg/builder"
 	"github.com/OpceanAI/Doki/pkg/common"
+	"github.com/OpceanAI/Doki/pkg/cri"
 	"github.com/OpceanAI/Doki/pkg/events"
 	"github.com/OpceanAI/Doki/pkg/image"
 	"github.com/OpceanAI/Doki/pkg/network"
 	"github.com/OpceanAI/Doki/pkg/podman"
 	dokiruntime "github.com/OpceanAI/Doki/pkg/runtime"
 	"github.com/OpceanAI/Doki/pkg/stdcopy"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
+	v1 "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
 // maxJSONBody caps the size of a JSON request body for control endpoints
@@ -50,6 +54,7 @@ type Server struct {
 	network    *network.Manager
 	volumes    *VolumeManager
 	events     *events.Bus
+	cri        *cri.CRIServer
 	middleware []func(http.Handler) http.Handler
 	handler    http.Handler
 	// dnsSrv removed: DNS is managed through network.Manager, not directly.
@@ -69,7 +74,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) rootHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Api-Version", common.DokiAPIVersion)
 		w.Header().Set("Server", "Doki/"+common.Version)
 
@@ -77,6 +81,12 @@ func (s *Server) rootHandler() http.Handler {
 		if strings.HasPrefix(path, "/v") {
 			parts := strings.SplitN(path[1:], "/", 2)
 			if len(parts) >= 2 {
+				if !apiVersionOK(parts[0]) {
+					w.Header().Set("Content-Type", "application/json")
+					s.writeError(w, http.StatusBadRequest,
+						"client version "+parts[0]+" is not supported; minimum supported API version is "+common.DokiMinClient)
+					return
+				}
 				path = "/" + parts[1]
 			}
 		}
@@ -88,6 +98,43 @@ func (s *Server) rootHandler() http.Handler {
 
 		s.router.ServeHTTP(w, r)
 	})
+}
+
+// apiVersionOK reports whether the client-negotiated API version prefix
+// ("1.44") meets the daemon's minimum supported client version. A prefix that
+// does not parse as a version is left to the router to decide.
+func apiVersionOK(v string) bool {
+	client, ok := parseVersionPair(v)
+	if !ok {
+		return true
+	}
+	min, ok := parseVersionPair(common.DokiMinClient)
+	if !ok {
+		return true
+	}
+	if client.major != min.major {
+		return client.major > min.major
+	}
+	return client.minor >= min.minor
+}
+
+type versionPair struct{ major, minor int }
+
+func parseVersionPair(v string) (versionPair, bool) {
+	parts := strings.SplitN(v, ".", 2)
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return versionPair{}, false
+	}
+	minor := 0
+	if len(parts) > 1 {
+		var minorErr error
+		minor, minorErr = strconv.Atoi(parts[1])
+		if minorErr != nil {
+			return versionPair{}, false
+		}
+	}
+	return versionPair{major: major, minor: minor}, true
 }
 
 func (s *Server) rebuildHandler() {
@@ -302,8 +349,8 @@ func NewServer(config *common.DokiConfig, rt *dokiruntime.Runtime, img *image.St
 	}
 	s.registerRoutes()
 
-	// P1: hand the libpod surface the same engine the Docker handlers use.
-	// Without these it can only echo back what it was sent.
+	// Hand the libpod surface the same engine the Docker handlers use. Without
+	// these it can only echo back what it was sent.
 	podmanSrv, err := podman.NewPodmanServer(filepath.Join(config.DataDir, "podman"), podman.Deps{
 		Runtime: s.runtime,
 		Images:  s.image,
@@ -335,6 +382,12 @@ func (s *Server) SetMiddleware(middlewares ...func(http.Handler) http.Handler) {
 	s.rebuildHandler()
 }
 
+// SetCRIServer wires the Kubernetes CRI server into the API server so the
+// container checkpoint endpoint can delegate to it.
+func (s *Server) SetCRIServer(cs *cri.CRIServer) {
+	s.cri = cs
+}
+
 func (s *Server) registerRoutes() {
 	// Container endpoints.
 	s.router.HandleFunc("/containers/json", s.handleContainersList)
@@ -350,6 +403,7 @@ func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/images/search", s.handleImagesSearch)
 	s.router.HandleFunc("/images/load", s.handleImageLoad)
 	s.router.HandleFunc("/images/get", s.handleImageGet)
+	s.router.HandleFunc("/distribution/", s.handleDistributionDispatch)
 	s.router.HandleFunc("/build", s.handleBuild)
 
 	// Network endpoints.
@@ -435,10 +489,10 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	s.writeJSON(w, status, map[string]string{"message": message})
 }
 
-// detectSecurityOptions reports the isolation features actually enforced,
-// honestly (C1). It reflects the runtime's real execution mode and never claims
-// seccomp/apparmor/userns unless that mode actually applies them, so clients
-// (and `doki info`) are not misled about the real security posture.
+// detectSecurityOptions reports the isolation features actually enforced. It
+// reflects the runtime's execution mode and never claims seccomp/apparmor/userns
+// unless that mode actually applies them, so clients (and `doki info`) are not
+// misled about the security posture.
 func detectSecurityOptions(mode dokiruntime.ExecutionMode) []string {
 	var opts []string
 	if os.Geteuid() != 0 {
@@ -472,9 +526,9 @@ func seccompEnforced(mode dokiruntime.ExecutionMode) bool {
 }
 
 // isSensitiveBindSource reports whether a host path is too dangerous to expose
-// as a container bind mount source (HIGH-12). The rule lives in pkg/common so
-// the Docker and libpod surfaces share one implementation; a duplicated
-// security check is one that eventually drifts.
+// as a container bind mount source. The rule lives in pkg/common so the Docker
+// and libpod surfaces share one implementation; a duplicated security check is
+// one that eventually drifts.
 func isSensitiveBindSource(source string) bool {
 	return common.IsSensitiveBindSource(source)
 }
@@ -707,10 +761,10 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSwarmNoop answers swarm/secrets/configs/plugins probes. D7: returning
-// 200 made `docker info` and compose detect swarm as AVAILABLE and then build
-// on a feature that does not exist. Doki has no swarm, so it now returns the
-// same 503 Docker itself returns on a non-manager node.
+// handleSwarmNoop answers swarm/secrets/configs/plugins probes. Returning 200
+// made `docker info` and compose detect swarm as AVAILABLE and then build on a
+// feature that does not exist. Doki has no swarm, so it returns the same 503
+// Docker itself returns on a non-manager node.
 func (s *Server) handleSwarmNoop(w http.ResponseWriter, _ *http.Request) {
 	s.writeError(w, http.StatusServiceUnavailable, "this node is not a swarm manager")
 }
@@ -890,8 +944,8 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 
 	containerID := common.GenerateID(64)
 
-	// G15/G16: entrypoint/cmd resolution is shared with the libpod surface so
-	// the two APIs can never resolve the same image to different commands.
+	// Entrypoint/cmd resolution is shared with the libpod surface so the two
+	// APIs can never resolve the same image to different commands.
 	var imgOCI *dokiruntime.ImageOCIConfig
 	if imgRecord.Config != nil {
 		imgOCI = &dokiruntime.ImageOCIConfig{
@@ -920,7 +974,7 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 	// Copy user-provided labels.
 	cfg.Labels = req.Labels
 
-	// G8: Set working directory from request or image config.
+	// Set working directory from request or image config.
 	if req.WorkingDir != "" {
 		cfg.Cwd = req.WorkingDir
 	} else if imgRecord.Config != nil && imgRecord.Config.Config.WorkingDir != "" {
@@ -984,7 +1038,7 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		cfg.ReadOnly = req.HostConfig.ReadonlyRootfs
 
 		// Carry the security intent into the config so the runtime can enforce
-		// it where the mode supports it (C2). Previously these were dropped
+		// it where the mode supports it. Previously these were dropped
 		// silently, so `--cap-drop` did nothing and nobody was told.
 		cfg.Privileged = req.HostConfig.Privileged
 		cfg.CapAdd = req.HostConfig.CapAdd
@@ -996,6 +1050,27 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 				cfg.Resources = &dokiruntime.Resources{}
 			}
 			cfg.Resources.ShmSize = req.HostConfig.ShmSize
+		}
+
+		// Carry the blkio device rules and memory/OOM tuning into the runtime
+		// config so they round-trip through inspect and update.
+		if len(req.HostConfig.BlkioWeightDevice) > 0 || len(req.HostConfig.BlkioDeviceReadBps) > 0 ||
+			len(req.HostConfig.BlkioDeviceWriteBps) > 0 || len(req.HostConfig.BlkioDeviceReadIOps) > 0 ||
+			len(req.HostConfig.BlkioDeviceWriteIOps) > 0 || req.HostConfig.MemorySwappiness != nil ||
+			req.HostConfig.OomKillDisable || req.HostConfig.CPURealtimeRuntime != 0 ||
+			req.HostConfig.CPURealtimePeriod != 0 {
+			if cfg.Resources == nil {
+				cfg.Resources = &dokiruntime.Resources{}
+			}
+			cfg.Resources.BlkioWeightDevice = req.HostConfig.BlkioWeightDevice
+			cfg.Resources.BlkioDeviceReadBps = req.HostConfig.BlkioDeviceReadBps
+			cfg.Resources.BlkioDeviceWriteBps = req.HostConfig.BlkioDeviceWriteBps
+			cfg.Resources.BlkioDeviceReadIOps = req.HostConfig.BlkioDeviceReadIOps
+			cfg.Resources.BlkioDeviceWriteIOps = req.HostConfig.BlkioDeviceWriteIOps
+			cfg.Resources.MemorySwappiness = req.HostConfig.MemorySwappiness
+			cfg.Resources.OomKillDisable = req.HostConfig.OomKillDisable
+			cfg.Resources.CPURealtimeRuntime = req.HostConfig.CPURealtimeRuntime
+			cfg.Resources.CPURealtimePeriod = req.HostConfig.CPURealtimePeriod
 		}
 
 		// Copy HostConfig.Binds -> cfg.Mounts (bind mounts).
@@ -1016,7 +1091,7 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 					s.writeError(w, http.StatusBadRequest, "invalid bind mount source: must be an absolute path without traversal")
 					return
 				}
-				// HIGH-12: refuse to bind-mount the host root or sensitive system
+				// Refuse to bind-mount the host root or sensitive system
 				// directories into a container. "-v /:/host" would otherwise give
 				// full host read/write — a trivial escape / host takeover.
 				if isSensitiveBindSource(source) {
@@ -1067,7 +1142,7 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 				if err != nil || pubPort <= 0 {
 					continue
 				}
-				// AE10: Enforce port binding restrictions.
+				// Enforce port binding restrictions.
 				if !req.HostConfig.Privileged && uint16(pubPort) < 1024 {
 					continue
 				}
@@ -1086,8 +1161,8 @@ func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// C1 honesty: if the caller asked for confinement the current mode cannot
-	// enforce, say so in the create warnings instead of silently accepting it.
+	// If the caller asked for confinement the current mode cannot enforce, say
+	// so in the create warnings instead of silently accepting it.
 	warnings := []string{}
 	if !seccompEnforced(s.runtime.Mode()) {
 		if len(cfg.CapDrop) > 0 || len(cfg.CapAdd) > 0 {
@@ -1171,6 +1246,8 @@ func (s *Server) handleContainerDispatch(w http.ResponseWriter, r *http.Request)
 		s.handleContainerResize(w, r, containerID)
 	case action == "update" && r.Method == "POST":
 		s.handleContainerUpdate(w, r, containerID) // Line: 779
+	case action == "checkpoint" && r.Method == "POST":
+		s.handleContainerCheckpoint(w, r, containerID)
 	case r.Method == "DELETE":
 		s.handleContainerDelete(w, r, containerID)
 	default:
@@ -1416,7 +1493,7 @@ func (s *Server) handleContainerWait(w http.ResponseWriter, r *http.Request, id 
 		case <-ticker.C:
 			state, err := s.runtime.State(id)
 			if err != nil {
-				// BUG-09 fix: state may be nil if the container was deleted.
+				// state may be nil if the container was deleted.
 				s.writeJSON(w, http.StatusOK, map[string]int{"StatusCode": -1})
 				return
 			}
@@ -1752,8 +1829,8 @@ func (s *Server) handleContainerAttach(w http.ResponseWriter, r *http.Request, i
 
 	// A hijacked connection's r.Context() is NOT cancelled when the client
 	// disconnects (Go stops managing it once hijacked), so watching ctx.Done()
-	// alone would leave the follower/pumps spinning forever — the HIGH-11 leak.
-	// Derive a context that a conn-close watcher cancels.
+	// alone would leave the follower/pumps spinning forever. Derive a context
+	// that a conn-close watcher cancels.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
@@ -2003,9 +2080,9 @@ func (s *Server) handleContainerAttachWS(w http.ResponseWriter, r *http.Request,
 	}
 	defer func() { _ = file.Close() }()
 	_, _ = file.Seek(0, io.SeekEnd)
-	// HIGH-11: abort the follow loop on client disconnect or write error. A
-	// hijacked conn's r.Context() never fires on disconnect, so watch the conn
-	// itself and cancel when the client's read half closes.
+	// Abort the follow loop on client disconnect or write error. A hijacked
+	// conn's r.Context() never fires on disconnect, so watch the conn itself
+	// and cancel when the client's read half closes.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	go func() {
@@ -2056,7 +2133,8 @@ func writeWSFrame(w io.Writer, payload []byte) error {
 	return err
 }
 
-// G5: handleContainerHealth returns health status for a container.
+// handleContainerChanges reports filesystem changes in the container's rootfs
+// relative to its image layers.
 func (s *Server) handleContainerChanges(w http.ResponseWriter, _ *http.Request, id string) {
 	state, err := s.runtime.State(id)
 	if err != nil {
@@ -2139,7 +2217,20 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 		CpusetMems        string `json:"CpusetMems"`
 		PidsLimit         int64  `json:"PidsLimit"`
 		BlkioWeight       uint16 `json:"BlkioWeight"`
-		RestartPolicy     struct {
+		// Per-device blkio rules (Docker API 1.55). A missing or null field
+		// leaves the current rules untouched; an explicit empty array clears
+		// them.
+		BlkioWeightDevice    []common.WeightDevice   `json:"BlkioWeightDevice"`
+		BlkioDeviceReadBps   []common.ThrottleDevice `json:"BlkioDeviceReadBps"`
+		BlkioDeviceWriteBps  []common.ThrottleDevice `json:"BlkioDeviceWriteBps"`
+		BlkioDeviceReadIOps  []common.ThrottleDevice `json:"BlkioDeviceReadIOps"`
+		BlkioDeviceWriteIOps []common.ThrottleDevice `json:"BlkioDeviceWriteIOps"`
+		// Pointers so "null" (or absence) means "do not change".
+		MemorySwappiness   *int64 `json:"MemorySwappiness"`
+		OomKillDisable     *bool  `json:"OomKillDisable"`
+		CPURealtimeRuntime *int64 `json:"CpuRealtimeRuntime"`
+		CPURealtimePeriod  *int64 `json:"CpuRealtimePeriod"`
+		RestartPolicy      struct {
 			Name string `json:"Name"`
 		} `json:"RestartPolicy"`
 	}
@@ -2190,8 +2281,44 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 	if req.BlkioWeight > 0 {
 		res.BlkioWeight = req.BlkioWeight
 	}
+	// Per-device blkio rules: a null/absent field keeps the current rules, an
+	// explicit empty array clears them (Docker API 1.55 update semantics).
+	if req.BlkioWeightDevice != nil {
+		res.BlkioWeightDevice = req.BlkioWeightDevice
+	}
+	if req.BlkioDeviceReadBps != nil {
+		res.BlkioDeviceReadBps = req.BlkioDeviceReadBps
+	}
+	if req.BlkioDeviceWriteBps != nil {
+		res.BlkioDeviceWriteBps = req.BlkioDeviceWriteBps
+	}
+	if req.BlkioDeviceReadIOps != nil {
+		res.BlkioDeviceReadIOps = req.BlkioDeviceReadIOps
+	}
+	if req.BlkioDeviceWriteIOps != nil {
+		res.BlkioDeviceWriteIOps = req.BlkioDeviceWriteIOps
+	}
+	if req.MemorySwappiness != nil {
+		res.MemorySwappiness = req.MemorySwappiness
+	}
+	if req.OomKillDisable != nil {
+		res.OomKillDisable = *req.OomKillDisable
+	}
+	if req.CPURealtimeRuntime != nil {
+		res.CPURealtimeRuntime = *req.CPURealtimeRuntime
+	}
+	if req.CPURealtimePeriod != nil {
+		res.CPURealtimePeriod = *req.CPURealtimePeriod
+	}
 	if req.RestartPolicy.Name != "" {
 		state.Config.RestartPolicy = common.RestartPolicy(req.RestartPolicy.Name)
+	}
+
+	// Docker treats MemorySwappiness < 0 as "unset"; cgroups speak uint64.
+	var memSwp *uint64
+	if res.MemorySwappiness != nil && *res.MemorySwappiness >= 0 {
+		u := common.SafeUint64FromInt64(*res.MemorySwappiness)
+		memSwp = &u
 	}
 
 	// Apply to the live cgroup BEFORE persisting: a stored limit that was never
@@ -2202,21 +2329,39 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 			warnings = append(warnings,
 				"cgroup v2 is not available on this host; resource limits were recorded but are NOT enforced")
 		} else if err := s.runtime.UpdateResources(id, &dokiruntime.LinuxResources{
-			CPUShares:   common.SafeUint64FromInt64(res.CPUShares),
-			CPUQuota:    res.CPUQuota,
-			CPUPeriod:   common.SafeUint64FromInt64(res.CPUPeriod),
-			NanoCPUs:    res.NanoCpus,
-			CpusetCpus:  res.CpusetCpus,
-			CpusetMems:  res.CpusetMems,
-			Memory:      res.Memory,
-			MemorySwap:  res.MemorySwap,
-			PidsLimit:   res.PidsLimit,
-			BlkioWeight: res.BlkioWeight,
+			CPUShares:            common.SafeUint64FromInt64(res.CPUShares),
+			CPUQuota:             res.CPUQuota,
+			CPUPeriod:            common.SafeUint64FromInt64(res.CPUPeriod),
+			NanoCPUs:             res.NanoCpus,
+			CpusetCpus:           res.CpusetCpus,
+			CpusetMems:           res.CpusetMems,
+			Memory:               res.Memory,
+			MemorySwap:           res.MemorySwap,
+			MemorySwappiness:     memSwp,
+			PidsLimit:            res.PidsLimit,
+			BlkioWeight:          res.BlkioWeight,
+			BlkioWeightDevice:    res.BlkioWeightDevice,
+			BlkioDeviceReadBps:   res.BlkioDeviceReadBps,
+			BlkioDeviceWriteBps:  res.BlkioDeviceWriteBps,
+			BlkioDeviceReadIOps:  res.BlkioDeviceReadIOps,
+			BlkioDeviceWriteIOps: res.BlkioDeviceWriteIOps,
+			CPURealtimePeriod:    common.SafeUint64FromInt64(res.CPURealtimePeriod),
+			CPURealtimeRuntime:   res.CPURealtimeRuntime,
+			OomKillDisable:       res.OomKillDisable,
 		}); err != nil {
 			slog.Error("apply container resource update", "id", id, "err", err)
 			s.writeError(w, http.StatusInternalServerError, "failed to apply resource limits")
 			return
 		}
+	}
+	// The cgroup manager in this build has no per-device blkio or CPU
+	// realtime controllers. Record the intent but say so out loud rather
+	// than letting the stored config claim enforcement that never happens.
+	if len(res.BlkioWeightDevice) > 0 || len(res.BlkioDeviceReadBps) > 0 ||
+		len(res.BlkioDeviceWriteBps) > 0 || len(res.BlkioDeviceReadIOps) > 0 ||
+		len(res.BlkioDeviceWriteIOps) > 0 || res.CPURealtimeRuntime != 0 || res.CPURealtimePeriod != 0 {
+		warnings = append(warnings,
+			"per-device blkio rules and CPU realtime limits are recorded but are NOT enforced on this host")
 	}
 
 	if err := s.runtime.SaveState(state); err != nil {
@@ -2224,6 +2369,29 @@ func (s *Server) handleContainerUpdate(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{"Warnings": warnings})
+}
+
+// handleContainerCheckpoint checkpoints a running container by delegating to
+// the CRI server, which shells out to podman or criu. It reports 501 when the
+// CRI service is disabled or checkpointing is unsupported on this host.
+func (s *Server) handleContainerCheckpoint(w http.ResponseWriter, r *http.Request, id string) {
+	if s.cri == nil {
+		s.writeError(w, http.StatusNotImplemented, "checkpoint requires the CRI service (disabled by --no-cri)")
+		return
+	}
+	req := &v1.CheckpointContainerRequest{
+		ContainerId: id,
+		Location:    r.URL.Query().Get("checkpoint_dir"),
+	}
+	if _, err := s.cri.CheckpointContainer(r.Context(), req); err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			s.writeError(w, http.StatusNotImplemented, err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
 }
 
 func getRootfsChanges(rootfsDir string) []map[string]string {
@@ -2550,18 +2718,27 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
+// imageActions lists the action suffixes a /images/{name}/... URL can end
+// with. An image name may itself contain slashes (registry/repo/name), so the
+// action is the LAST path segment and everything before it is the reference.
+var imageActions = map[string]bool{
+	"json": true, "history": true, "push": true, "tag": true,
+	"verify": true, "get": true, "save": true, "attestations": true,
+}
+
 func (s *Server) handleImageDispatch(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/images/")
-	parts := strings.SplitN(path, "/", 2)
-	imageID := parts[0]
-
-	var action string
-	if len(parts) > 1 {
-		action = parts[1]
+	imageID, action := path, ""
+	if i := strings.LastIndex(path, "/"); i >= 0 && imageActions[path[i+1:]] {
+		imageID, action = path[:i], path[i+1:]
+	}
+	if imageID == "" {
+		s.writeError(w, http.StatusNotFound, "no such image action")
+		return
 	}
 
 	switch {
-	case action == "json" || (len(parts) == 1 && r.Method == "GET"):
+	case action == "json" || (action == "" && r.Method == "GET"):
 		s.handleImageInspect(w, r, imageID)
 	case action == "history" && r.Method == "GET":
 		s.handleImageHistory(w, r, imageID)
@@ -2571,7 +2748,11 @@ func (s *Server) handleImageDispatch(w http.ResponseWriter, r *http.Request) {
 		s.handleImageTag(w, r, imageID)
 	case action == "verify" && r.Method == "GET":
 		s.handleImageVerify(w, r, imageID)
-	case r.Method == "DELETE":
+	case (action == "get" || action == "save") && r.Method == "GET":
+		s.handleImageGetNamed(w, r, imageID)
+	case action == "attestations" && r.Method == "GET":
+		s.handleImageAttestations(w, r, imageID)
+	case action == "" && r.Method == "DELETE":
 		s.handleImageRemove(w, r, imageID)
 	default:
 		s.writeError(w, http.StatusNotFound, "no such image action")
@@ -2615,6 +2796,44 @@ func (s *Server) handleImageInspect(w http.ResponseWriter, _ *http.Request, id s
 	}
 
 	s.writeJSON(w, http.StatusOK, dockerImage)
+}
+
+// handleDistributionDispatch routes Docker's /distribution/* endpoints.
+func (s *Server) handleDistributionDispatch(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/distribution/")
+	if r.Method == http.MethodGet && strings.HasSuffix(path, "/json") {
+		name := strings.TrimSuffix(path, "/json")
+		if name != "" {
+			s.handleDistributionInspect(w, r, name)
+			return
+		}
+	}
+	s.writeError(w, http.StatusNotFound, "no such distribution endpoint")
+}
+
+// handleDistributionInspect returns registry descriptor information for a
+// locally stored image.
+func (s *Server) handleDistributionInspect(w http.ResponseWriter, _ *http.Request, name string) {
+	record, err := s.image.Get(name)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	platform := map[string]interface{}{}
+	if record.Architecture != "" {
+		platform["architecture"] = record.Architecture
+	}
+	if record.OS != "" {
+		platform["os"] = record.OS
+	}
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"Descriptor": map[string]interface{}{
+			"mediaType": "application/vnd.oci.image.manifest.v1+json",
+			"digest":    record.ID,
+			"size":      record.Size,
+		},
+		"Platforms": []interface{}{platform},
+	})
 }
 
 func (s *Server) handleImageHistory(w http.ResponseWriter, _ *http.Request, id string) {
@@ -2669,23 +2888,116 @@ func (s *Server) handleImagePush(w http.ResponseWriter, _ *http.Request, id stri
 }
 
 func (s *Server) handleImageTag(w http.ResponseWriter, r *http.Request, id string) {
-	var req struct {
-		Repo string `json:"repo"`
-		Tag  string `json:"tag"`
+	// Docker's canonical form carries repo and tag as query parameters
+	// (POST /images/{name}/tag?repo=...&tag=...). A JSON body is still
+	// accepted for older clients.
+	repo := r.URL.Query().Get("repo")
+	tag := r.URL.Query().Get("tag")
+	if repo == "" && tag == "" {
+		var req struct {
+			Repo string `json:"repo"`
+			Tag  string `json:"tag"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		repo, tag = req.Repo, req.Tag
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid JSON")
+	if repo == "" {
+		s.writeError(w, http.StatusBadRequest, "repo is required")
 		return
 	}
-	if req.Tag != "" {
-		req.Repo = req.Repo + ":" + req.Tag
+	if tag != "" {
+		repo = repo + ":" + tag
 	}
 
-	if err := s.image.Tag(id, req.Repo); err != nil {
+	if err := s.image.Tag(id, repo); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+// attestationStatement is the Docker API 1.55 response element of
+// GET /images/{name}/attestations: the OCI descriptor of an in-toto statement
+// layer, its predicate type URI, and (only when statement=true) the verbatim
+// in-toto statement.
+type attestationStatement struct {
+	Descriptor    map[string]interface{} `json:"Descriptor"`
+	PredicateType string                 `json:"PredicateType,omitempty"`
+	Statement     json.RawMessage        `json:"Statement,omitempty"`
+}
+
+// handleImageAttestations serves GET /images/{name}/attestations (Docker API
+// 1.55): the in-toto attestation statements (SLSA provenance, SPDX SBOM, ...)
+// attached to the image. Query parameters follow moby: platform selects one
+// image variant (default: the host platform; more than one value is rejected),
+// type is a repeatable in-toto predicate type URI filter, and statement=true
+// opts into reading the statement bodies.
+//
+// Doki's image store does not retain buildkit attestation manifests yet, so
+// there is nothing real to return and the honest answer is an empty list. The
+// endpoint validates its parameters and returns the 1.55 shape so clients can
+// rely on it instead of getting a 404.
+func (s *Server) handleImageAttestations(w http.ResponseWriter, r *http.Request, id string) {
+	q := r.URL.Query()
+	if plats := q["platform"]; len(plats) > 1 {
+		s.writeError(w, http.StatusBadRequest, "only one platform value is supported")
+		return
+	}
+	platform := goruntime.GOOS + "/" + goruntime.GOARCH
+	if v := q.Get("platform"); v != "" {
+		platform = v
+	}
+	predicateTypes := q["type"]
+	statement := false
+	if v := q.Get("statement"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid statement value: "+v)
+			return
+		}
+		statement = b
+	}
+
+	record, err := s.image.Get(id)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("No such image: %s", id))
+		return
+	}
+
+	out := collectAttestations(record, platform, predicateTypes, statement)
+	if out == nil {
+		out = []attestationStatement{}
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+// collectAttestations returns the attestation statements stored with an image
+// for the given platform, filtered by predicate type. Doki does not persist
+// attestation manifests yet, so this returns nil for every image; it is the
+// one place that must start returning data once the store keeps buildkit
+// attestation-manifest references, instead of the handler inventing any.
+func collectAttestations(_ *image.ImageRecord, _ string, _ []string, _ bool) []attestationStatement {
+	return nil
+}
+
+// handleImageGetNamed serves the canonical GET /images/{name}/get and its
+// /save alias, streaming the image as a Docker-format tar. The older
+// GET /images/get?names= form is still handled by handleImageGet.
+func (s *Server) handleImageGetNamed(w http.ResponseWriter, _ *http.Request, id string) {
+	if !s.image.Exists(id) {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("No such image: %s", id))
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.WriteHeader(http.StatusOK)
+	if err := s.image.Export(id, w); err != nil {
+		// Headers are already committed; the truncated stream is the error
+		// signal, and the daemon log carries the detail.
+		slog.Error("export image", "image", id, "err", err)
+	}
 }
 
 func (s *Server) handleImageRemove(w http.ResponseWriter, _ *http.Request, id string) {
@@ -2733,10 +3045,6 @@ func (s *Server) handleImagesSearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 	contextDir := r.URL.Query().Get("context")
-	if contextDir == "" {
-		s.writeError(w, http.StatusBadRequest, "context query parameter required")
-		return
-	}
 
 	// Constrain the build context to a path inside the configured
 	// data directory. The previous implementation accepted any path
@@ -2747,12 +3055,30 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 	if allowedRoot == "" {
 		allowedRoot = os.TempDir()
 	}
+	cleanRoot := filepath.Clean(allowedRoot)
+
+	// Docker's canonical form streams the build context as an
+	// application/x-tar body instead of naming a server-side path.
+	if contextDir == "" {
+		if !isTarBody(r) {
+			s.writeError(w, http.StatusBadRequest,
+				"build context required: pass ?context=<path> or upload the context as an application/x-tar body")
+			return
+		}
+		extracted, err := s.extractBuildContext(w, r, cleanRoot)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "build context: "+err.Error())
+			return
+		}
+		defer func() { _ = os.RemoveAll(extracted) }()
+		contextDir = extracted
+	}
+
 	cleanCtx := filepath.Clean(contextDir)
 	realCtx, err := filepath.EvalSymlinks(cleanCtx)
 	if err == nil {
 		cleanCtx = realCtx
 	}
-	cleanRoot := filepath.Clean(allowedRoot)
 	if cleanCtx != cleanRoot &&
 		!strings.HasPrefix(cleanCtx, cleanRoot+string(os.PathSeparator)) {
 		s.writeError(w, http.StatusBadRequest, "build context outside allowed directory")
@@ -2789,6 +3115,10 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+	}
+	if dockerfile == "" {
+		s.writeError(w, http.StatusBadRequest, "no Dokifile or Dockerfile found in the build context")
+		return
 	}
 
 	// Reject traversal in the dockerfile name. A safe value is a
@@ -2863,8 +3193,86 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// isTarBody reports whether the request carries Docker's canonical build
+// upload: the build context streamed as a tar body.
+func isTarBody(r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	return strings.HasPrefix(ct, "application/x-tar") || strings.HasPrefix(ct, "application/tar")
+}
+
+// extractBuildContext unpacks an uploaded tar build context into a fresh
+// staging directory under allowedRoot and returns its path. The caller owns
+// the directory and must remove it.
+func (s *Server) extractBuildContext(w http.ResponseWriter, r *http.Request, allowedRoot string) (string, error) {
+	dst, err := os.MkdirTemp(allowedRoot, "buildctx-")
+	if err != nil {
+		return "", err
+	}
+	// Bulk endpoint: cap the upload so a crafted body cannot fill the disk.
+	body := http.MaxBytesReader(w, r.Body, 8<<30)
+	if err := untarBuildContext(dst, body); err != nil {
+		_ = os.RemoveAll(dst)
+		return "", err
+	}
+	return dst, nil
+}
+
+// untarBuildContext extracts a tar stream into dst. Every entry is clamped to
+// dst so a crafted context cannot write outside the staging directory
+// (zip-slip), and only directories and regular files are materialized:
+// symlinks and hardlinks are the classic escape vector and a build context
+// does not need them.
+func untarBuildContext(dst string, body io.Reader) error {
+	tr := tar.NewReader(body)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		name := filepath.Clean(hdr.Name)
+		if name == "." || name == string(os.PathSeparator) {
+			continue
+		}
+		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(os.PathSeparator)) {
+			return fmt.Errorf("unsafe path in build context: %q", hdr.Name)
+		}
+		target := filepath.Join(dst, name)
+		if !strings.HasPrefix(target, dst+string(os.PathSeparator)) {
+			return fmt.Errorf("unsafe path in build context: %q", hdr.Name)
+		}
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+			const maxFileSize = 1 << 30 // 1 GB
+			n, err := io.Copy(f, io.LimitReader(tr, maxFileSize+1))
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				return err
+			}
+			if n > maxFileSize {
+				return fmt.Errorf("file too large in build context: %q", hdr.Name)
+			}
+		}
+	}
+}
+
 func (s *Server) handleImageLoad(w http.ResponseWriter, r *http.Request) {
-	// MED-2: cap the uploaded image tar to a sane maximum (defends against a
+	// Cap the uploaded image tar to a sane maximum (defends against a
 	// decompression/upload bomb filling memory or disk).
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<30)
 	_, err := s.image.Import(r.Body)
@@ -3091,7 +3499,7 @@ func (s *Server) handleVolumeDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeJSON(w, http.StatusOK, vol)
 	case r.Method == "DELETE":
-		// D6: refuse to remove a volume still mounted by a container unless
+		// Refuse to remove a volume still mounted by a container unless
 		// ?force=true. Silently removing an in-use volume corrupts the running
 		// containers that depend on it.
 		force := r.URL.Query().Get("force") == "true" || r.URL.Query().Get("force") == "1"
@@ -3223,6 +3631,18 @@ func (s *Server) stateToJSON(state *dokiruntime.ContainerState) *common.Containe
 		if state.Config.Resources != nil {
 			hostCfg.Memory = state.Config.Resources.Memory
 			hostCfg.NanoCpus = state.Config.Resources.NanoCpus
+			hostCfg.CPUShares = state.Config.Resources.CPUShares
+			hostCfg.PidsLimit = state.Config.Resources.PidsLimit
+			hostCfg.BlkioWeight = state.Config.Resources.BlkioWeight
+			hostCfg.BlkioWeightDevice = state.Config.Resources.BlkioWeightDevice
+			hostCfg.BlkioDeviceReadBps = state.Config.Resources.BlkioDeviceReadBps
+			hostCfg.BlkioDeviceWriteBps = state.Config.Resources.BlkioDeviceWriteBps
+			hostCfg.BlkioDeviceReadIOps = state.Config.Resources.BlkioDeviceReadIOps
+			hostCfg.BlkioDeviceWriteIOps = state.Config.Resources.BlkioDeviceWriteIOps
+			hostCfg.OomKillDisable = state.Config.Resources.OomKillDisable
+			hostCfg.MemorySwappiness = state.Config.Resources.MemorySwappiness
+			hostCfg.CPURealtimePeriod = state.Config.Resources.CPURealtimePeriod
+			hostCfg.CPURealtimeRuntime = state.Config.Resources.CPURealtimeRuntime
 		}
 		// Reconstruct port bindings.
 		if len(state.Config.Ports) > 0 {
@@ -3287,70 +3707,25 @@ func detectOS() string {
 	return goruntime.GOOS
 }
 
-// handleCommit creates a new image from a container's changes.
-func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Container string `json:"Container"`
-		Repo      string `json:"Repo"`
-		Tag       string `json:"Tag"`
-		Author    string `json:"Author"`
-		Message   string `json:"Message"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-	repo := r.URL.Query().Get("repo")
-	_ = r.URL.Query().Get("tag")
-	if repo == "" {
-		s.writeError(w, http.StatusBadRequest, "repo is required")
-		return
-	}
-	imageID := common.GenerateID(64)
-	s.writeJSON(w, http.StatusCreated, map[string]string{"Id": imageID})
+// handleCommit reports that committing a container to a new image is not
+// implemented.
+func (s *Server) handleCommit(w http.ResponseWriter, _ *http.Request) {
+	s.writeError(w, http.StatusNotImplemented, "container commit is not implemented")
 }
 
-// handlePodCreate creates a pod (group of containers with shared network).
-func (s *Server) handlePodCreate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name   string            `json:"Name"`
-		Labels map[string]string `json:"Labels"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-	podID := common.GenerateID(64)
-	if req.Name == "" {
-		req.Name = podID[:12]
-	}
-	s.writeJSON(w, http.StatusCreated, map[string]string{"Id": podID, "Name": req.Name})
+// handlePodCreate reports that pod creation is not implemented.
+func (s *Server) handlePodCreate(w http.ResponseWriter, _ *http.Request) {
+	s.writeError(w, http.StatusNotImplemented, "pods are not implemented")
 }
 
-// handlePodList returns all pods.
+// handlePodList reports that pod listing is not implemented.
 func (s *Server) handlePodList(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, []interface{}{})
+	s.writeError(w, http.StatusNotImplemented, "pods are not implemented")
 }
 
-// handlePodDispatch handles pod-specific actions.
-func (s *Server) handlePodDispatch(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/pods/")
-	parts := strings.SplitN(path, "/", 2)
-	podID := parts[0]
-	action := ""
-	if len(parts) > 1 {
-		action = parts[1]
-	}
-	switch {
-	case action == "start" && r.Method == "POST":
-		s.writeJSON(w, http.StatusOK, map[string]string{"Id": podID, "status": "started"})
-	case action == "stop" && r.Method == "POST":
-		s.writeJSON(w, http.StatusOK, map[string]string{"Id": podID, "status": "stopped"})
-	case r.Method == "DELETE":
-		s.writeJSON(w, http.StatusNoContent, nil)
-	default:
-		s.writeJSON(w, http.StatusOK, map[string]string{"Id": podID})
-	}
+// handlePodDispatch reports that pod actions are not implemented.
+func (s *Server) handlePodDispatch(w http.ResponseWriter, _ *http.Request) {
+	s.writeError(w, http.StatusNotImplemented, "pods are not implemented")
 }
 
 // handleKubePlay parses a pod/deployment YAML and creates containers.
@@ -3625,17 +4000,9 @@ func (s *Server) handleAutoUpdate(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleApply applies configuration changes to running containers.
-func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
-	// MED-2: bound the request body (a manifest is only a few KiB).
-	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "read body: "+err.Error())
-		return
-	}
-	slog.Debug("apply received", "data_len", len(data))
-	s.writeJSON(w, http.StatusOK, map[string]string{"message": "apply: configuration applied"})
+// handleApply reports that applying configuration changes is not implemented.
+func (s *Server) handleApply(w http.ResponseWriter, _ *http.Request) {
+	s.writeError(w, http.StatusNotImplemented, "apply is not implemented")
 }
 
 // handleScout scans an image for known vulnerabilities.

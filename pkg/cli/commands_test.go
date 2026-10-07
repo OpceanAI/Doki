@@ -5,7 +5,7 @@ import (
 )
 
 func TestParseRunFlagsBasic(t *testing.T) {
-	image, cmd, flags := ParseRunFlags([]string{"alpine", "echo", "hello"})
+	image, cmd, flags, _ := ParseRunFlags([]string{"alpine", "echo", "hello"})
 	if image != "alpine" {
 		t.Errorf("image = %q, want alpine", image)
 	}
@@ -16,63 +16,63 @@ func TestParseRunFlagsBasic(t *testing.T) {
 }
 
 func TestParseRunFlagsDetach(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-d", "nginx:alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-d", "nginx:alpine"})
 	if !flags.Detach {
 		t.Error("-d should set Detach")
 	}
 }
 
 func TestParseRunFlagsInteractive(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-i", "alpine", "sh"})
+	_, _, flags, _ := ParseRunFlags([]string{"-i", "alpine", "sh"})
 	if !flags.Interactive {
 		t.Error("-i should set Interactive")
 	}
 }
 
 func TestParseRunFlagsTTY(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-t", "alpine", "sh"})
+	_, _, flags, _ := ParseRunFlags([]string{"-t", "alpine", "sh"})
 	if !flags.TTY {
 		t.Error("-t should set TTY")
 	}
 }
 
 func TestParseRunFlagsName(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--name", "mycontainer", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--name", "mycontainer", "alpine"})
 	if flags.Name != "mycontainer" {
 		t.Errorf("Name = %q, want mycontainer", flags.Name)
 	}
 }
 
 func TestParseRunFlagsNetwork(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--network", "host", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--network", "host", "alpine"})
 	if flags.Network != "host" {
 		t.Errorf("Network = %q, want host", flags.Network)
 	}
 }
 
 func TestParseRunFlagsRestartPolicy(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--restart", "always", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--restart", "always", "alpine"})
 	if flags.RestartPolicy != "always" {
 		t.Errorf("RestartPolicy = %q, want always", flags.RestartPolicy)
 	}
 }
 
 func TestParseRunFlagsPort(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-p", "8080:80", "nginx"})
+	_, _, flags, _ := ParseRunFlags([]string{"-p", "8080:80", "nginx"})
 	if len(flags.Ports) != 1 || flags.Ports[0] != "8080:80" {
 		t.Errorf("Ports = %v, want [8080:80]", flags.Ports)
 	}
 }
 
 func TestParseRunFlagsVolume(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-v", "/data:/mnt", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-v", "/data:/mnt", "alpine"})
 	if len(flags.Volumes) != 1 || flags.Volumes[0] != "/data:/mnt" {
 		t.Errorf("Volumes = %v, want [/data:/mnt]", flags.Volumes)
 	}
 }
 
 func TestParseRunFlagsEnv(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-e", "NODE_ENV=production", "-e", "PORT=3000", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-e", "NODE_ENV=production", "-e", "PORT=3000", "alpine"})
 	if len(flags.Env) != 2 {
 		t.Fatalf("len(Env) = %d, want 2", len(flags.Env))
 	}
@@ -85,182 +85,182 @@ func TestParseRunFlagsEnv(t *testing.T) {
 }
 
 func TestParseRunFlagsWorkdir(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-w", "/app", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-w", "/app", "alpine"})
 	if flags.Workdir != "/app" {
 		t.Errorf("Workdir = %q, want /app", flags.Workdir)
 	}
 }
 
 func TestParseRunFlagsUser(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-u", "1000:1000", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-u", "1000:1000", "alpine"})
 	if flags.User != "1000:1000" {
 		t.Errorf("User = %q, want 1000:1000", flags.User)
 	}
 }
 
 func TestParseRunFlagsMemory(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-m", "256m", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-m", "256m", "alpine"})
 	if flags.Memory != 256*1024*1024 {
 		t.Errorf("Memory = %d, want 268435456", flags.Memory)
 	}
 }
 
 func TestParseRunFlagsMemoryWithM(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--memory", "512m", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--memory", "512m", "alpine"})
 	if flags.Memory != 512*1024*1024 {
 		t.Errorf("Memory = %d, want 536870912", flags.Memory)
 	}
 }
 
 func TestParseRunFlagsMemoryWithG(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--memory", "1g", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--memory", "1g", "alpine"})
 	if flags.Memory != 1*1024*1024*1024 {
 		t.Errorf("Memory = %d, want 1073741824", flags.Memory)
 	}
 }
 
 func TestParseRunFlagsCPUs(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--cpus", "1.5", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--cpus", "1.5", "alpine"})
 	if flags.NanoCPUs != 1500000000 {
 		t.Errorf("NanoCPUs = %d, want 1500000000", flags.NanoCPUs)
 	}
 }
 
 func TestParseRunFlagsCPUShares(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--cpu-shares", "512", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--cpu-shares", "512", "alpine"})
 	if flags.CPUShares != 512 {
 		t.Errorf("CPUShares = %d, want 512", flags.CPUShares)
 	}
 }
 
 func TestParseRunFlagsPrivileged(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--privileged", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--privileged", "alpine"})
 	if !flags.Privileged {
 		t.Error("--privileged should set Privileged")
 	}
 }
 
 func TestParseRunFlagsReadOnly(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--read-only", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--read-only", "alpine"})
 	if !flags.ReadOnly {
 		t.Error("--read-only should set ReadOnly")
 	}
 }
 
 func TestParseRunFlagsInit(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--init", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--init", "alpine"})
 	if !flags.Init {
 		t.Error("--init should set Init")
 	}
 }
 
 func TestParseRunFlagsRM(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--rm", "alpine", "echo", "test"})
+	_, _, flags, _ := ParseRunFlags([]string{"--rm", "alpine", "echo", "test"})
 	if !flags.RM {
 		t.Error("--rm should set RM")
 	}
 }
 
 func TestParseRunFlagsHostname(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-h", "myhost", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-h", "myhost", "alpine"})
 	if flags.Hostname != "myhost" {
 		t.Errorf("Hostname = %q, want myhost", flags.Hostname)
 	}
 }
 
 func TestParseRunFlagsEntrypoint(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--entrypoint", "/custom-init.sh", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--entrypoint", "/custom-init.sh", "alpine"})
 	if flags.Entrypoint != "/custom-init.sh" {
 		t.Errorf("Entrypoint = %q, want /custom-init.sh", flags.Entrypoint)
 	}
 }
 
 func TestParseRunFlagsStopSignal(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--stop-signal", "SIGINT", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--stop-signal", "SIGINT", "alpine"})
 	if flags.StopSignal != "SIGINT" {
 		t.Errorf("StopSignal = %q, want SIGINT", flags.StopSignal)
 	}
 }
 
 func TestParseRunFlagsDNS(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--dns", "8.8.8.8", "--dns", "8.8.4.4", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--dns", "8.8.8.8", "--dns", "8.8.4.4", "alpine"})
 	if len(flags.DNS) != 2 || flags.DNS[0] != "8.8.8.8" || flags.DNS[1] != "8.8.4.4" {
 		t.Errorf("DNS = %v, want [8.8.8.8 8.8.4.4]", flags.DNS)
 	}
 }
 
 func TestParseRunFlagsExtraHosts(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--add-host", "myhost:192.168.1.1", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--add-host", "myhost:192.168.1.1", "alpine"})
 	if len(flags.ExtraHosts) != 1 || flags.ExtraHosts[0] != "myhost:192.168.1.1" {
 		t.Errorf("ExtraHosts = %v", flags.ExtraHosts)
 	}
 }
 
 func TestParseRunFlagsCapAdd(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--cap-add", "NET_ADMIN", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--cap-add", "NET_ADMIN", "alpine"})
 	if len(flags.CapAdd) != 1 || flags.CapAdd[0] != "NET_ADMIN" {
 		t.Errorf("CapAdd = %v", flags.CapAdd)
 	}
 }
 
 func TestParseRunFlagsCapDrop(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--cap-drop", "ALL", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--cap-drop", "ALL", "alpine"})
 	if len(flags.CapDrop) != 1 || flags.CapDrop[0] != "ALL" {
 		t.Errorf("CapDrop = %v", flags.CapDrop)
 	}
 }
 
 func TestParseRunFlagsPublishAll(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-P", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-P", "alpine"})
 	if !flags.PublishAll {
 		t.Error("-P should set PublishAll")
 	}
 }
 
 func TestParseRunFlagsShmSize(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--shm-size", "64m", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--shm-size", "64m", "alpine"})
 	if flags.ShmSize != 64*1024*1024 {
 		t.Errorf("ShmSize = %d, want 67108864", flags.ShmSize)
 	}
 }
 
 func TestParseRunFlagsPullPolicy(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--pull", "always", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--pull", "always", "alpine"})
 	if flags.Pull != "always" {
 		t.Errorf("Pull = %q, want always", flags.Pull)
 	}
 }
 
 func TestParseRunFlagsPlatform(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--platform", "linux/arm64", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--platform", "linux/arm64", "alpine"})
 	if flags.Platform != "linux/arm64" {
 		t.Errorf("Platform = %q, want linux/arm64", flags.Platform)
 	}
 }
 
 func TestParseRunFlagsLogDriver(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"--log-driver", "json-file", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"--log-driver", "json-file", "alpine"})
 	if flags.LogDriver != "json-file" {
 		t.Errorf("LogDriver = %q, want json-file", flags.LogDriver)
 	}
 }
 
 func TestParseRunFlagsLabel(t *testing.T) {
-	_, _, flags := ParseRunFlags([]string{"-l", "env=production", "alpine"})
+	_, _, flags, _ := ParseRunFlags([]string{"-l", "env=production", "alpine"})
 	if flags.Labels["env"] != "production" {
 		t.Errorf("Labels[env] = %q, want production", flags.Labels["env"])
 	}
 }
 
 func TestParseRunFlagsNoImage(t *testing.T) {
-	image, _, _ := ParseRunFlags([]string{"-d", "--name", "test"})
+	image, _, _, _ := ParseRunFlags([]string{"-d", "--name", "test"})
 	if image != "" {
 		t.Errorf("image = %q, want empty", image)
 	}
 }
 
 func TestParseRunFlagsDoubleDash(t *testing.T) {
-	image, cmd, _ := ParseRunFlags([]string{"alpine", "--", "echo", "hello", "--verbose"})
+	image, cmd, _, _ := ParseRunFlags([]string{"alpine", "--", "echo", "hello", "--verbose"})
 	if image != "alpine" {
 		t.Errorf("image = %q, want alpine", image)
 	}
@@ -273,7 +273,7 @@ func TestParseRunFlagsDoubleDash(t *testing.T) {
 }
 
 func TestParseRunFlagsCombined(t *testing.T) {
-	image, cmd, flags := ParseRunFlags([]string{
+	image, cmd, flags, _ := ParseRunFlags([]string{
 		"-d", "--name", "web", "-p", "8080:80",
 		"-e", "ENV=prod", "-v", "/data:/app",
 		"--restart", "always", "-m", "256m",
@@ -337,7 +337,7 @@ func TestNewDokiCLIDefault(t *testing.T) {
 // command args, so `run -it` never set the interactive/tty flags and stdin was
 // never wired to the process.
 func TestParseRunFlagsCombinedShort(t *testing.T) {
-	image, cmd, flags := ParseRunFlags([]string{"-it", "busybox", "sh"})
+	image, cmd, flags, _ := ParseRunFlags([]string{"-it", "busybox", "sh"})
 	if image != "busybox" {
 		t.Errorf("image = %q, want busybox", image)
 	}
@@ -348,25 +348,32 @@ func TestParseRunFlagsCombinedShort(t *testing.T) {
 		t.Errorf("-it should set Interactive and TTY, got i=%v t=%v", flags.Interactive, flags.TTY)
 	}
 
-	_, _, flags = ParseRunFlags([]string{"-itd", "busybox"})
+	_, _, flags, _ = ParseRunFlags([]string{"-itd", "busybox"})
 	if !flags.Interactive || !flags.TTY || !flags.Detach {
 		t.Errorf("-itd should set i, t and d, got i=%v t=%v d=%v", flags.Interactive, flags.TTY, flags.Detach)
 	}
 
-	// A bundle containing an unknown/value flag must be left untouched, not
-	// silently mis-split.
-	if out, ok := expandBoolShortFlags("-ex"); ok {
-		t.Errorf("-ex should not expand (x is not a bool short flag), got %v", out)
+	// A bundle that cannot be parsed must produce an explicit error, not be
+	// silently mis-split or passed through. Value-taking letters may carry an
+	// attached value: "-ex" parses as "-e x".
+	if _, err := expandBoolShortFlags("-zq"); err == nil {
+		t.Error("-zq should fail to parse (z is not a known short flag)")
 	}
-	if out, ok := expandBoolShortFlags("-it"); !ok || len(out) != 2 || out[0] != "-i" || out[1] != "-t" {
-		t.Errorf("expandBoolShortFlags(-it) = %v, %v", out, ok)
+	if out, err := expandBoolShortFlags("-ex"); err != nil || len(out) != 2 || out[0] != "-e" || out[1] != "x" {
+		t.Errorf("expandBoolShortFlags(-ex) = %v, %v, want [-e x], nil", out, err)
+	}
+	if out, err := expandBoolShortFlags("-p8080:80"); err != nil || len(out) != 2 || out[0] != "-p" || out[1] != "8080:80" {
+		t.Errorf("expandBoolShortFlags(-p8080:80) = %v, %v, want [-p 8080:80], nil", out, err)
+	}
+	if out, err := expandBoolShortFlags("-it"); err != nil || len(out) != 2 || out[0] != "-i" || out[1] != "-t" {
+		t.Errorf("expandBoolShortFlags(-it) = %v, %v", out, err)
 	}
 }
 
 // The --key=value form must parse like Docker's, not leak into the container's
 // command. Both --cap-drop ALL and --cap-drop=ALL must set CapDrop.
 func TestParseRunFlagsEqualsForm(t *testing.T) {
-	image, cmd, flags := ParseRunFlags([]string{"--cap-drop=ALL", "busybox", "echo", "hi"})
+	image, cmd, flags, _ := ParseRunFlags([]string{"--cap-drop=ALL", "busybox", "echo", "hi"})
 	if image != "busybox" {
 		t.Errorf("image = %q, want busybox", image)
 	}
@@ -378,17 +385,17 @@ func TestParseRunFlagsEqualsForm(t *testing.T) {
 	}
 
 	// Space form parses identically.
-	_, _, flags = ParseRunFlags([]string{"--cap-drop", "ALL", "busybox"})
+	_, _, flags, _ = ParseRunFlags([]string{"--cap-drop", "ALL", "busybox"})
 	if len(flags.CapDrop) != 1 || flags.CapDrop[0] != "ALL" {
 		t.Errorf("space-form CapDrop = %v, want [ALL]", flags.CapDrop)
 	}
 
 	// Boolean flag in =value form.
-	_, _, flags = ParseRunFlags([]string{"--rm=false", "busybox"})
+	_, _, flags, _ = ParseRunFlags([]string{"--rm=false", "busybox"})
 	if flags.RM {
 		t.Error("--rm=false should leave RM unset")
 	}
-	_, _, flags = ParseRunFlags([]string{"--rm=true", "busybox"})
+	_, _, flags, _ = ParseRunFlags([]string{"--rm=true", "busybox"})
 	if !flags.RM {
 		t.Error("--rm=true should set RM")
 	}

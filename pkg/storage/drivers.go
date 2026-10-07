@@ -24,7 +24,7 @@ func validateLayerID(id string) error {
 	return nil
 }
 
-// ─── Btrfs Driver ──────────────────────────────────────────────────
+// Btrfs Driver
 
 // BtrfsDriver implements the storage driver using btrfs subvolumes.
 type BtrfsDriver struct {
@@ -101,7 +101,7 @@ func (d *BtrfsDriver) GetMetadata(_ string) (map[string]string, error) {
 	return nil, nil
 }
 
-// ─── ZFS Driver ────────────────────────────────────────────────────
+// ZFS Driver
 
 // ZFSDriver implements the storage driver using ZFS filesystems.
 type ZFSDriver struct {
@@ -179,7 +179,7 @@ func (d *ZFSDriver) GetMetadata(_ string) (map[string]string, error) {
 	return nil, nil
 }
 
-// ─── VFS Driver (naive, for testing) ──────────────────────────────
+// VFS Driver (naive, for testing)
 
 // VFSDriver implements the storage driver using the host filesystem directly.
 type VFSDriver struct {
@@ -241,7 +241,7 @@ func (d *VFSDriver) GetMetadata(_ string) (map[string]string, error) {
 	return nil, nil
 }
 
-// ─── Garbage Collection ────────────────────────────────────────────
+// Garbage Collection
 
 // GCConfig holds configuration for garbage collection.
 type GCConfig struct {
@@ -369,7 +369,7 @@ func (g *GarbageCollector) findUnusedLayers() ([]string, error) {
 	return unused, nil
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────
+// Helpers
 
 func mountSubvol(src, dst string) error {
 	_ = common.EnsureDir(dst)

@@ -99,6 +99,31 @@ func TestStoreGetNotFound(t *testing.T) {
 	}
 }
 
+func TestStoreRemoveDeletesRecord(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+
+	record := &ImageRecord{
+		ID:       "sha256:rmtest",
+		RepoTags: []string{"rmtest:latest"},
+	}
+	if err := store.SaveRecord(record); err != nil {
+		t.Fatalf("SaveRecord: %v", err)
+	}
+	if err := store.Remove("rmtest:latest"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if store.Exists(record.ID) {
+		t.Error("Exists(ID) = true after Remove, want false (stale record file)")
+	}
+	if _, err := store.Get(record.ID); err == nil {
+		t.Error("Get(ID) succeeded after Remove, want not-found (stale record file)")
+	}
+}
+
 func TestStoreTag(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(dir)

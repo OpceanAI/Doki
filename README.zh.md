@@ -132,7 +132,7 @@ Doki 是一个为每个 Linux 内核设计的容器引擎,从 Android 手机到�
 
 ### 跨架构仿真
 
-在 ARM 上运行 x86 容器,反之亦然,无需内核支持。三个后端:QEMU 用户模式 (`qemu-x86_64-static`、`qemu-aarch64-static`)、FEX-Emu (x86-on-ARM,针对 Termux/Android 优化) 和 Box64 (轻量级 x86_64 仿真器)。通过 `doki emulator ls|set|detect` 或 `DOKI_EMULATION_MODE=qemu|fex|box64|auto` 配置。持久化偏好存储在 `~/.doki/emulation.json` 中,支持原子写入和环境变量覆盖。自动检测为你的主机架构选择最佳可用后端。
+在 ARM 上运行 x86 容器,反之亦然,无需内核支持。三个后端:QEMU 用户模式 (`qemu-x86_64-static`、`qemu-aarch64-static`)、FEX-Emu (x86-on-ARM,针对 Termux/Android 优化) 和 Box64 (轻量级 x86_64 仿真器)。通过 `doki emu show|detect|test|set` 或 `DOKI_EMULATION_MODE=qemu|fex|box64|auto` 配置。持久化偏好存储在 `~/.doki/emulation.json` 中,支持原子写入和环境变量覆盖。自动检测为你的主机架构选择最佳可用后端。
 
 ---
 
@@ -208,7 +208,7 @@ doki-kubectl logs web-abc123
 
 | 二进制 | 大小 | 描述 |
 |:-------|:----:|:------------|
-| **doki** | 6.7 MB | 带 108+ 命令的 CLI。通过 Unix socket 连接到守护进程 |
+| **doki** | 6.7 MB | 带 100+ 命令的 CLI。通过 Unix socket 连接到守护进程 |
 | **dokid** | 9.2 MB | 守护进程。Docker Engine API v1.54 + Podman API v5 通过 Unix socket |
 | **doki-compose** | 7.6 MB | Compose 引擎,带 watch、publish、健康检查执行和完整规范支持 |
 | **doki-init** | 2.9 MB | microVM 客户机的 PID 1 (Go)。源代码中有 Rust 变体 |
@@ -304,7 +304,7 @@ VZ 后端使用 `VZVirtualMachineConfiguration`、`VZLinuxBootLoader`、`VZVirti
 
 ## CLI
 
-Doki 提供 **108 个命令**,分为 8 个类别。
+Doki 提供 **100 个命令**,分为 8 个类别。
 
 ### 容器管理
 
@@ -892,7 +892,7 @@ go build -trimpath -ldflags="-s -w" -o releases/doki-kubectl ./cmd/doki-kubectl
 ```
 Doki/
   cmd/
-    doki/                 CLI 二进制 (108 个命令,1600+ 行)
+    doki/                 CLI 二进制 (100 个命令,2000+ 行)
     dokid/                守护进程二进制 (REST API、TLS、速率限制)
     doki-compose/         Docker Compose 兼容 CLI
     doki-init/            容器的最小 PID 1 (Go)

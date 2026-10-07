@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -255,7 +255,7 @@ func (sm *SecretManager) loadKey() error {
 	if info, err := os.Stat(sm.store); err == nil {
 		if info.Mode().Perm()&0077 != 0 {
 			if err := os.Chmod(sm.store, 0700); err != nil {
-				log.Printf("podman: tighten secret store perms: %v", err)
+				slog.Warn("podman: tighten secret store perms", "error", err)
 			}
 		}
 	}
@@ -298,7 +298,7 @@ func (sm *SecretManager) decrypt(data []byte) ([]byte, error) {
 func (sm *SecretManager) loadSecrets() {
 	entries, err := os.ReadDir(sm.store)
 	if err != nil {
-		log.Printf("podman: read secret store %s: %v", sm.store, err)
+		slog.Error("podman: read secret store", "store", sm.store, "error", err)
 		return
 	}
 	for _, entry := range entries {
@@ -308,12 +308,12 @@ func (sm *SecretManager) loadSecrets() {
 		path := filepath.Join(sm.store, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("podman: read secret file %s: %v", path, err)
+			slog.Error("podman: read secret file", "path", path, "error", err)
 			continue
 		}
 		var secret Secret
 		if err := json.Unmarshal(data, &secret); err != nil {
-			log.Printf("podman: parse secret file %s: %v", path, err)
+			slog.Error("podman: parse secret file", "path", path, "error", err)
 			continue
 		}
 		sm.secrets[secret.ID] = &secret

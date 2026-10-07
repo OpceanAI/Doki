@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"log/slog"
 	"os/exec"
 	"strings"
@@ -32,8 +33,15 @@ type HealthChecker struct {
 	stopCh chan struct{}
 	done   chan struct{}
 
+	// mu guards the lifecycle fields (started/stopped/stopCh) below.
 	mu      sync.Mutex
+	started bool
 	stopped bool
+
+	// stateMu serialises loadState/saveState mutations for this one container.
+	// It replaces the global runtime.mu so a slow disk write here cannot stall
+	// unrelated container lifecycle operations.
+	stateMu sync.Mutex
 }
 
 // NewHealthChecker creates a HealthChecker for the given container.
@@ -47,13 +55,21 @@ func NewHealthChecker(rt *Runtime, id string, cfg *HealthCheckConfig) *HealthChe
 	}
 }
 
-// Start launches the health check goroutine.
+// Start launches the health check goroutine. It is a no-op if already started.
 func (hc *HealthChecker) Start() {
+	hc.mu.Lock()
+	if hc.started {
+		hc.mu.Unlock()
+		return
+	}
+	hc.started = true
+	hc.mu.Unlock()
 	go hc.run()
 }
 
 // Stop signals the health check goroutine to exit and blocks until it does.
-// Safe to call multiple times.
+// Safe to call multiple times, and safe to call when Start was never invoked
+// (in which case it returns immediately instead of deadlocking on done).
 func (hc *HealthChecker) Stop() {
 	hc.mu.Lock()
 	if hc.stopped {
@@ -61,6 +77,10 @@ func (hc *HealthChecker) Stop() {
 		return
 	}
 	hc.stopped = true
+	if !hc.started {
+		hc.mu.Unlock()
+		return
+	}
 	close(hc.stopCh)
 	hc.mu.Unlock()
 	<-hc.done
@@ -137,43 +157,32 @@ func (hc *HealthChecker) run() {
 	}
 }
 
-// runProbe executes a single health check command via runtime.Exec and
-// returns the exit code and combined output. A timeout is enforced.
+// runProbe executes a single health check command via runtime.ExecContext and
+// returns the exit code and combined output. The timeout is enforced with a
+// context deadline so a hung probe is actually killed (no leaked goroutine).
 func (hc *HealthChecker) runProbe(cmd []string, timeout time.Duration) (int, string) {
-	type execResult struct {
-		stdout, stderr []byte
-		err            error
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-	resultCh := make(chan execResult, 1)
-	go func() {
-		stdout, stderr, err := hc.runtime.Exec(hc.containerID, cmd, nil, "", "")
-		resultCh <- execResult{stdout, stderr, err}
-	}()
+	stdout, stderr, err := hc.runtime.ExecContext(ctx, hc.containerID, cmd, nil, "", "")
 
-	select {
-	case res := <-resultCh:
-		exitCode := 0
-		output := strings.TrimSpace(string(res.stdout) + string(res.stderr))
-		if res.err != nil {
-			if exitErr, ok := res.err.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				exitCode = -1
-			}
-			if output != "" {
-				output += "\n"
-			}
-			output += res.err.Error()
+	exitCode := 0
+	output := strings.TrimSpace(string(stdout) + string(stderr))
+	if err != nil {
+		if ctx.Err() != nil {
+			return -1, "healthcheck probe timed out"
 		}
-		return exitCode, output
-
-	case <-time.After(timeout):
-		return -1, "healthcheck probe timed out"
-
-	case <-hc.stopCh:
-		return -1, "healthcheck stopped"
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+		if output != "" {
+			output += "\n"
+		}
+		output += err.Error()
 	}
+	return exitCode, output
 }
 
 // recordProbe records the probe result in the health log and updates the
@@ -182,8 +191,9 @@ func (hc *HealthChecker) runProbe(cmd []string, timeout time.Duration) (int, str
 //   - During startPeriod, failures don't count toward unhealthy.
 //   - After startPeriod, `retries` consecutive failures → "unhealthy".
 func (hc *HealthChecker) recordProbe(exitCode int, output string, inStartPeriod bool, retries int) {
-	hc.runtime.mu.Lock()
-	defer hc.runtime.mu.Unlock()
+	// Per-container lock: do not hold the global runtime mutex across disk I/O.
+	hc.stateMu.Lock()
+	defer hc.stateMu.Unlock()
 
 	state, err := hc.runtime.loadState(hc.containerID)
 	if err != nil || state.HealthStatus == nil {
@@ -235,8 +245,9 @@ func (hc *HealthChecker) recordProbe(exitCode int, output string, inStartPeriod 
 
 // setHealthStatus updates the container's HealthStatus without recording a log entry.
 func (hc *HealthChecker) setHealthStatus(status string, failingStreak int) {
-	hc.runtime.mu.Lock()
-	defer hc.runtime.mu.Unlock()
+	// Per-container lock: do not hold the global runtime mutex across disk I/O.
+	hc.stateMu.Lock()
+	defer hc.stateMu.Unlock()
 
 	state, err := hc.runtime.loadState(hc.containerID)
 	if err != nil {

@@ -611,6 +611,7 @@ func (s *Store) Remove(idOrTag string) error {
 	}
 
 	_ = os.RemoveAll(s.manifestPath(record.ID))
+	_ = os.Remove(s.recordPath(record.ID))
 
 	// Clean up layer blobs not shared with other images
 	if otherRecords, _ := s.listRecords(); len(otherRecords) <= 1 {
@@ -650,6 +651,7 @@ func (s *Store) Prune() ([]string, error) {
 	var removed []string
 	for _, record := range records {
 		_ = os.RemoveAll(s.manifestPath(record.ID))
+		_ = os.Remove(s.recordPath(record.ID))
 		// Prune: delete ALL layer blobs since we're removing all images
 		for _, layer := range record.Layers {
 			_ = os.Remove(s.layerPath(layer))

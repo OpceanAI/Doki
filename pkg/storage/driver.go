@@ -142,11 +142,11 @@ func (m *Manager) Stats() StorageStats {
 	// Get disk usage.
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(m.root, &stat); err == nil {
-		// Statfs_t.Bavail is uint64, Bsize is int64 (signed on Android).
-		// Compute the product in uint64 to avoid signed-overflow UB and
-		// then clamp to math.MaxInt64 for gosec G115.
+		// Bavail/Bsize are signed on some platforms (e.g. int64 on FreeBSD)
+		// and unsigned on others. Compute the product in uint64 to avoid
+		// signed-overflow UB and then clamp to math.MaxInt64 for gosec G115.
 		bsize := common.SafeUint64FromInt64(int64(stat.Bsize))
-		product := stat.Bavail * bsize
+		product := uint64(stat.Bavail) * bsize
 		stats.FreeSpace = common.SafeInt64FromUint64(product)
 	}
 
@@ -172,11 +172,12 @@ func DetectBestDriver(root string) string {
 }
 
 func canUseOverlay2() bool {
-	// Check if kernel supports overlayfs.
-	if err := exec.Command("modprobe", "overlay").Run(); err == nil {
-		return true
+	// Rootless or Termux can never mount kernel overlayfs: skip modprobe
+	// entirely and fall through to fuse-overlayfs/vfs.
+	if os.Geteuid() != 0 || common.IsTermux() {
+		return false
 	}
-	// Check if overlay module is loaded.
+	// Check if overlay module is loaded (read-only probe, no modprobe).
 	data, err := os.ReadFile("/proc/filesystems")
 	if err != nil {
 		return false

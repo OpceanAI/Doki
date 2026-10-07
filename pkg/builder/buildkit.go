@@ -127,7 +127,7 @@ func (c *BuildKitClient) Status() (map[string]interface{}, error) {
 	if !c.IsAvailable() {
 		return nil, fmt.Errorf("buildkit daemon not available")
 	}
-	// TODO: implement buildctl debug info
+	// NOTE: buildctl debug info is not implemented; only basic status is reported.
 	return map[string]interface{}{
 		"addr":      c.addr,
 		"available": true,

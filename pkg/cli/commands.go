@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -76,7 +75,10 @@ func New(socket string) *DokiCLI {
 
 // Run creates and starts a new container from an image with the given arguments and flags.
 func (c *DokiCLI) Run(args []string) error {
-	image, cmd, flags := ParseRunFlags(args)
+	image, cmd, flags, err := ParseRunFlags(args)
+	if err != nil {
+		return fmt.Errorf("doki run: %w", err)
+	}
 	var containerID string
 
 	body := map[string]interface{}{
@@ -211,17 +213,19 @@ func (c *DokiCLI) Run(args []string) error {
 	}
 
 	if len(flags.Ports) > 0 {
-		pb := make(map[string]interface{})
+		pb := make(map[string][]map[string]string)
 		for _, p := range flags.Ports {
-			port, bind, err := common.ParsePortBinding(p)
+			bindings, err := ExpandPublishSpec(p)
 			if err != nil {
-				return err
+				return fmt.Errorf("doki run: %w", err)
 			}
-			key := fmt.Sprintf("%d/%s", port.PrivatePort, port.Type)
-			pb[key] = []map[string]string{{
-				"HostPort": bind.HostPort,
-				"HostIp":   bind.HostIP,
-			}}
+			for _, b := range bindings {
+				key := b.ContainerPort + "/" + b.Proto
+				pb[key] = append(pb[key], map[string]string{
+					"HostPort": b.HostPort,
+					"HostIp":   b.HostIP,
+				})
+			}
 		}
 		hostConfig["PortBindings"] = pb
 	}
@@ -358,7 +362,7 @@ func (c *DokiCLI) Run(args []string) error {
 	}
 
 	if flags.Detach {
-		fmt.Println(containerID[:12])
+		fmt.Println(common.ShortID(containerID))
 		return nil
 	}
 
@@ -684,14 +688,16 @@ func (c *DokiCLI) Create(image string, cmd []string, opts *RunFlags) (string, er
 			hostConfig["VolumeDriver"] = opts.VolumeDriver
 		}
 		if len(opts.Ports) > 0 {
-			pb := make(map[string]interface{})
+			pb := make(map[string][]map[string]string)
 			for _, p := range opts.Ports {
-				port, bind, err := common.ParsePortBinding(p)
+				bindings, err := ExpandPublishSpec(p)
 				if err != nil {
 					return "", err
 				}
-				key := fmt.Sprintf("%d/%s", port.PrivatePort, port.Type)
-				pb[key] = []map[string]string{{"HostPort": bind.HostPort, "HostIp": bind.HostIP}}
+				for _, b := range bindings {
+					key := b.ContainerPort + "/" + b.Proto
+					pb[key] = append(pb[key], map[string]string{"HostPort": b.HostPort, "HostIp": b.HostIP})
+				}
 			}
 			hostConfig["PortBindings"] = pb
 		}
@@ -922,7 +928,7 @@ func (c *DokiCLI) Top(containerID string, psArgs string) error {
 // Inspect returns detailed information about containers or images in JSON format.
 func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
 	if len(containerIDs) == 0 {
-		return fmt.Errorf("inspect: requires at least 1 argument")
+		return fmt.Errorf("doki inspect: requires at least 1 argument")
 	}
 	var hadError bool
 	for _, id := range containerIDs {
@@ -947,15 +953,15 @@ func (c *DokiCLI) Inspect(containerIDs []string, format string) error {
 		if format != "" {
 			tmpl, err := template.New("inspect").Parse(format)
 			if err != nil {
-				return fmt.Errorf("inspect: invalid template: %w", err)
+				return fmt.Errorf("doki inspect: invalid template: %w", err)
 			}
 			var raw interface{}
 			if err := json.Unmarshal(body, &raw); err != nil {
-				return fmt.Errorf("inspect: parse JSON: %w", err)
+				return fmt.Errorf("doki inspect: parse JSON: %w", err)
 			}
 			data := unwrap(raw)
 			if err := tmpl.Execute(os.Stdout, data); err != nil {
-				return fmt.Errorf("inspect: template execute: %w", err)
+				return fmt.Errorf("doki inspect: template execute: %w", err)
 			}
 			fmt.Println()
 		} else {
@@ -1001,7 +1007,7 @@ func (c *DokiCLI) Commit(_, repo, tag, author, _ string, pause bool, _ []string)
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
-	fmt.Println(result.Id[:12])
+	fmt.Println(common.ShortID(result.Id))
 	return nil
 }
 
@@ -1252,7 +1258,7 @@ func (c *DokiCLI) Rename(containerID, newName string) error {
 // Start starts one or more stopped containers.
 func (c *DokiCLI) Start(ids []string) error {
 	if len(ids) == 0 {
-		return fmt.Errorf("start: requires at least 1 argument")
+		return fmt.Errorf("doki start: requires at least 1 argument")
 	}
 	for _, id := range ids {
 		resp, err := c.doAPI("POST", "/containers/"+id+"/start", nil)
@@ -2222,7 +2228,7 @@ func (c *DokiCLI) SystemPrune(all, volumes bool, _ string) error {
 
 // SystemDialStdio connects stdin/stdout to the daemon.
 func (c *DokiCLI) SystemDialStdio() error {
-	return fmt.Errorf("not yet implemented")
+	return fmt.Errorf("E501: doki system dial-stdio: not yet implemented (Hint: use 'doki exec' or 'doki attach' for interactive sessions)")
 }
 
 // ---- Login/Logout Commands ----
@@ -2236,7 +2242,7 @@ func (c *DokiCLI) Login(server, username, password string) error {
 	}
 	resp, err := c.doAPI("POST", "/auth", body)
 	if err != nil {
-		return fmt.Errorf("login: %w", err)
+		return fmt.Errorf("doki login: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -2253,7 +2259,7 @@ func (c *DokiCLI) Login(server, username, password string) error {
 
 // Logout removes registry authentication credentials.
 func (c *DokiCLI) Logout(_ string) error {
-	return fmt.Errorf("not yet implemented")
+	return fmt.Errorf("E501: doki logout: not yet implemented (Hint: use 'doki login' to manage registry credentials)")
 }
 
 // ---- Podman-specific Commands ----
@@ -2356,17 +2362,17 @@ func (c *DokiCLI) AutoUpdate() error {
 
 // Unshare runs a command in a new user namespace.
 func (c *DokiCLI) Unshare(_ []string) error {
-	return fmt.Errorf("not yet implemented")
+	return fmt.Errorf("E501: doki unshare: not yet implemented (Hint: user namespace isolation is not supported on this platform)")
 }
 
 // Untag removes a tag from an image.
 func (c *DokiCLI) Untag(_ string) error {
-	return fmt.Errorf("not yet implemented")
+	return fmt.Errorf("E501: doki untag: not yet implemented (Hint: use 'doki rmi' to remove an image or tag)")
 }
 
 // Scout scans an image for vulnerabilities.
 func (c *DokiCLI) Scout(_ string) error {
-	return fmt.Errorf("not yet implemented")
+	return fmt.Errorf("E501: doki scout: not yet implemented (Hint: run a standalone vulnerability scanner against the image)")
 }
 
 // VerifyImageSignature checks if an image has a valid signature.
@@ -2398,12 +2404,12 @@ func (c *DokiCLI) VerifyImageSignature(imageName string) error {
 
 // Mount mounts a container filesystem.
 func (c *DokiCLI) Mount(_ []string) error {
-	return fmt.Errorf("not yet implemented")
+	return fmt.Errorf("E501: doki mount: not yet implemented (Hint: mounting a container root filesystem is not supported on Android)")
 }
 
 // Unmount unmounts a container filesystem.
 func (c *DokiCLI) Unmount(_ []string) error {
-	return fmt.Errorf("not yet implemented")
+	return fmt.Errorf("E501: doki unmount: not yet implemented (Hint: mounting a container root filesystem is not supported on Android)")
 }
 
 // Healthcheck shows the health status of a container.
@@ -2493,7 +2499,7 @@ func (c *DokiCLI) Apply(file string) error {
 // ---- Helper functions ----
 
 func (c *DokiCLI) doAPI(method, path string, body interface{}) (*http.Response, error) {
-	url := "http://unix/v1.44" + path
+	url := "http://unix/v" + common.DokiAPIVersion + path
 
 	var bodyReader io.Reader
 	if body != nil {
@@ -2527,16 +2533,22 @@ func (c *DokiCLI) doAPI(method, path string, body interface{}) (*http.Response, 
 	}
 
 	if resp.StatusCode >= 400 {
-		var apiErr struct{ Message string }
-		if err := json.NewDecoder(resp.Body).Decode(&apiErr); err != nil {
-			_ = resp.Body.Close()
-			return nil, fmt.Errorf("decode error response: %w", err)
-		}
+		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		if apiErr.Message != "" {
-			return nil, fmt.Errorf("%s", apiErr.Message)
+		snippet := strings.TrimSpace(string(body))
+		// Prefer the daemon's human-readable message when the body is a JSON
+		// error envelope; otherwise fall back to the raw body text.
+		var apiErr struct{ Message string }
+		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Message != "" {
+			snippet = apiErr.Message
 		}
-		return nil, fmt.Errorf("API error: %d", resp.StatusCode)
+		if snippet == "" {
+			snippet = "(empty response)"
+		}
+		if len(snippet) > 200 {
+			snippet = snippet[:200] + "..."
+		}
+		return nil, fmt.Errorf("API error %d: %s Hint: check 'dokid' logs for details", resp.StatusCode, snippet)
 	}
 
 	return resp, nil
@@ -2553,6 +2565,32 @@ func isConnRefused(err error) bool {
 	return strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "no such file or directory") ||
 		strings.Contains(msg, "connect: ")
+}
+
+// NegotiateVersion asks the daemon for its API version and confirms it matches
+// the version this client was compiled against. It returns the negotiated
+// version on success, or an error when the daemon is unreachable, the response
+// is malformed, or the versions disagree.
+func (c *DokiCLI) NegotiateVersion() (string, error) {
+	resp, err := c.doAPI("GET", "/version", nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var info struct {
+		APIVersion string `json:"ApiVersion"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", fmt.Errorf("decode version: %w", err)
+	}
+	if info.APIVersion == "" {
+		return "", fmt.Errorf("daemon did not report an API version")
+	}
+	if info.APIVersion != common.DokiAPIVersion {
+		return "", fmt.Errorf("API version mismatch: client %s, daemon %s", common.DokiAPIVersion, info.APIVersion)
+	}
+	return info.APIVersion, nil
 }
 
 // hijackAPI opens a raw connection to the daemon, sends the request, reads the
@@ -2574,7 +2612,7 @@ func (c *DokiCLI) hijackAPI(method, path string, body interface{}) (net.Conn, *b
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot connect to the Doki daemon at %s: is dokid running?", c.socket)
 	}
-	req, err := http.NewRequest(method, "http://unix/v1.44"+path, bytes.NewReader(payload))
+	req, err := http.NewRequest(method, "http://unix/v"+common.DokiAPIVersion+path, bytes.NewReader(payload))
 	if err != nil {
 		_ = conn.Close()
 		return nil, nil, err
@@ -2665,7 +2703,13 @@ func (c *DokiCLI) waitContainer(containerID string) {
 func (c *DokiCLI) Ping() error {
 	resp, err := c.doAPI("GET", "/_ping", nil)
 	if err != nil {
-		return fmt.Errorf("cannot connect to daemon: %w", err)
+		// doAPI already maps a refused/missing socket to the friendly hint via
+		// isConnRefused, so surface that directly instead of re-wrapping it in a
+		// second "cannot connect" prefix.
+		if isConnRefused(err) {
+			return fmt.Errorf("cannot connect to the Doki daemon at %s.\nIs dokid running? Start it with 'dokid' or check DOKI_HOST.", c.socket)
+		}
+		return err
 	}
 	_ = resp.Body.Close()
 	fmt.Println("OK")
@@ -2836,8 +2880,40 @@ type MountOpt struct {
 	Consistency string
 }
 
-// ParseRunFlags parses command-line arguments for the run command.
-func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) {
+// runValueFlags are the run/create/update flags that consume the next argument
+// as their value. A value-taking flag without an argument is an explicit error
+// instead of a silent no-op.
+var runValueFlags = map[string]bool{
+	"-a": true, "--attach": true, "-c": true, "--cpu-shares": true,
+	"-e": true, "--env": true, "--env-file": true, "-h": true, "--hostname": true,
+	"-l": true, "--label": true, "-m": true, "--memory": true, "--memory-swap": true,
+	"-n": true, "-p": true, "--publish": true, "-s": true, "-u": true, "--user": true,
+	"-v": true, "--volume": true, "-w": true, "--workdir": true,
+	"--name": true, "--network": true, "--net": true, "--restart": true,
+	"--domainname": true, "--entrypoint": true, "--stop-signal": true,
+	"--stop-timeout": true, "--cpus": true, "--cpuset-cpus": true,
+	"--cpuset-mems": true, "--cpu-period": true, "--cpu-quota": true,
+	"--pids-limit": true, "--shm-size": true, "--pull": true, "--platform": true,
+	"--ip": true, "--ip6": true, "--mac-address": true, "--ipc": true,
+	"--pid": true, "--uts": true, "--userns": true, "--isolation": true,
+	"--runtime": true, "--volume-driver": true, "--log-driver": true,
+	"--cgroup-parent": true, "--cgroupns": true, "--blkio-weight": true,
+	"--gpus": true, "--health-cmd": true, "--health-interval": true,
+	"--health-timeout": true, "--health-retries": true, "--health-start-period": true,
+	"--dns": true, "--dns-search": true, "--dns-option": true, "--dns-opt": true,
+	"--add-host": true, "--mount": true, "--volumes-from": true, "--device": true,
+	"--device-cgroup-rule": true, "--cap-add": true, "--cap-drop": true,
+	"--security-opt": true, "--sysctl": true, "--ulimit": true, "--group-add": true,
+	"--link": true, "--expose": true, "--log-opt": true, "--storage-opt": true,
+	"--annotation": true,
+}
+
+// ParseRunFlags parses command-line arguments for the run, create and update
+// commands. Bundled short flags ("-it") and short flags with attached values
+// ("-p8080:80", "-eFOO=1") are expanded, and "--key=value" is accepted
+// everywhere the space-separated form is. Unknown flags, unparseable bundles
+// and malformed -p/--publish or --expose values produce an explicit error.
+func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags, err error) {
 	flags = &RunFlags{}
 	imageFound := false
 	stopParsing := false
@@ -2872,33 +2948,44 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 			continue
 		}
 
-		// Combined boolean short flags: -it, -ti, -itd, -id, ... Docker's most
-		// common invocation is `run -it`, but the parser only knew `-i` and
-		// `-t` separately, so `-it` fell through to the command args and the
-		// interactive path never fired. Expand only when every character is a
-		// known boolean short flag so value-taking flags stay unambiguous.
-		if !imageFound && len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
-			if expanded, ok := expandBoolShortFlags(arg); ok {
-				args = append(args[:i], append(expanded, args[i+1:]...)...)
-				continue
-			}
-		}
-
-		// The --key=value form: Docker accepts both `--cap-drop ALL` and
-		// `--cap-drop=ALL`, but the parser only understood the space form, so
+		// The --key=value / -k=value form: Docker accepts both `--cap-drop ALL`
+		// and `--cap-drop=ALL`, but the parser only understood the space form, so
 		// `--cap-drop=ALL` leaked into the container's command and broke the run.
-		// Split it into two tokens, except for boolean flags where the value is
-		// the boolean itself.
-		if !imageFound && strings.HasPrefix(arg, "--") && strings.Contains(arg, "=") {
-			key, val, _ := strings.Cut(arg, "=")
-			if boolLongFlags[key] {
+		// Boolean flags carry their boolean as the value ("--rm=false", "-t=false");
+		// every other flag is split into two tokens. Attached short-flag values
+		// ("-eFOO=1") are left to expandShortFlags below.
+		if !imageFound && strings.HasPrefix(arg, "-") {
+			key, val, hasVal := SplitFlag(arg)
+			if hasVal && (boolLongFlags[key] || boolShortFlags[key]) {
 				// --rm=false etc.: apply the boolean and move on.
 				setBoolFlag(flags, key, val != "false" && val != "0")
 				i++
 				continue
 			}
-			args = append(args[:i], append([]string{key, val}, args[i+1:]...)...)
-			continue
+			if hasVal && strings.HasPrefix(key, "--") {
+				args = append(args[:i], append([]string{key, val}, args[i+1:]...)...)
+				continue
+			}
+		}
+
+		// Short flags: expand bundles ("-it", "-itp") and attached values
+		// ("-p8080:80", "-eFOO=1", "-v/path:/path") into individual tokens so
+		// value-taking flags stay unambiguous. A token that cannot be parsed is
+		// an explicit error, never a silent pass-through.
+		if !imageFound && len(arg) > 1 && arg[0] == '-' && arg[1] != '-' {
+			expanded, xerr := expandBoolShortFlags(arg)
+			if xerr != nil {
+				return "", nil, nil, xerr
+			}
+			if len(expanded) > 1 || expanded[0] != arg {
+				args = append(args[:i], append(expanded, args[i+1:]...)...)
+				continue
+			}
+		}
+
+		// A value-taking flag without an argument is an explicit error.
+		if !imageFound && runValueFlags[arg] && i+1 >= len(args) {
+			return "", nil, nil, fmt.Errorf("flag needs an argument: %s", arg)
 		}
 
 		switch arg {
@@ -2921,7 +3008,7 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 		case "--oom-kill-disable":
 			flags.OOMKillDisable = true
 
-		case "--name":
+		case "-n", "--name":
 			i++
 			if i < len(args) {
 				flags.Name = args[i]
@@ -2969,28 +3056,47 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 		case "--stop-timeout":
 			i++
 			if i < len(args) {
-				flags.StopTimeout, _ = strconv.Atoi(args[i])
+				v, err := strconv.Atoi(args[i])
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --stop-timeout: %q", args[i])
+				}
+				flags.StopTimeout = v
 			}
 		case "-m", "--memory":
 			i++
 			if i < len(args) {
-				flags.Memory = parseMemory(args[i])
+				v, err := parseMemory(args[i])
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --memory: %q", args[i])
+				}
+				flags.Memory = v
 			}
 		case "--memory-swap":
 			i++
 			if i < len(args) {
-				flags.MemorySwap = parseMemory(args[i])
+				v, err := parseMemory(args[i])
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --memory-swap: %q", args[i])
+				}
+				flags.MemorySwap = v
 			}
 		case "--cpus":
 			i++
 			if i < len(args) {
-				f, _ := strconv.ParseFloat(args[i], 64)
+				f, err := strconv.ParseFloat(args[i], 64)
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --cpus: %q", args[i])
+				}
 				flags.NanoCPUs = int64(f * 1e9)
 			}
 		case "-c", "--cpu-shares":
 			i++
 			if i < len(args) {
-				flags.CPUShares, _ = strconv.ParseInt(args[i], 10, 64)
+				v, err := strconv.ParseInt(args[i], 10, 64)
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --cpu-shares: %q", args[i])
+				}
+				flags.CPUShares = v
 			}
 		case "--cpuset-cpus":
 			i++
@@ -3005,22 +3111,38 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 		case "--cpu-period":
 			i++
 			if i < len(args) {
-				flags.CPUPeriod, _ = strconv.ParseInt(args[i], 10, 64)
+				v, err := strconv.ParseInt(args[i], 10, 64)
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --cpu-period: %q", args[i])
+				}
+				flags.CPUPeriod = v
 			}
 		case "--cpu-quota":
 			i++
 			if i < len(args) {
-				flags.CPUQuota, _ = strconv.ParseInt(args[i], 10, 64)
+				v, err := strconv.ParseInt(args[i], 10, 64)
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --cpu-quota: %q", args[i])
+				}
+				flags.CPUQuota = v
 			}
 		case "--pids-limit":
 			i++
 			if i < len(args) {
-				flags.PidsLimit, _ = strconv.ParseInt(args[i], 10, 64)
+				v, err := strconv.ParseInt(args[i], 10, 64)
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --pids-limit: %q", args[i])
+				}
+				flags.PidsLimit = v
 			}
 		case "--shm-size":
 			i++
 			if i < len(args) {
-				flags.ShmSize = parseMemory(args[i])
+				v, err := parseMemory(args[i])
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --shm-size: %q", args[i])
+				}
+				flags.ShmSize = v
 			}
 		case "--pull":
 			i++
@@ -3100,7 +3222,10 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 		case "--blkio-weight":
 			i++
 			if i < len(args) {
-				w, _ := strconv.ParseUint(args[i], 10, 16)
+				w, err := strconv.ParseUint(args[i], 10, 16)
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --blkio-weight: %q", args[i])
+				}
 				flags.BlkioWeight = uint16(w)
 			}
 		case "--gpus":
@@ -3126,7 +3251,11 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 		case "--health-retries":
 			i++
 			if i < len(args) {
-				flags.HealthRetries, _ = strconv.Atoi(args[i])
+				v, err := strconv.Atoi(args[i])
+				if err != nil {
+					return "", nil, nil, fmt.Errorf("invalid value for --health-retries: %q", args[i])
+				}
+				flags.HealthRetries = v
 			}
 		case "--health-start-period":
 			i++
@@ -3167,6 +3296,9 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 		case "-p", "--publish":
 			i++
 			if i < len(args) {
+				if err := ValidatePublishSpec(args[i]); err != nil {
+					return "", nil, nil, err
+				}
 				flags.Ports = append(flags.Ports, args[i])
 			}
 		case "-v", "--volume":
@@ -3255,6 +3387,9 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 		case "--expose":
 			i++
 			if i < len(args) {
+				if err := ValidateExposeSpec(args[i]); err != nil {
+					return "", nil, nil, err
+				}
 				flags.Expose = append(flags.Expose, args[i])
 			}
 		case "-l", "--label":
@@ -3302,10 +3437,22 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 				}
 			}
 
+		case "-a", "--attach":
+			// Attach stream selection (stdin/stdout/stderr): the CLI always
+			// attaches stdout and stderr (and stdin with -i), so the value is
+			// consumed but does not change behaviour.
+			i++
+		case "-x", "--x11":
+			// X11 forwarding is not implemented yet; accept the flag so
+			// scripts written for it keep working, but say so.
+			_, _ = fmt.Fprintln(os.Stderr, "WARNING: -x/--x11 is not implemented; ignoring")
+
 		default:
 			if !strings.HasPrefix(arg, "-") && !imageFound {
 				image = arg
 				imageFound = true
+			} else if !imageFound && strings.HasPrefix(arg, "-") {
+				return "", nil, nil, fmt.Errorf("invalid flag: %s", arg)
 			} else {
 				cmd = append(cmd, arg)
 			}
@@ -3313,7 +3460,7 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 		i++
 	}
 
-	return image, cmd, flags
+	return image, cmd, flags, nil
 }
 
 // boolLongFlags is the set of long flags that take no value, so a
@@ -3321,17 +3468,23 @@ func ParseRunFlags(args []string) (image string, cmd []string, flags *RunFlags) 
 var boolLongFlags = map[string]bool{
 	"--detach": true, "--interactive": true, "--tty": true, "--rm": true,
 	"--privileged": true, "--read-only": true, "--init": true,
-	"--publish-all": true, "--oom-kill-disable": true,
+	"--publish-all": true, "--oom-kill-disable": true, "--x11": true,
 }
 
-// setBoolFlag applies a boolean long flag by name.
+// boolShortFlags is the set of short flags that take no value, so a
+// `-f=value` token means "boolean flag with an explicit true/false".
+var boolShortFlags = map[string]bool{
+	"-i": true, "-t": true, "-d": true, "-P": true, "-x": true,
+}
+
+// setBoolFlag applies a boolean flag (long or short) by name.
 func setBoolFlag(flags *RunFlags, key string, val bool) {
 	switch key {
-	case "--detach":
+	case "-d", "--detach":
 		flags.Detach = val
-	case "--interactive":
+	case "-i", "--interactive":
 		flags.Interactive = val
-	case "--tty":
+	case "-t", "--tty":
 		flags.TTY = val
 	case "--rm":
 		flags.RM = val
@@ -3341,36 +3494,22 @@ func setBoolFlag(flags *RunFlags, key string, val bool) {
 		flags.ReadOnly = val
 	case "--init":
 		flags.Init = val
-	case "--publish-all":
+	case "-P", "--publish-all":
 		flags.PublishAll = val
 	case "--oom-kill-disable":
 		flags.OOMKillDisable = val
 	}
 }
 
-// expandBoolShortFlags turns a bundled short-flag token like "-it" into
-// ["-i", "-t"], but only when every character maps to a known boolean short
-// flag. It returns ok=false for anything ambiguous (a value-taking short flag,
-// or an unknown letter) so the caller leaves the token untouched.
-func expandBoolShortFlags(arg string) ([]string, bool) {
-	boolShort := map[byte]string{
-		'i': "-i",
-		't': "-t",
-		'd': "-d",
-		'P': "-P",
-	}
-	out := make([]string, 0, len(arg)-1)
-	for j := 1; j < len(arg); j++ {
-		flag, ok := boolShort[arg[j]]
-		if !ok {
-			return nil, false
-		}
-		out = append(out, flag)
-	}
-	return out, true
+// expandBoolShortFlags is retained as a thin wrapper around expandShortFlags
+// for callers that only need the run-style grammar. It returns an explicit
+// error when the token cannot be parsed.
+func expandBoolShortFlags(arg string) ([]string, error) {
+	return expandShortFlags(arg, RunShortFlags)
 }
 
-func parseMemory(s string) int64 {
+func parseMemory(s string) (int64, error) {
+	orig := s
 	s = strings.ToUpper(strings.TrimSpace(s))
 	multiplier := int64(1)
 
@@ -3392,8 +3531,11 @@ func parseMemory(s string) int64 {
 		s = strings.TrimSuffix(s, "K")
 	}
 
-	val, _ := strconv.ParseFloat(s, 64)
-	return int64(val * float64(multiplier))
+	val, err := strconv.ParseFloat(s, 64)
+	if err != nil || val < 0 {
+		return 0, fmt.Errorf("invalid memory value %q", orig)
+	}
+	return int64(val * float64(multiplier)), nil
 }
 
 // unwrap recursively converts interface{} values from JSON
@@ -3419,11 +3561,14 @@ func unwrap(v interface{}) interface{} {
 	}
 }
 
-// ValidateFlags returns an error if args contains any token starting with
-// "-" that is not listed in validFlags. Flags in valueFlags consume the
-// next token as their value, and that token is not inspected. The first
-// unknown flag triggers the returned error, formatted as
-// "invalid flag: <flag>".
+// ValidateFlags returns an error if the flag section of args (everything
+// before the first positional argument or "--") contains any token starting
+// with "-" that is not listed in validFlags. Flags in valueFlags consume the
+// next token as their value, and that token is not inspected. Name matching
+// uses SplitFlag, so the "--key=value" and "--key value" forms are treated
+// uniformly. The first unknown flag triggers the returned error, formatted as
+// "invalid flag: <flag>". Command arguments after the first positional are
+// never inspected.
 func ValidateFlags(args []string, validFlags []string, valueFlags []string) error {
 	valid := make(map[string]bool, len(validFlags))
 	for _, f := range validFlags {
@@ -3435,23 +3580,20 @@ func ValidateFlags(args []string, validFlags []string, valueFlags []string) erro
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if !strings.HasPrefix(a, "-") {
-			continue
+		if a == "--" {
+			return nil
 		}
-		name := a
-		if eq := strings.Index(a, "="); eq >= 0 {
-			name = a[:eq]
+		if a == "-" || !strings.HasPrefix(a, "-") {
+			// First positional argument: the rest is the command.
+			return nil
 		}
+		name, _, hasValue := SplitFlag(a)
 		if !valid[name] {
 			return fmt.Errorf("invalid flag: %s", a)
 		}
-		if takesValue[name] && i+1 < len(args) && !strings.Contains(a, "=") {
+		if takesValue[name] && !hasValue && i+1 < len(args) {
 			i++
 		}
 	}
 	return nil
-}
-
-func init() {
-	_, _ = os.Stderr.Write, math.Abs
 }

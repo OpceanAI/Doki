@@ -4,7 +4,7 @@ package podman
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"runtime"
@@ -129,7 +129,7 @@ func (s *PodmanServer) logMiddleware(next http.Handler) http.Handler {
 		// Sanitize log fields to prevent log injection via path/method.
 		method := sanitizeLogField(r.Method)
 		path := sanitizeLogField(r.URL.Path)
-		log.Printf("podman %s %s -> %d %s", method, path, rw.status, time.Since(start))
+		slog.Info("podman request", "method", method, "path", path, "status", rw.status, "duration", time.Since(start))
 	})
 }
 

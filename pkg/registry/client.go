@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/OpceanAI/Doki/pkg/common"
+	"github.com/OpceanAI/Doki/pkg/network"
 )
 
 const (
@@ -60,6 +61,14 @@ func (c *Client) SetAuth(username, password string) {
 
 // NewClient creates a new OCI registry client with the given TLS settings.
 func NewClient(insecure bool) *Client {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		// Inherit the host/Android DNS upstreams so lookups work even when
+		// /etc/resolv.conf is absent or stale (Android/Termux). PreferGo forces
+		// the pure-Go resolver instead of cgo/nsswitch.
+		Resolver: upstreamResolver(),
+	}
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: insecure,
@@ -70,6 +79,7 @@ func NewClient(insecure bool) *Client {
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
 		DisableCompression:  false,
+		DialContext:         dialer.DialContext,
 	}
 
 	return &Client{
@@ -80,6 +90,34 @@ func NewClient(insecure bool) *Client {
 		userAgent: common.UserAgent(),
 		tokens:    make(map[string]*tokenCache),
 		insecure:  insecure,
+	}
+}
+
+// upstreamResolver returns a *net.Resolver that inherits the discovered
+// upstreams (getprop → $PREFIX/etc/resolv.conf → /etc → public DNS) and forces
+// the pure-Go resolver. Dialling each upstream is attempted in order.
+func upstreamResolver() *net.Resolver {
+	upstreams := network.HostResolvConf().NameserverList()
+	if len(upstreams) == 0 {
+		upstreams = []string{"8.8.8.8:53", "8.8.4.4:53"}
+	}
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: 5 * time.Second}
+			var lastErr error
+			for _, upstream := range upstreams {
+				conn, err := dialer.DialContext(ctx, "udp", upstream)
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			if lastErr == nil {
+				lastErr = fmt.Errorf("no DNS upstream reachable")
+			}
+			return nil, lastErr
+		},
 	}
 }
 

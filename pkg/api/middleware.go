@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -71,12 +72,11 @@ func (m *Middleware) Recovery(next http.Handler) http.Handler {
 }
 
 // CORS sets version headers and enforces a same-origin policy suitable for a
-// control API. HIGH-12: it deliberately does NOT emit "Access-Control-Allow-
-// Origin: *". A wildcard ACAO on a control socket lets any web page the operator
-// visits read API responses; combined with the default no-auth model and binds
-// like "/:/host" that is a full host takeover. We instead reject cross-origin,
-// state-changing requests that carry a browser Origin header (CLI/API clients
-// don't send one).
+// control API. It deliberately does NOT emit "Access-Control-Allow-Origin: *".
+// A wildcard ACAO on a control socket lets any web page the operator visits read
+// API responses; combined with the default no-auth model and binds like "/:/host"
+// that is a full host takeover. We instead reject cross-origin, state-changing
+// requests that carry a browser Origin header (CLI/API clients don't send one).
 func (m *Middleware) CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Api-Version", common.DokiAPIVersion)
@@ -190,13 +190,20 @@ func (w *statusResponseWriter) Push(target string, opts *http.PushOptions) error
 	return pusher.Push(target, opts)
 }
 
-// RateLimit implements simple token bucket rate limiting.
+// RateLimit implements per-client token bucket rate limiting. Each client IP
+// (or the unix socket, which shares a single key) gets its own bucket, so one
+// noisy client cannot exhaust the allowance for everyone else.
 type RateLimit struct {
 	burst      int
 	ratePerSec float64
-	tokens     chan struct{}
-	stop       chan struct{}
-	stopOnce   sync.Once
+	mu         sync.Mutex
+	buckets    map[string]*bucket
+}
+
+type bucket struct {
+	tokens   chan struct{}
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // NewRateLimit creates a rate limiter.
@@ -204,20 +211,32 @@ func NewRateLimit(requestsPerSec float64, burst int) *RateLimit {
 	if requestsPerSec < 1 {
 		requestsPerSec = 1
 	}
-	rl := &RateLimit{
+	return &RateLimit{
 		burst:      burst,
 		ratePerSec: requestsPerSec,
-		tokens:     make(chan struct{}, burst),
-		stop:       make(chan struct{}),
+		buckets:    make(map[string]*bucket),
 	}
-	for i := 0; i < burst; i++ {
-		rl.tokens <- struct{}{}
-	}
-	go rl.refill()
-	return rl
 }
 
-func (rl *RateLimit) refill() {
+func (rl *RateLimit) bucketFor(key string) *bucket {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if b, ok := rl.buckets[key]; ok {
+		return b
+	}
+	b := &bucket{
+		tokens: make(chan struct{}, rl.burst),
+		stop:   make(chan struct{}),
+	}
+	for i := 0; i < rl.burst; i++ {
+		b.tokens <- struct{}{}
+	}
+	go rl.refill(b)
+	rl.buckets[key] = b
+	return b
+}
+
+func (rl *RateLimit) refill(b *bucket) {
 	interval := time.Duration(float64(time.Second) / rl.ratePerSec)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -225,36 +244,87 @@ func (rl *RateLimit) refill() {
 		select {
 		case <-ticker.C:
 			select {
-			case rl.tokens <- struct{}{}:
+			case b.tokens <- struct{}{}:
 			default:
 			}
-		case <-rl.stop:
+		case <-b.stop:
 			return
 		}
 	}
 }
 
-func (rl *RateLimit) Stop() { rl.stopOnce.Do(func() { close(rl.stop) }) }
+// Stop stops every bucket's refill goroutine.
+func (rl *RateLimit) Stop() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	for _, b := range rl.buckets {
+		b.stopOnce.Do(func() { close(b.stop) })
+	}
+}
 
-// Allow checks if a request is allowed.
-func (rl *RateLimit) Allow() bool {
+// Allow checks whether a request from the given key is currently allowed.
+func (rl *RateLimit) Allow(key string) bool {
+	b := rl.bucketFor(key)
 	select {
-	case <-rl.tokens:
+	case <-b.tokens:
 		return true
 	default:
 		return false
 	}
 }
 
-// RateLimitMiddleware applies rate limiting.
+// RateLimitMiddleware applies per-IP rate limiting. Long-lived hijacked
+// streaming endpoints (attach, attach/ws, exec start) are exempt, because a
+// hijacked connection bypasses the normal request lifecycle and should not be
+// throttled as if it were a burst of short requests.
 func (rl *RateLimit) RateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.Allow() {
+		if isHijackPath(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !rl.Allow(clientIP(r)) {
 			http.Error(w, `{"message":"rate limit exceeded"}`, http.StatusTooManyRequests)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// clientIP extracts the client IP from the request's remote address. Requests
+// over a unix socket carry a non-IP remote address, so they collapse onto a
+// single shared key.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	if host == "" {
+		return "local"
+	}
+	return host
+}
+
+// isHijackPath reports whether the request targets an endpoint that hijacks the
+// HTTP connection for streaming (container attach, attach/ws, exec start).
+func isHijackPath(r *http.Request) bool {
+	path := r.URL.Path
+	// Strip a leading API version prefix ("/v1.44/...") so the checks below are
+	// stable regardless of client negotiation.
+	if strings.HasPrefix(path, "/v") {
+		if parts := strings.SplitN(path[1:], "/", 2); len(parts) >= 2 {
+			path = "/" + parts[1]
+		}
+	}
+	switch {
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/exec/") && strings.HasSuffix(path, "/start"):
+		return true
+	case strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/attach"):
+		return true
+	case strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/attach/ws"):
+		return true
+	}
+	return false
 }
 
 // GracefulShutdown handles OS signals for graceful shutdown.

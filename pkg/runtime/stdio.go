@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/OpceanAI/Doki/internal/pty"
+	"golang.org/x/sys/unix"
 )
 
 // errNotInteractive is returned when an attach/resize is requested for a
@@ -209,6 +210,7 @@ type AttachSession struct {
 	Stdout io.ReadCloser
 	Stderr io.ReadCloser // nil in TTY mode (output is combined)
 	detach func()
+	resize func(rows, cols uint16) error
 }
 
 // Detach releases the session's resources. Safe to call more than once.
@@ -216,6 +218,16 @@ func (a *AttachSession) Detach() {
 	if a.detach != nil {
 		a.detach()
 	}
+}
+
+// Resize applies a terminal window-size change to the session's pty via
+// TIOCSWINSZ. It only works for TTY sessions backed by a live pty; any other
+// session reports errNotInteractive instead of silently ignoring the request.
+func (a *AttachSession) Resize(rows, cols uint16) error {
+	if a.resize == nil {
+		return errNotInteractive
+	}
+	return a.resize(rows, cols)
 }
 
 // attach registers a new client and returns its streams. It does not replay
@@ -245,6 +257,7 @@ func (b *stdioBroker) attach() *AttachSession {
 		// and closing the master would SIGHUP the shell before it ever reads
 		// the buffered input. The shell exits via its own `exit`.
 		sess.Stdin = &sharedWriteCloser{w: b.ptmx, keepOpen: true}
+		sess.resize = b.resize
 	} else {
 		stderrR, stderrW := io.Pipe()
 		sink.stderrW = stderrW
@@ -376,8 +389,7 @@ func (s *sharedWriteCloser) Close() error {
 	return nil
 }
 
-// ── Runtime-level broker registry and helpers ──────────────────────
-
+// Runtime-level broker registry and helpers
 // registerBroker stores a live broker for a container and arranges for it to be
 // removed once it closes.
 func (rt *Runtime) registerBroker(id string, b *stdioBroker) {
@@ -434,6 +446,26 @@ func (rt *Runtime) ResizeTTY(id string, rows, cols uint16) error {
 		return errNotInteractive
 	}
 	return b.resize(rows, cols)
+}
+
+// TTYSize reports the current window size of an interactive container's pty
+// (TIOCGWINSZ). Used to verify resize handling; reports errNotInteractive for
+// containers without a live pty.
+func (rt *Runtime) TTYSize(id string) (rows, cols uint16, err error) {
+	b := rt.broker(id)
+	if b == nil {
+		return 0, 0, errNotInteractive
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || !b.tty || b.ptmx == nil {
+		return 0, 0, errNotInteractive
+	}
+	ws, err := unix.IoctlGetWinsize(int(b.ptmx.Fd()), unix.TIOCGWINSZ)
+	if err != nil {
+		return 0, 0, err
+	}
+	return ws.Row, ws.Col, nil
 }
 
 // isInteractive reports whether a container's config asks for a live stdio
